@@ -25,13 +25,15 @@
 		rewrite * /docs/index.html
 		file_server
 	}
-	# Computed actual prices (discount applied); refreshed on boot + every 6h
+	# Computed actual prices (discount applied); refreshed on boot + every 6h. CORS open so docs.* can fetch it.
 	handle /prices.json {
 		root * /srv
+		header Access-Control-Allow-Origin "*"
 		file_server
 	}
 	handle /prices {
 		root * /srv
+		header Access-Control-Allow-Origin "*"
 		rewrite * /prices.json
 		file_server
 	}

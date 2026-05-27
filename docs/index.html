@@ -6,350 +6,114 @@
 :root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#9aa4b2;--acc:#58a6ff;--grn:#3fb950}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif}
-.wrap{max-width:900px;margin:0 auto;padding:32px 20px 80px}
-h1{font-size:30px;margin:0 0 4px} h2{margin:38px 0 12px;border-bottom:1px solid var(--bd);padding-bottom:6px}
-h3{margin:22px 0 8px}
-.sub{color:var(--mut);margin:0 0 24px}
-a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:940px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:30px;margin:0 0 4px} h2{margin:40px 0 12px;border-bottom:1px solid var(--bd);padding-bottom:6px}
+h3{margin:22px 0 8px}.sub{color:var(--mut);margin:0 0 22px}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 code{background:#1f2630;border:1px solid var(--bd);border-radius:5px;padding:1px 6px;font:13px ui-monospace,Menlo,monospace}
 pre{background:#010409;border:1px solid var(--bd);border-radius:8px;padding:14px 16px;overflow:auto}
 pre code{background:none;border:none;padding:0}
 table{border-collapse:collapse;width:100%;margin:10px 0}
 th,td{border:1px solid var(--bd);padding:8px 10px;text-align:left;vertical-align:top}
-th{background:#1f2630}
+th{background:#1f2630;position:sticky;top:0}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px 18px;margin:14px 0}
 .lane{display:inline-block;font:12px ui-monospace,monospace;padding:2px 8px;border-radius:20px;border:1px solid var(--bd)}
-.cloud{color:var(--acc);border-color:var(--acc)} .local{color:var(--grn);border-color:var(--grn)}
+.cloud{color:var(--acc);border-color:var(--acc)}.local{color:var(--grn);border-color:var(--grn)}.meta{color:var(--mut)}
 .warn{background:#2d2212;border:1px solid #9e6a03;border-radius:8px;padding:12px 16px}
-.models{display:flex;flex-wrap:wrap;gap:6px;max-height:340px;overflow:auto;padding:6px;border:1px solid var(--bd);border-radius:8px}
-.models code{font-size:12px}
+.method{font:12px ui-monospace,monospace;color:var(--grn)}
+#pwrap{max-height:460px;overflow:auto;border:1px solid var(--bd);border-radius:8px}
+#pfilter{width:100%;padding:9px 12px;background:#010409;border:1px solid var(--bd);border-radius:8px;color:var(--fg);margin:8px 0;font:14px ui-monospace,monospace}
+.num{text-align:right;font:13px ui-monospace,monospace}
 summary{cursor:pointer;font-weight:600}
 </style></head><body><div class="wrap">
 
 <h1>llm.hostbun.cc</h1>
-<p class="sub">One OpenAI-compatible endpoint, two lanes — <b>cloud</b> (Crazyrouter, 300+ models) and <b>local</b> (this machine's GPU). Switch by changing the URL path. No API key needed; auth is handled server-side.</p>
+<p class="sub">One OpenAI-compatible endpoint, two lanes — <b>cloud</b> (Crazyrouter, 247 models) and <b>local</b> (this machine's GPU). No API key needed; auth is handled server-side. Docs also at <a href="https://docs.llm.hostbun.cc">docs.llm.hostbun.cc</a>.</p>
 
-<div class="card">
+<h2>All endpoints</h2>
+<div class="card"><table>
+<tr><th>Method</th><th>Path</th><th>Lane</th><th>Purpose</th></tr>
+<tr><td class="method">POST</td><td><code>/v1/chat/completions</code></td><td><span class="lane cloud">cloud</span></td><td>Chat — streaming, tools, structured outputs, vision (any of 247 models)</td></tr>
+<tr><td class="method">POST</td><td><code>/v1/completions</code> · <code>/v1/embeddings</code> · <code>/v1/images/generations</code> · <code>/v1/audio/*</code> · <code>/v1/rerank</code></td><td><span class="lane cloud">cloud</span></td><td>Full Crazyrouter OpenAI-compatible surface (key injected)</td></tr>
+<tr><td class="method">GET</td><td><code>/v1/models</code></td><td><span class="lane cloud">cloud</span></td><td>List cloud models</td></tr>
+<tr><td class="method">POST</td><td><code>/local/v1/chat/completions</code></td><td><span class="lane local">local</span></td><td>Chat with the local machine (gemma on the GPU)</td></tr>
+<tr><td class="method">GET</td><td><code>/local/v1/models</code></td><td><span class="lane local">local</span></td><td>List local models</td></tr>
+<tr><td class="method">GET</td><td><code>/prices.json</code> · <code>/prices</code></td><td><span class="lane meta">meta</span></td><td>Computed actual prices (discount applied); refreshes every 6h</td></tr>
+<tr><td class="method">GET</td><td><code>/dashboard/billing/subscription</code></td><td><span class="lane meta">meta</span></td><td>Credit limit (<code>hard_limit_usd</code>)</td></tr>
+<tr><td class="method">GET</td><td><code>/dashboard/billing/usage</code></td><td><span class="lane meta">meta</span></td><td>Usage to date</td></tr>
+<tr><td class="method">GET</td><td><code>/api/pricing</code></td><td><span class="lane cloud">cloud</span></td><td>Raw Crazyrouter pricing (ratios/discount)</td></tr>
+<tr><td class="method">GET</td><td><code>/docs</code></td><td><span class="lane meta">meta</span></td><td>This page</td></tr>
+</table></div>
+
+<h2>Quick start &amp; switching cloud ↔ local</h2>
+<p>Identical OpenAI API on both lanes — the only difference is the base URL path: <code>/v1</code> for cloud, <code>/local/v1</code> to talk to the local machine.</p>
 <table>
-<tr><th>Lane</th><th>Base URL</th><th>Backend</th><th>Auth</th></tr>
-<tr><td><span class="lane cloud">cloud</span></td><td><code>https://llm.hostbun.cc/v1</code></td><td>Crazyrouter → 300+ models (Claude, GPT, Gemini, DeepSeek, Qwen, Doubao, Grok…)</td><td>key injected (none from you)</td></tr>
-<tr><td><span class="lane local">local</span></td><td><code>https://llm.hostbun.cc/local/v1</code></td><td>Local LM Studio on the pbox machine (RTX 4090) → <code>google/gemma-4-26b-a4b</code></td><td>none</td></tr>
+<tr><th>Lane</th><th>Base URL</th><th>Models</th></tr>
+<tr><td><span class="lane cloud">cloud</span></td><td><code>https://llm.hostbun.cc/v1</code></td><td>247 (Claude, GPT, Gemini, DeepSeek, Qwen, Doubao, Grok…)</td></tr>
+<tr><td><span class="lane local">local</span></td><td><code>https://llm.hostbun.cc/local/v1</code></td><td><code>google/gemma-4-26b-a4b</code> (free, on-prem, vision)</td></tr>
 </table>
-</div>
-
-<h2>Switching cloud ↔ local</h2>
-<p>Identical OpenAI API on both. The <b>only</b> difference is the base URL path: use <code>/v1</code> for cloud, <code>/local/v1</code> to talk to the local machine. Same request/response shape.</p>
-<pre><code># cloud (any of 247 models)
+<pre><code># cloud
 curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}'
-
-# local machine (gemma on the GPU)
+# local machine
 curl https://llm.hostbun.cc/local/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"google/gemma-4-26b-a4b","messages":[{"role":"user","content":"hi"}]}'</code></pre>
-
-<h3>OpenAI SDK</h3>
-<pre><code>from openai import OpenAI
-# api_key can be any placeholder — the gateway injects the real one
+<pre><code>from openai import OpenAI                       # api_key is any placeholder (gateway injects it)
 cloud = OpenAI(base_url="https://llm.hostbun.cc/v1",       api_key="x")
 local = OpenAI(base_url="https://llm.hostbun.cc/local/v1", api_key="x")
-
 cloud.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":"hi"}])
 local.chat.completions.create(model="google/gemma-4-26b-a4b", messages=[{"role":"user","content":"hi"}])</code></pre>
-<pre><code>import OpenAI from "openai";
-const cloud = new OpenAI({ baseURL: "https://llm.hostbun.cc/v1",       apiKey: "x" });
-const local = new OpenAI({ baseURL: "https://llm.hostbun.cc/local/v1", apiKey: "x" });</code></pre>
 
-<h2>Cloud lane — Crazyrouter API <span class="lane cloud">/v1</span></h2>
-<p>OpenAI-compatible aggregator (upstream <code>api.crazyrouter.com/v1</code>). Everything under <code>https://llm.hostbun.cc/</code> that isn't <code>/local</code> or <code>/docs</code> is proxied here with the key injected.</p>
-<table>
-<tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
-<tr><td>POST</td><td><code>/v1/chat/completions</code></td><td>Chat (streaming, tool-calling, structured outputs, vision)</td></tr>
-<tr><td>POST</td><td><code>/v1/completions</code></td><td>Legacy text completion</td></tr>
-<tr><td>POST</td><td><code>/v1/embeddings</code></td><td>Embeddings (e.g. <code>text-embedding-3-small</code>)</td></tr>
-<tr><td>POST</td><td><code>/v1/images/generations</code></td><td>Image generation (DALL·E, Doubao Seedream, cogview…)</td></tr>
-<tr><td>POST</td><td><code>/v1/audio/speech</code> · <code>/v1/audio/transcriptions</code></td><td>TTS / STT</td></tr>
-<tr><td>POST</td><td><code>/v1/rerank</code></td><td>Reranking</td></tr>
-<tr><td>GET</td><td><code>/v1/models</code></td><td>List all available models</td></tr>
-</table>
-<p>Capabilities: chat completions, streaming (<code>"stream": true</code>), tool/function calling, structured outputs, vision, image / video / audio generation, embeddings, rerank, multimodal. Full reference: <a href="https://crazyrouter.com/docs" target="_blank">crazyrouter.com/docs</a> · pricing: <a href="https://crazyrouter.com/pricing" target="_blank">crazyrouter.com/pricing</a>.</p>
-
-<h3>Streaming example</h3>
-<pre><code>curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
+<h2>Cloud lane — Crazyrouter <span class="lane cloud">/v1</span></h2>
+<p>OpenAI-compatible aggregator (upstream <code>api.crazyrouter.com/v1</code>). Everything not under <code>/local</code>, <code>/docs</code> or <code>/prices</code> is proxied here with the key injected. Capabilities: chat, streaming (<code>"stream":true</code>), tool/function calling, structured outputs, vision, image/video/audio generation, embeddings, rerank. Full upstream reference: <a href="https://crazyrouter.com/docs" target="_blank">crazyrouter.com/docs</a>.</p>
+<pre><code># streaming
+curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","stream":true,"messages":[{"role":"user","content":"count to 5"}]}'</code></pre>
 
-<h3>Credits / balance</h3>
-<pre><code>curl https://llm.hostbun.cc/dashboard/billing/subscription   # hard_limit_usd
-curl https://llm.hostbun.cc/dashboard/billing/usage          # total usage</code></pre>
-
-<h2>Local lane — talk to the machine <span class="lane local">/local/v1</span></h2>
-<p>Routes to LM Studio on the <b>pbox</b> box (RTX 4090) via <code>llm.bofrid.dev</code>. Private (data stays on-prem), free, fast. One pinned model:</p>
-<table>
-<tr><th>Model</th><th>Notes</th></tr>
-<tr><td><code>google/gemma-4-26b-a4b</code></td><td>26B MoE · vision + tool-use · ~8K context · the only loaded model (requests for other ids are served by it)</td></tr>
-</table>
-<pre><code># list local models
-curl https://llm.hostbun.cc/local/v1/models
-
-# chat with the local machine
+<h2>Local lane — the machine <span class="lane local">/local/v1</span></h2>
+<p>Routes to LM Studio on the <b>pbox</b> box (RTX 4090) via <code>llm.bofrid.dev</code>. Private (data stays on-prem), free, fast. Pinned model <code>google/gemma-4-26b-a4b</code> (26B MoE, vision + tools, ~8K ctx) — requests for other ids are served by it. Vision works (send <code>image_url</code> parts incl. base64). Anthropic <code>/local/v1/messages</code> and native <code>/local/api/v1/chat</code> are reachable too.</p>
+<pre><code>curl https://llm.hostbun.cc/local/v1/models
 curl https://llm.hostbun.cc/local/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"google/gemma-4-26b-a4b","messages":[{"role":"user","content":"describe this"}]}'</code></pre>
-<p>Vision works (send <code>image_url</code> content parts, incl. base64 data URLs). Anthropic-style <code>/local/v1/messages</code> and native <code>/local/api/v1/chat</code> are also reachable on the local box.</p>
+  -d '{"model":"google/gemma-4-26b-a4b","messages":[{"role":"user","content":"describe"}]}'</code></pre>
 
-<h2>All cloud models <small>(247)</small></h2>
-<details><summary>Show full catalog (or call <code>GET /v1/models</code>)</summary>
-<div class="models">
-<code>babbage-002</code>
-<code>chat-seededit</code>
-<code>claude-haiku-4-5</code>
-<code>claude-jupiter-v1-p</code>
-<code>claude-opus-4-5</code>
-<code>claude-opus-4-6</code>
-<code>claude-opus-4-7</code>
-<code>claude-sonnet-4-5</code>
-<code>claude-sonnet-4-6</code>
-<code>cogview-3-flash</code>
-<code>cogview-4</code>
-<code>dall-e-3</code>
-<code>davinci-002</code>
-<code>deepseek-chat</code>
-<code>deepseek-r1</code>
-<code>deepseek-reasoner</code>
-<code>deepseek-v3</code>
-<code>deepseek-v3.2</code>
-<code>deepseek-v4-flash</code>
-<code>deepseek-v4-pro</code>
-<code>doubao-1-5-lite-32k-250115</code>
-<code>doubao-1-5-pro-256k-250115</code>
-<code>doubao-1.5-pro-32k</code>
-<code>doubao-1-5-pro-32k-250115</code>
-<code>doubao-1.5-search</code>
-<code>doubao-pro-128k</code>
-<code>doubao-pro-32k</code>
-<code>doubao-seed-1-6</code>
-<code>doubao-seed-1-6-250615</code>
-<code>doubao-seed-1-6-251015</code>
-<code>doubao-seed-1-6-flash-250615</code>
-<code>doubao-seed-1-6-flash-250828</code>
-<code>doubao-seed-1-6-lite-251015</code>
-<code>doubao-seed-1-6-thinking-250615</code>
-<code>doubao-seed-1-6-vision-250815</code>
-<code>doubao-seed-1-8-251215</code>
-<code>doubao-seed-1-8-251228</code>
-<code>doubao-seed-1-8-251228-thinking</code>
-<code>doubao-seedance-1-0-lite-i2v</code>
-<code>doubao-seedance-1-0-lite-t2v</code>
-<code>doubao-seedance-1-0-pro</code>
-<code>doubao-seedance-1-0-pro-fast</code>
-<code>doubao-seedance-1-5-pro</code>
-<code>doubao-seedance-2-0</code>
-<code>doubao-seedance-2-0-fast</code>
-<code>doubao-seed-code-preview-251028</code>
-<code>doubao-seed-code-preview-latest</code>
-<code>doubao-seededit-3-0</code>
-<code>doubao-seedream-3-0</code>
-<code>doubao-seedream-4-0</code>
-<code>doubao-seedream-4-5</code>
-<code>doubao-seedream-5-0</code>
-<code>embedding-2</code>
-<code>embedding-3</code>
-<code>gemini-2.5-flash</code>
-<code>gemini-2.5-flash-lite</code>
-<code>gemini-2.5-pro</code>
-<code>gemini-3.1-flash-lite</code>
-<code>gemini-3.1-pro</code>
-<code>gemini-3.5-flash</code>
-<code>gemini-3-flash</code>
-<code>glm-3-turbo</code>
-<code>glm-4</code>
-<code>glm-4-0520</code>
-<code>glm-4.1v-thinking</code>
-<code>glm-4.1v-thinking-flash</code>
-<code>glm-4.5</code>
-<code>glm-4.5-air</code>
-<code>glm-4.5-airx</code>
-<code>glm-4.5-flash</code>
-<code>glm-4.5-x</code>
-<code>glm-4.6</code>
-<code>glm-4.6-thinking</code>
-<code>glm-4.6v</code>
-<code>glm-4.6v-flash</code>
-<code>glm-4.7</code>
-<code>glm-4.7-flash</code>
-<code>glm-4.7-flashx</code>
-<code>glm-4.7-thinking</code>
-<code>glm-4-air</code>
-<code>glm-4-airx</code>
-<code>glm-4-flash</code>
-<code>glm-4-long</code>
-<code>glm-4-plus</code>
-<code>glm-4v</code>
-<code>glm-4v-plus</code>
-<code>glm-5</code>
-<code>glm-5.1</code>
-<code>glm-ocr</code>
-<code>gpt-4.1</code>
-<code>gpt-4.1-mini</code>
-<code>gpt-4.1-nano</code>
-<code>gpt-4o</code>
-<code>gpt-4o-mini</code>
-<code>gpt-5</code>
-<code>gpt-5.1</code>
-<code>gpt-5.1-codex</code>
-<code>gpt-5.1-codex-max</code>
-<code>gpt-5.1-codex-mini</code>
-<code>gpt-5.2</code>
-<code>gpt-5.2-codex</code>
-<code>gpt-5.3-codex</code>
-<code>gpt-5.4</code>
-<code>gpt-5.5</code>
-<code>gpt-5-codex</code>
-<code>gpt-5-mini</code>
-<code>gpt-5-nano</code>
-<code>gpt-image-2</code>
-<code>grok-4</code>
-<code>grok-4-0709</code>
-<code>grok-4.1</code>
-<code>grok-4.1-fast</code>
-<code>grok-4-1-fast-non-reasoning</code>
-<code>grok-4-1-fast-reasoning</code>
-<code>grok-4.1-thinking</code>
-<code>grok-4.2</code>
-<code>grok-4-fast</code>
-<code>grok-4-fast-non-reasoning</code>
-<code>grok-4-fast-reasoning</code>
-<code>grok-4-image</code>
-<code>gte-rerank-v2</code>
-<code>kimi-k2</code>
-<code>kimi-k2-0711-preview</code>
-<code>kimi-k2-0905</code>
-<code>kimi-k2-0905-preview</code>
-<code>kimi-k2.5</code>
-<code>kimi-k2.6</code>
-<code>kimi-k2-instruct</code>
-<code>kimi-k2-thinking</code>
-<code>kling-v2-5-turbo</code>
-<code>kling-v2-6</code>
-<code>kling-v3</code>
-<code>mimo-v2-flash</code>
-<code>mimo-v2-omni</code>
-<code>mimo-v2-pro</code>
-<code>MiniMax-M2.1</code>
-<code>MiniMax-M2.5</code>
-<code>MiniMax-M2.7</code>
-<code>mj_imagine</code>
-<code>mj_upscale</code>
-<code>mj_variation</code>
-<code>moonshot-v1-128k</code>
-<code>moonshot-v1-32k</code>
-<code>moonshot-v1-8k</code>
-<code>nano-banana</code>
-<code>nano-banana-2</code>
-<code>nano-banana-pro</code>
-<code>o1</code>
-<code>o1-mini</code>
-<code>o3</code>
-<code>o3-mini</code>
-<code>o3-pro</code>
-<code>o4-mini</code>
-<code>qwen2.5-14b-instruct</code>
-<code>qwen2.5-14b-instruct-1m</code>
-<code>qwen2.5-32b-instruct</code>
-<code>qwen2.5-3b-instruct</code>
-<code>qwen2.5-72b-instruct</code>
-<code>qwen2.5-7b-instruct</code>
-<code>qwen2.5-7b-instruct-1m</code>
-<code>qwen2.5-coder-14b-instruct</code>
-<code>qwen2.5-coder-32b-instruct</code>
-<code>qwen2.5-coder-7b-instruct</code>
-<code>qwen2.5-math-72b-instruct</code>
-<code>qwen2.5-math-7b-instruct</code>
-<code>qwen2.5-vl-32b-instruct</code>
-<code>qwen2.5-vl-3b-instruct</code>
-<code>qwen2.5-vl-72b-instruct</code>
-<code>qwen2.5-vl-7b-instruct</code>
-<code>qwen2-vl-72b-instruct</code>
-<code>qwen2-vl-7b-instruct</code>
-<code>qwen3-14b</code>
-<code>qwen3-235b-a22b</code>
-<code>qwen3-235b-a22b-instruct-2507</code>
-<code>qwen3-235b-a22b-thinking-2507</code>
-<code>qwen3-30b-a3b</code>
-<code>qwen3-30b-a3b-instruct-2507</code>
-<code>qwen3-32b</code>
-<code>qwen3-4b</code>
-<code>qwen3.5-397b-a17b</code>
-<code>qwen3.5-plus</code>
-<code>qwen3.5-plus-2026-02-15</code>
-<code>qwen3.6-plus</code>
-<code>qwen3.7-max</code>
-<code>qwen3-8b</code>
-<code>qwen3-coder</code>
-<code>qwen3-coder-30b-a3b-instruct</code>
-<code>qwen3-coder-480b-a35b-instruct</code>
-<code>qwen3-coder-flash</code>
-<code>qwen3-coder-plus</code>
-<code>qwen3-coder-plus-2025-07-22</code>
-<code>qwen3-max</code>
-<code>qwen3-max-2026-01-23</code>
-<code>qwen3-next-80b-a3b-instruct</code>
-<code>qwen3-next-80b-a3b-thinking</code>
-<code>qwen3-vl-235b-a22b-instruct</code>
-<code>qwen3-vl-235b-a22b-thinking</code>
-<code>qwen3-vl-30b-a3b-instruct</code>
-<code>qwen3-vl-30b-a3b-thinking</code>
-<code>qwen3-vl-32b-instruct</code>
-<code>qwen3-vl-32b-thinking</code>
-<code>qwen3-vl-8b-instruct</code>
-<code>qwen3-vl-8b-thinking</code>
-<code>qwen3-vl-flash</code>
-<code>qwen3-vl-plus</code>
-<code>qwen-flash</code>
-<code>qwen-image-2.0</code>
-<code>qwen-image-max</code>
-<code>qwen-image-plus</code>
-<code>qwen-max</code>
-<code>qwen-max-longcontext</code>
-<code>qwen-plus</code>
-<code>qwen-plus-character</code>
-<code>qwen-turbo</code>
-<code>qwen-vl-max</code>
-<code>qwen-vl-max-latest</code>
-<code>qwq-32b</code>
-<code>qwq-32b-preview</code>
-<code>qwq-72b-preview</code>
-<code>search</code>
-<code>seededit</code>
-<code>seed-oss-36b-instruct</code>
-<code>sora-2</code>
-<code>sora-2-pro</code>
-<code>text-ada-001</code>
-<code>text-babbage-001</code>
-<code>text-curie-001</code>
-<code>text-davinci-edit-001</code>
-<code>text-embedding-3-large</code>
-<code>text-embedding-3-small</code>
-<code>text-embedding-ada-002</code>
-<code>text-embedding-v1</code>
-<code>text-moderation-latest</code>
-<code>text-moderation-stable</code>
-<code>tts-1</code>
-<code>tts-1-1106</code>
-<code>tts-1-hd-1106</code>
-<code>veo-3.1</code>
-<code>veo-3.1-fast</code>
-<code>wan2.2-i2v-flash</code>
-<code>wan2.2-i2v-plus</code>
-<code>wan2.2-kf2v-flash</code>
-<code>wan2.2-s2v</code>
-<code>wan2.2-t2v-plus</code>
-<code>wan2.5-i2v-preview</code>
-<code>wan2.5-t2v-preview</code>
-<code>whisper-1</code>
-</div></details>
+<h2>Pricing <span class="lane meta">/prices.json</span></h2>
+<p><b>Actual</b> prices (per-model discount applied, default group). Fetch programmatically:</p>
+<pre><code>curl https://llm.hostbun.cc/prices.json    # or /prices
+# { "generated_at":"…","group_ratio":1,"count":247,
+#   "models":[{"model":"claude-sonnet-4-6","type":"token",
+#              "input_per_1m":1.65,"output_per_1m":8.25,"discount":0.55}, …] }</code></pre>
+<p class="sub">Token models: USD per 1M tokens (in/out). Image/video/audio: USD per call. Local lane (<code>google/gemma-4-26b-a4b</code>) = <b>$0</b>. Self-refreshes every 6h — last update: <span id="pgen">…</span>.</p>
+<input id="pfilter" placeholder="filter models…  e.g. claude, gpt-5, gemini, embed"/>
+<div id="pwrap"><table>
+<thead><tr><th>Model (<span id="pcount">…</span>)</th><th>Type</th><th class="num">Input $/1M</th><th class="num">Output $/1M</th><th class="num">Disc</th></tr></thead>
+<tbody id="ptbody"><tr><td colspan="5">loading prices…</td></tr></tbody>
+</table></div>
 
-<div class="warn" style="margin-top:34px">
-⚠️ The <code>/v1</code> cloud lane is open — the key is injected, so anyone with this URL spends the Crazyrouter balance. Keep the URL private, or ask for an IP-allowlist / token gate.
-</div>
+<h2>Credits / balance</h2>
+<pre><code>curl https://llm.hostbun.cc/dashboard/billing/subscription   # {"hard_limit_usd":13,…}
+curl https://llm.hostbun.cc/dashboard/billing/usage          # {"total_usage":…}</code></pre>
 
-<p class="sub" style="margin-top:30px">Gateway: Caddy on hostbun (Coolify). Source: <a href="https://github.com/devdashco/llm-hostbun-proxy" target="_blank">devdashco/llm-hostbun-proxy</a>.</p>
+<div class="warn" style="margin-top:30px">⚠️ The <code>/v1</code> cloud lane is open — the key is injected, so anyone with this URL spends the Crazyrouter balance. Keep it private, or ask for an IP-allowlist / token gate.</div>
+<p class="sub" style="margin-top:26px">Caddy on hostbun (Coolify). Source: <a href="https://github.com/devdashco/llm-hostbun-proxy" target="_blank">devdashco/llm-hostbun-proxy</a>.</p>
+
+<script>
+const PRICES='https://llm.hostbun.cc/prices.json';
+let ALL=[];
+function row(m){
+  if(m.type==='token') return '<tr><td><code>'+m.model+'</code></td><td>token</td><td class="num">$'+m.input_per_1m+'</td><td class="num">$'+m.output_per_1m+'</td><td class="num">'+m.discount+'</td></tr>';
+  return '<tr><td><code>'+m.model+'</code></td><td>per-call</td><td class="num" colspan="2">$'+m.price_per_call+'/call</td><td class="num">'+m.discount+'</td></tr>';
+}
+function render(q){
+  q=(q||'').toLowerCase();
+  const f=ALL.filter(m=>m.model.toLowerCase().indexOf(q)>-1);
+  document.getElementById('ptbody').innerHTML=f.length?f.map(row).join(''):'<tr><td colspan=5>no match</td></tr>';
+}
+fetch(PRICES).then(r=>r.json()).then(d=>{
+  ALL=d.models.sort(function(a,b){return (a.input_per_1m!=null?a.input_per_1m:a.price_per_call||0)-(b.input_per_1m!=null?b.input_per_1m:b.price_per_call||0)});
+  document.getElementById('pgen').textContent=d.generated_at||'';
+  document.getElementById('pcount').textContent=ALL.length;
+  render('');
+}).catch(function(e){document.getElementById('ptbody').innerHTML='<tr><td colspan=5>failed to load /prices.json: '+e+'</td></tr>'});
+document.addEventListener('input',function(e){if(e.target.id==='pfilter')render(e.target.value)});
+</script>
 </div></body></html>
