@@ -1,19 +1,27 @@
 # llm.hostbun.cc — two-lane OpenAI-compatible router + docs
+#   host docs.llm.hostbun.cc -> docs page
 #   /local/*  -> local LM Studio at llm.bofrid.dev (pbox gemma); no key
-#   /docs*    -> static docs page (this gateway + crazyrouter API)
+#   /docs*    -> docs page (also on main host)
 #   /*        -> crazyrouter.com full API, with server-side key injected
 {
 	admin off
 	auto_https off
 }
 :80 {
+	# Dedicated docs subdomain
+	@docs host docs.llm.hostbun.cc
+	handle @docs {
+		root * /srv
+		rewrite * /docs/index.html
+		file_server
+	}
 	# Local lane: strip /local, forward to pbox LM Studio
 	handle_path /local/* {
 		reverse_proxy https://llm.bofrid.dev {
 			header_up Host llm.bofrid.dev
 		}
 	}
-	# Docs page
+	# Docs page on the main host too
 	handle /docs* {
 		root * /srv
 		rewrite * /docs/index.html
