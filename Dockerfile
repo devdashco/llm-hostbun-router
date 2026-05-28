@@ -1,6 +1,7 @@
-FROM caddy:2-alpine
+FROM node:22-alpine
 RUN apk add --no-cache curl jq
-COPY Caddyfile /etc/caddy/Caddyfile
+WORKDIR /app
+COPY server.js /app/server.js
 COPY docs /srv/docs
 COPY gen-prices.sh /usr/local/bin/gen-prices.sh
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
