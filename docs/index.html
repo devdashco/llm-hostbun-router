@@ -28,15 +28,15 @@ summary{cursor:pointer;font-weight:600}
 </style></head><body><div class="wrap">
 
 <h1>llm.hostbun.cc</h1>
-<p class="sub">One OpenAI-compatible endpoint at <code>https://llm.hostbun.cc/v1</code>. Pick the lane by <b>model name</b>: <code>gemma</code> → this machine's local GPU (free), anything else → <b>cloud</b> (Crazyrouter, 250+ models). No API key needed; auth is handled server-side. Docs also at <a href="https://docs.llm.hostbun.cc">docs.llm.hostbun.cc</a>.</p>
+<p class="sub">One OpenAI-compatible endpoint at <code>https://llm.hostbun.cc/v1</code>. Pick the lane by <b>model name</b>: <code>local</code> → this machine's local GPU (free), anything else → <b>cloud</b> (Crazyrouter, 250+ models). No API key needed; auth is handled server-side. Docs also at <a href="https://docs.llm.hostbun.cc">docs.llm.hostbun.cc</a>.</p>
 
 <h2>All endpoints</h2>
 <div class="card"><table>
 <tr><th>Method</th><th>Path</th><th>Lane</th><th>Purpose</th></tr>
-<tr><td class="method">POST</td><td><code>/v1/chat/completions</code></td><td><span class="lane cloud">cloud</span> / <span class="lane local">local</span></td><td>Chat — routed by <code>model</code>: <code>gemma</code> → local GPU, anything else → cloud (streaming, tools, structured outputs, vision)</td></tr>
+<tr><td class="method">POST</td><td><code>/v1/chat/completions</code></td><td><span class="lane cloud">cloud</span> / <span class="lane local">local</span></td><td>Chat — routed by <code>model</code>: <code>local</code> → local GPU, anything else → cloud (streaming, tools, structured outputs, vision)</td></tr>
 <tr><td class="method">POST</td><td><code>/v1/completions</code> · <code>/v1/embeddings</code> · <code>/v1/images/generations</code> · <code>/v1/audio/*</code> · <code>/v1/rerank</code></td><td><span class="lane cloud">cloud</span></td><td>Full Crazyrouter OpenAI-compatible surface (key injected)</td></tr>
-<tr><td class="method">GET</td><td><code>/v1/models</code></td><td><span class="lane cloud">cloud</span> + <span class="lane local">local</span></td><td>Merged list — local <code>gemma</code> + all cloud models</td></tr>
-<tr><td class="method">POST</td><td><code>/local/v1/chat/completions</code></td><td><span class="lane local">local</span></td><td>Legacy explicit local path (still works; or just set <code>model:"gemma"</code> on <code>/v1</code>)</td></tr>
+<tr><td class="method">GET</td><td><code>/v1/models</code></td><td><span class="lane cloud">cloud</span> + <span class="lane local">local</span></td><td>Merged list — <code>local</code> (gemma) + all cloud models</td></tr>
+<tr><td class="method">POST</td><td><code>/local/v1/chat/completions</code></td><td><span class="lane local">local</span></td><td>Legacy explicit local path (still works; or just set <code>model:"local"</code> on <code>/v1</code>)</td></tr>
 <tr><td class="method">GET</td><td><code>/local/v1/models</code></td><td><span class="lane local">local</span></td><td>List local models (legacy)</td></tr>
 <tr><td class="method">GET</td><td><code>/prices.json</code> · <code>/prices</code></td><td><span class="lane meta">meta</span></td><td>Computed actual prices (discount applied); refreshes every 6h</td></tr>
 <tr><td class="method">GET</td><td><code>/dashboard/billing/subscription</code></td><td><span class="lane meta">meta</span></td><td>Credit limit (<code>hard_limit_usd</code>)</td></tr>
@@ -46,34 +46,34 @@ summary{cursor:pointer;font-weight:600}
 </table></div>
 
 <h2>Quick start — one URL, pick by model</h2>
-<p>One base URL <code>https://llm.hostbun.cc/v1</code> for everything. The <b>model name</b> picks the lane: <code>gemma</code> (or <code>google/gemma-4-26b-a4b</code>) → the local GPU; any other id → cloud. Same OpenAI API either way.</p>
+<p>One base URL <code>https://llm.hostbun.cc/v1</code> for everything. The <b>model name</b> picks the lane: <code>local</code> (or <code>google/gemma-4-26b-a4b</code>) → the local GPU; any other id → cloud. Same OpenAI API either way.</p>
 <table>
 <tr><th>Lane</th><th>Select with <code>model</code></th><th>Models</th></tr>
-<tr><td><span class="lane local">local</span></td><td><code>"gemma"</code></td><td><code>google/gemma-4-26b-a4b</code> (free, on-prem, vision)</td></tr>
+<tr><td><span class="lane local">local</span></td><td><code>"local"</code></td><td><code>google/gemma-4-26b-a4b</code> — 26B-A4B MoE (free, on-prem, vision + tools)</td></tr>
 <tr><td><span class="lane cloud">cloud</span></td><td>any other id, e.g. <code>"claude-sonnet-4-6"</code></td><td>250+ (Claude, GPT, Gemini, DeepSeek, Qwen, Doubao, Grok…)</td></tr>
 </table>
-<pre><code># local GPU — just select model "gemma"
+<pre><code># local GPU — just select model "local"
 curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"gemma","messages":[{"role":"user","content":"hi"}]}'
+  -d '{"model":"local","messages":[{"role":"user","content":"hi"}]}'
 # cloud — any other model
 curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}'</code></pre>
 <pre><code>from openai import OpenAI            # one client; api_key is any placeholder (gateway injects it)
 client = OpenAI(base_url="https://llm.hostbun.cc/v1", api_key="x")
-client.chat.completions.create(model="gemma",  messages=[{"role":"user","content":"hi"}])   # local
+client.chat.completions.create(model="local",  messages=[{"role":"user","content":"hi"}])   # local GPU
 client.chat.completions.create(model="gpt-4o", messages=[{"role":"user","content":"hi"}])   # cloud</code></pre>
 
 <h2>Cloud lane — Crazyrouter <span class="lane cloud">/v1</span></h2>
-<p>OpenAI-compatible aggregator (upstream <code>api.crazyrouter.com/v1</code>). Every request whose <code>model</code> isn't the local <code>gemma</code> is proxied here with the key injected. Capabilities: chat, streaming (<code>"stream":true</code>), tool/function calling, structured outputs, vision, image/video/audio generation, embeddings, rerank. Full upstream reference: <a href="https://crazyrouter.com/docs" target="_blank">crazyrouter.com/docs</a>.</p>
+<p>OpenAI-compatible aggregator (upstream <code>api.crazyrouter.com/v1</code>). Every request whose <code>model</code> isn't <code>local</code> (the on-prem gemma) is proxied here with the key injected. Capabilities: chat, streaming (<code>"stream":true</code>), tool/function calling, structured outputs, vision, image/video/audio generation, embeddings, rerank. Full upstream reference: <a href="https://crazyrouter.com/docs" target="_blank">crazyrouter.com/docs</a>.</p>
 <pre><code># streaming
 curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","stream":true,"messages":[{"role":"user","content":"count to 5"}]}'</code></pre>
 
-<h2>Local model — select <span class="lane local">model: gemma</span></h2>
-<p>Selecting <code>gemma</code> (or <code>google/gemma-4-26b-a4b</code>) on <code>/v1</code> routes to LM Studio on the <b>pbox</b> box (RTX 4090) via <code>llm.bofrid.dev</code>. Private (data stays on-prem), free, fast. Pinned model <code>google/gemma-4-26b-a4b</code> (26B MoE, vision + tools, ~8K ctx). Vision works (send <code>image_url</code> parts incl. base64). The legacy explicit path <code>/local/v1/*</code> (and Anthropic <code>/local/v1/messages</code>, native <code>/local/api/v1/chat</code>) still works too.</p>
+<h2>Local model — select <span class="lane local">model: local</span></h2>
+<p>Selecting <code>local</code> (alias for <code>google/gemma-4-26b-a4b</code>) on <code>/v1</code> routes to LM Studio on the <b>pbox</b> box (RTX 4090) via <code>llm.bofrid.dev</code>. Private (data stays on-prem), free, fast. Pinned model <code>google/gemma-4-26b-a4b</code> — 26B-A4B <b>MoE</b>, vision + tool calling, ~8K ctx. Vision works (send <code>image_url</code> parts incl. base64). The legacy explicit path <code>/local/v1/*</code> (and Anthropic <code>/local/v1/messages</code>, native <code>/local/api/v1/chat</code>) still works too.</p>
 <pre><code># either of these reaches the local GPU:
 curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"gemma","messages":[{"role":"user","content":"describe"}]}'
+  -d '{"model":"local","messages":[{"role":"user","content":"describe"}]}'
 curl https://llm.hostbun.cc/local/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"google/gemma-4-26b-a4b","messages":[{"role":"user","content":"describe"}]}'</code></pre>
 

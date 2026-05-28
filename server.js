@@ -17,12 +17,10 @@ const DOCS_FILE = process.env.DOCS_FILE || "/srv/docs/index.html";
 const PRICES_FILE = process.env.PRICES_FILE || "/srv/prices.json";
 const CANON = process.env.LOCAL_MODEL || "google/gemma-4-26b-a4b";
 
-const LOCAL_NAMES = new Set([CANON.toLowerCase(), "gemma", "gemma-local", "local"]);
-const isLocalModel = (m) => {
-  if (!m) return false;
-  const s = String(m).toLowerCase();
-  return LOCAL_NAMES.has(s) || s.startsWith("gemma");
-};
+// "local" is the headline selector; gemma/canonical kept for back-compat. Exact match
+// only, so cloud models that merely start with "gemma" aren't hijacked to the local box.
+const LOCAL_NAMES = new Set(["local", "gemma", CANON.toLowerCase()]);
+const isLocalModel = (m) => !!m && LOCAL_NAMES.has(String(m).toLowerCase());
 
 const HOP_REQ = new Set(["host", "connection", "content-length", "accept-encoding",
   "keep-alive", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
@@ -80,8 +78,8 @@ async function mergedModels(res) {
     const u = await fetch(CRAZY + "/v1/models", { headers: { authorization: `Bearer ${KEY}` } });
     const j = await u.json();
     const local = [
+      { id: "local", object: "model", owned_by: "local-lmstudio" },
       { id: CANON, object: "model", owned_by: "local-lmstudio" },
-      { id: "gemma", object: "model", owned_by: "local-lmstudio" },
     ];
     j.data = [...local, ...((j && j.data) || [])];
     res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
