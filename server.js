@@ -113,6 +113,10 @@ const server = http.createServer(async (req, res) => {
   const bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
   let model = null;
   if (bodyBuf.length) { try { model = JSON.parse(bodyBuf.toString()).model; } catch { /* not json */ } }
+  // Per-request attribution (no prompt bodies): who is spending and on which lane.
+  const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
+  const lane = isLocalModel(model) ? "local" : "cloud";
+  console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
   if (isLocalModel(model)) return proxy(req, res, LOCAL, { bodyBuf, injectKey: false, rewriteLocal: true });
   return proxy(req, res, CRAZY, { bodyBuf, injectKey: true });
 });
