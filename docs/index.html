@@ -33,7 +33,7 @@ summary{cursor:pointer;font-weight:600}
 <h2>All endpoints</h2>
 <div class="card"><table>
 <tr><th>Method</th><th>Path</th><th>Lane</th><th>Purpose</th></tr>
-<tr><td class="method">POST</td><td><code>/v1/chat/completions</code></td><td><span class="lane cloud">cloud</span> / <span class="lane local">local</span></td><td>Chat — routed by <code>model</code>: <code>local</code> → local GPU, anything else → cloud (streaming, tools, structured outputs, vision)</td></tr>
+<tr><td class="method">POST</td><td><code>/v1/chat/completions</code></td><td><span class="lane cloud">cloud</span> / <span class="lane local">local</span></td><td>Chat — routed by <code>model</code>: <code>local</code> → local GPU, anything else → cloud (streaming, tools, structured outputs, vision). <code>response_format</code> JSON is <b>enforced</b> — see below.</td></tr>
 <tr><td class="method">POST</td><td><code>/v1/completions</code> · <code>/v1/embeddings</code> · <code>/v1/images/generations</code> · <code>/v1/audio/*</code> · <code>/v1/rerank</code></td><td><span class="lane cloud">cloud</span></td><td>Full Crazyrouter OpenAI-compatible surface (key injected)</td></tr>
 <tr><td class="method">GET</td><td><code>/v1/models</code></td><td><span class="lane cloud">cloud</span> + <span class="lane local">local</span></td><td>Merged list — <code>local</code> (e4b default) + <code>gemma</code> + <code>obliterated</code> + <code>claude*</code> + all cloud models</td></tr>
 <tr><td class="method">POST</td><td><code>/local/v1/chat/completions</code></td><td><span class="lane local">local</span></td><td>Legacy explicit local path (still works; or just set <code>model:"local"</code> on <code>/v1</code>)</td></tr>
@@ -80,6 +80,20 @@ client.chat.completions.create(model="gpt-4o",            messages=[{"role":"use
 <pre><code># streaming
 curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","stream":true,"messages":[{"role":"user","content":"count to 5"}]}'</code></pre>
+
+<h2>Structured / JSON output <span class="lane meta">enforced</span></h2>
+<p>When you send <code>response_format: {"type":"json_object"}</code> (or <code>{"type":"json_schema",…}</code>) on <code>/v1/chat/completions</code>, the gateway <b>verifies the model actually returned valid JSON</b> before handing the reply back — it doesn't trust the model to honour the flag. This works the same on every lane (local, claude, cloud), including models that don't natively support structured outputs.</p>
+<ul>
+<li>If the reply parses as JSON → returned unchanged.</li>
+<li>If it's wrapped in a <code>```json … ```</code> fence → the fence is stripped (auto-repaired), no extra round-trip.</li>
+<li>If it still isn't valid JSON → the gateway re-prompts the <i>same</i> model with the parse error (<i>"your reply was not valid JSON, remake it"</i>) and retries (default 2 retries).</li>
+<li>If the model never complies → you get <code>HTTP 422</code> with <code>{"error":{"code":"json_validation_failed",…}}</code> and the last raw content, instead of a malformed body that breaks your <code>JSON.parse</code>.</li>
+</ul>
+<p class="sub">Note: because the whole reply must be buffered to validate it, <code>stream:true</code> + a JSON <code>response_format</code> returns the content in a single reconstructed SSE chunk rather than token-by-token. Validation is structural JSON (not full JSON-Schema). Tune with env <code>JSON_MAX_RETRIES</code> (default 2); disable entirely with <code>JSON_ENFORCE=0</code>.</p>
+<pre><code>curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"local","response_format":{"type":"json_object"},
+       "messages":[{"role":"user","content":"List 3 primary colors as a JSON array under key colors."}]}'
+# → guaranteed-parseable JSON, or HTTP 422 json_validation_failed if the model refuses</code></pre>
 
 <h2>Local models — select <span class="lane local">model: local</span> or <span class="lane local">obliterated</span></h2>
 <p>Local requests route to LM Studio on the <b>pbox</b> box (RTX 4090) via <code>llm.bofrid.dev</code>. Private (data stays on-prem), free. Three local models:</p>

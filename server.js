@@ -34,6 +34,17 @@ const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith
 // gemma + cloud lanes stay open so existing callers (fb-bot, promopilot) are unaffected.
 const OBLIT_TOKEN = process.env.OBLIT_TOKEN || "";
 
+// ── JSON-output enforcement ──
+// When a /chat/completions request sets response_format = {type:"json_object"} or
+// {type:"json_schema"} (or the string "json_object"), the gateway buffers the upstream reply,
+// checks the assistant message content actually parses as JSON, and — if it doesn't — re-prompts
+// the SAME model with a corrective message ("your reply was not valid JSON, remake it") up to
+// JSON_MAX_RETRIES times. A reply wrapped in ```json fences is auto-repaired (unfenced) instead
+// of wasting a round-trip. If the model still won't comply, the caller gets HTTP 422 with code
+// "json_validation_failed" rather than the malformed body. Disable with JSON_ENFORCE=0.
+const JSON_ENFORCE = (process.env.JSON_ENFORCE || "1") !== "0";
+const JSON_MAX_RETRIES = parseInt(process.env.JSON_MAX_RETRIES || "2", 10);
+
 // ── error → HyperDX (OTLP logs, service.name=llm.hostbun.cc). Auth header has NO "Bearer". ──
 const HDX_KEY = process.env.HYPERDX_INGEST_API_KEY || "";
 const HDX_URL = process.env.HYPERDX_OTLP_URL || "https://otel.hyperdx.hostbun.cc/v1/logs";
@@ -93,15 +104,22 @@ function sendFile(res, path, type, cors) {
   });
 }
 
-async function proxy(req, res, base, { bodyBuf, injectKey, authToken, rewriteModel, model, lane } = {}) {
-  const target = base + req.url;
-  const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
+// Copy the incoming headers minus hop-by-hop ones, applying lane auth (injected crazyrouter key
+// or a per-lane bearer token). Shared by the streaming passthrough and the JSON-enforcing path.
+function buildHeaders(req, { injectKey, authToken } = {}) {
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) {
     if (!HOP_REQ.has(k.toLowerCase())) headers[k] = v;
   }
   if (injectKey) headers["authorization"] = `Bearer ${KEY}`;
   else if (authToken) headers["authorization"] = `Bearer ${authToken}`;
+  return headers;
+}
+
+async function proxy(req, res, base, { bodyBuf, injectKey, authToken, rewriteModel, model, lane } = {}) {
+  const target = base + req.url;
+  const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
+  const headers = buildHeaders(req, { injectKey, authToken });
   let body = bodyBuf;
   if (rewriteModel && bodyBuf && bodyBuf.length) {
     try {
@@ -128,6 +146,120 @@ async function proxy(req, res, base, { bodyBuf, injectKey, authToken, rewriteMod
   res.writeHead(up.status, rh);
   if (up.body) Readable.fromWeb(up.body).pipe(res);
   else res.end();
+}
+
+// True when the request asks the model to emit JSON (OpenAI `response_format`).
+const wantsJsonFormat = (o) => {
+  const rf = o && o.response_format;
+  if (!rf) return false;
+  const t = typeof rf === "string" ? rf : rf.type;
+  return t === "json_object" || t === "json_schema";
+};
+
+// Strip a single surrounding ```json … ``` (or ``` … ```) fence, if present.
+function stripFences(s) {
+  const m = String(s).trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return m ? m[1].trim() : String(s).trim();
+}
+
+// Validate that the assistant content is valid JSON. Returns {ok:true} when it parses as-is,
+// {ok:true, repaired:true, value} when only a ```json fence had to be stripped, or
+// {ok:false, error} otherwise. (Structural JSON only — dependency-free, no JSON-Schema validation.)
+function validateJsonContent(content) {
+  if (content == null || content === "") return { ok: false, error: "empty response content" };
+  try { JSON.parse(content); return { ok: true, repaired: false }; }
+  catch (e1) {
+    const stripped = stripFences(content);
+    if (stripped !== content) {
+      try { JSON.parse(stripped); return { ok: true, repaired: true, value: stripped }; }
+      catch { /* still bad — fall through to the retry path */ }
+    }
+    return { ok: false, error: e1.message };
+  }
+}
+
+// Emit the validated completion. Non-streaming → the buffered JSON body verbatim. If the caller
+// asked for stream:true we reconstruct a minimal OpenAI SSE (content in one delta + stop + [DONE])
+// so their SSE parser is satisfied — we had to buffer upstream to validate, so a true token stream
+// isn't possible once enforcement is on.
+function finishJson(res, wantStream, parsed, rawText) {
+  if (!wantStream) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.end(rawText);
+  }
+  const choice = (parsed.choices && parsed.choices[0]) || {};
+  const content = (choice.message && choice.message.content) || "";
+  const meta = { id: parsed.id || "chatcmpl-json", created: parsed.created || Math.floor(Date.now() / 1000), model: parsed.model || "" };
+  const chunk = (delta, finish_reason) => `data: ${JSON.stringify({ ...meta, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finish_reason || null }] })}\n\n`;
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  res.write(chunk({ role: "assistant", content }, null));
+  res.write(chunk({}, "stop"));
+  res.write("data: [DONE]\n\n");
+  res.end();
+}
+
+// JSON-enforced chat completion: buffer upstream (forced non-stream), validate the content parses
+// as JSON, and on failure re-prompt the model with the parse error so it remakes a valid answer.
+async function jsonEnforce(req, res, route) {
+  const { base, injectKey, authToken, rewriteModel, model, lane, ip, bodyBuf } = route;
+  const reqObj = JSON.parse(bodyBuf.toString());           // caller already verified this parses
+  const wantStream = !!reqObj.stream;
+  reqObj.stream = false;                                   // must see the whole body to validate
+  if (rewriteModel) reqObj.model = rewriteModel;
+  const messages = Array.isArray(reqObj.messages) ? reqObj.messages.slice() : [];
+  const headers = buildHeaders(req, { injectKey, authToken });
+  headers["content-type"] = "application/json";
+  headers["accept"] = "application/json";
+  const target = base + req.url;
+
+  let lastErr = "", lastRaw = "";
+  for (let attempt = 0; attempt <= JSON_MAX_RETRIES; attempt++) {
+    reqObj.messages = messages;
+    let up;
+    try { up = await fetch(target, { method: req.method, headers, redirect: "follow", body: Buffer.from(JSON.stringify(reqObj)) }); }
+    catch (e) {
+      console.error(`[err] json-enforce fetch-failed lane=${lane} model=${model || "-"} ${target}: ${e.message}`);
+      shipError(`json-enforce upstream fetch failed: ${e.message}`, { model: model || "-", lane, ip, target });
+      res.writeHead(502, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: { message: "upstream fetch failed: " + e.message } }));
+    }
+    const text = await up.text();
+    if (up.status >= 400) {                                // upstream error — surface it, don't retry
+      console.error(`[err] upstream=${up.status} lane=${lane} model=${model || "-"} ${target} (json-enforce)`);
+      shipError(`upstream ${up.status} ${req.method} ${req.url} (json-enforce)`, { model: model || "-", lane, ip, status: up.status, body: text });
+      const rh = {}; up.headers.forEach((v, k) => { if (!HOP_RES.has(k.toLowerCase())) rh[k] = v; });
+      res.writeHead(up.status, rh);
+      return res.end(text);
+    }
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { /* upstream sent a non-JSON envelope */ }
+    const msg = parsed && parsed.choices && parsed.choices[0] && parsed.choices[0].message;
+    // Tool/function call with no text content — response_format doesn't govern this; pass through.
+    if (msg && Array.isArray(msg.tool_calls) && msg.tool_calls.length && (msg.content == null || msg.content === "")) {
+      return finishJson(res, wantStream, parsed, text);
+    }
+    const content = msg && typeof msg.content === "string" ? msg.content : null;
+    const v = validateJsonContent(content);
+    if (v.ok) {
+      if (v.repaired) { msg.content = v.value; return finishJson(res, wantStream, parsed, JSON.stringify(parsed)); }
+      return finishJson(res, wantStream, parsed, text);
+    }
+    lastErr = v.error; lastRaw = content == null ? "" : content;
+    console.error(`[err] json-invalid lane=${lane} model=${model || "-"} attempt=${attempt + 1}/${JSON_MAX_RETRIES + 1}: ${v.error}`);
+    if (attempt < JSON_MAX_RETRIES) {
+      messages.push({ role: "assistant", content: lastRaw });
+      messages.push({ role: "user", content: `Your previous reply was not valid JSON and failed to parse (error: ${v.error}). Respond again with ONLY a single valid JSON value — no markdown code fences, no commentary, nothing before or after the JSON.` });
+    }
+  }
+  shipError(`json enforcement failed after ${JSON_MAX_RETRIES + 1} attempts`, { model: model || "-", lane, ip, error: lastErr });
+  res.writeHead(422, { "content-type": "application/json" });
+  res.end(JSON.stringify({
+    error: {
+      message: `Model did not return valid JSON after ${JSON_MAX_RETRIES + 1} attempts despite response_format enforcement. Last parse error: ${lastErr}`,
+      type: "invalid_response_error", code: "json_validation_failed",
+    },
+    last_content: lastRaw.slice(0, 4000),
+  }));
 }
 
 async function mergedModels(res) {
@@ -183,11 +315,12 @@ const server = http.createServer(async (req, res) => {
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const lane = isLocalModel(model) ? "local" : isClaudeModel(model) ? "claude" : "cloud";
   console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
+  // Resolve the lane into a concrete upstream route (base + auth + any model rewrite).
+  let route;
   if (isClaudeModel(model)) {
     // claude.hostbun.cc claudebox — inject the wrapper's bearer token, pass model through unchanged.
-    return proxy(req, res, CLAUDE_BASE, { bodyBuf, authToken: CLAUDE_TOKEN, model, lane });
-  }
-  if (isLocalModel(model)) {
+    route = { base: CLAUDE_BASE, authToken: CLAUDE_TOKEN };
+  } else if (isLocalModel(model)) {
     const target = localTarget(model);
     if (target === OBLIT && OBLIT_TOKEN) {
       const auth = String(req.headers["authorization"] || "");
@@ -198,9 +331,22 @@ const server = http.createServer(async (req, res) => {
         return res.end(JSON.stringify({ error: { message: `model '${OBLIT}' requires Authorization: Bearer <token>`, type: "invalid_request_error", code: "unauthorized" } }));
       }
     }
-    return proxy(req, res, LOCAL, { bodyBuf, injectKey: false, rewriteModel: target, model, lane });
+    route = { base: LOCAL, injectKey: false, rewriteModel: target };
+  } else {
+    route = { base: CRAZY, injectKey: true };
   }
-  return proxy(req, res, CRAZY, { bodyBuf, injectKey: true, model, lane });
+
+  // JSON-output enforcement: only for chat completions that request a JSON response_format.
+  // Everything else streams straight through unchanged.
+  if (JSON_ENFORCE && req.method === "POST" && path.endsWith("/chat/completions") && bodyBuf.length) {
+    let reqObj = null;
+    try { reqObj = JSON.parse(bodyBuf.toString()); } catch { /* not JSON — passthrough */ }
+    if (reqObj && wantsJsonFormat(reqObj)) {
+      console.log(`[req] json-enforce model=${model || "-"} -> ${lane}`);
+      return jsonEnforce(req, res, { ...route, model, lane, ip, bodyBuf });
+    }
+  }
+  return proxy(req, res, route.base, { ...route, bodyBuf, model, lane });
 });
 
 server.listen(PORT, () => console.log(`llm-hostbun-proxy on :${PORT} crazy=${CRAZY} local=${LOCAL} key=${KEY ? "set" : "MISSING"}`));
