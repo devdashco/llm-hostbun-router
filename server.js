@@ -1,6 +1,8 @@
 // llm.hostbun.cc — single-URL OpenAI router.
-//   model "gemma" / "google/gemma-4-26b-a4b"  -> local LM Studio (llm.bofrid.dev), no key
-//   any other model                           -> crazyrouter.com, key injected
+//   model "gemma" / "local" / "google/gemma-4-26b-a4b"   -> local LM Studio gemma, no key
+//   model "obliterated" / "qwen3.6-27b-obliterated"      -> local LM Studio Qwen3.6-27B abliterated
+//   any other model                                      -> crazyrouter.com, key injected
+//   (local models JIT-swap in VRAM — both don't fit at once)
 //   GET /v1/models                            -> local gemma + crazyrouter's full list (merged)
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
@@ -16,6 +18,7 @@ const PORT = parseInt(process.env.PORT || "80", 10);
 const DOCS_FILE = process.env.DOCS_FILE || "/srv/docs/index.html";
 const PRICES_FILE = process.env.PRICES_FILE || "/srv/prices.json";
 const CANON = process.env.LOCAL_MODEL || "google/gemma-4-26b-a4b";
+const OBLIT = process.env.LOCAL_MODEL_2 || "qwen3.6-27b-obliterated";
 
 // ── error → HyperDX (OTLP logs, service.name=llm.hostbun.cc). Auth header has NO "Bearer". ──
 const HDX_KEY = process.env.HYPERDX_INGEST_API_KEY || "";
@@ -37,10 +40,20 @@ function shipError(message, attrs) {
   fetch(HDX_URL, { method: "POST", headers: { "content-type": "application/json", authorization: HDX_KEY }, body: JSON.stringify(payload) }).catch(() => {});
 }
 
-// "local" is the headline selector; gemma/canonical kept for back-compat. Exact match
-// only, so cloud models that merely start with "gemma" aren't hijacked to the local box.
-const LOCAL_NAMES = new Set(["local", "gemma", CANON.toLowerCase()]);
-const isLocalModel = (m) => !!m && LOCAL_NAMES.has(String(m).toLowerCase());
+// Alias (lowercased) -> the exact model id sent to LM Studio. "local"/"gemma" map to the
+// gemma MoE (back-compat); "obliterated" + the full id map to the Qwen3.6-27B abliterated
+// model. Exact match only, so cloud models that merely start with "gemma" aren't hijacked.
+// Both local models can't fit VRAM at once — LM Studio JIT-swaps between them on request.
+const LOCAL_MAP = new Map([
+  ["local", CANON],
+  ["gemma", CANON],
+  [CANON.toLowerCase(), CANON],
+  ["obliterated", OBLIT],
+  ["obliteratus", OBLIT],
+  [OBLIT.toLowerCase(), OBLIT],
+]);
+const localTarget = (m) => (m == null ? null : LOCAL_MAP.get(String(m).toLowerCase()) || null);
+const isLocalModel = (m) => localTarget(m) !== null;
 
 const HOP_REQ = new Set(["host", "connection", "content-length", "accept-encoding",
   "keep-alive", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
@@ -64,7 +77,7 @@ function sendFile(res, path, type, cors) {
   });
 }
 
-async function proxy(req, res, base, { bodyBuf, injectKey, rewriteLocal, model, lane } = {}) {
+async function proxy(req, res, base, { bodyBuf, injectKey, rewriteModel, model, lane } = {}) {
   const target = base + req.url;
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const headers = {};
@@ -73,10 +86,10 @@ async function proxy(req, res, base, { bodyBuf, injectKey, rewriteLocal, model, 
   }
   if (injectKey) headers["authorization"] = `Bearer ${KEY}`;
   let body = bodyBuf;
-  if (rewriteLocal && bodyBuf && bodyBuf.length) {
+  if (rewriteModel && bodyBuf && bodyBuf.length) {
     try {
       const j = JSON.parse(bodyBuf.toString());
-      if (j && j.model) { j.model = CANON; body = Buffer.from(JSON.stringify(j)); headers["content-type"] = "application/json"; }
+      if (j && j.model) { j.model = rewriteModel; body = Buffer.from(JSON.stringify(j)); headers["content-type"] = "application/json"; }
     } catch { /* leave body as-is */ }
   }
   const init = { method: req.method, headers, redirect: "follow" };
@@ -107,6 +120,7 @@ async function mergedModels(res) {
     const local = [
       { id: "local", object: "model", owned_by: "local-lmstudio" },
       { id: CANON, object: "model", owned_by: "local-lmstudio" },
+      { id: OBLIT, object: "model", owned_by: "local-lmstudio" },
     ];
     j.data = [...local, ...((j && j.data) || [])];
     res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
@@ -144,7 +158,7 @@ const server = http.createServer(async (req, res) => {
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const lane = isLocalModel(model) ? "local" : "cloud";
   console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
-  if (isLocalModel(model)) return proxy(req, res, LOCAL, { bodyBuf, injectKey: false, rewriteLocal: true, model, lane });
+  if (isLocalModel(model)) return proxy(req, res, LOCAL, { bodyBuf, injectKey: false, rewriteModel: localTarget(model), model, lane });
   return proxy(req, res, CRAZY, { bodyBuf, injectKey: true, model, lane });
 });
 
