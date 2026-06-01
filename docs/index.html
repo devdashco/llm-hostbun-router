@@ -50,7 +50,7 @@ summary{cursor:pointer;font-weight:600}
 <table>
 <tr><th>Lane</th><th>Select with <code>model</code></th><th>Models</th></tr>
 <tr><td><span class="lane local">local</span></td><td><code>"local"</code> / <code>"gemma"</code></td><td><code>google/gemma-4-26b-a4b</code> — 26B-A4B MoE (free, on-prem, vision + tools)</td></tr>
-<tr><td><span class="lane local">local</span></td><td><code>"obliterated"</code></td><td><code>qwen3.6-27b-obliterated</code> — 27B abliterated/uncensored, text-only (free, on-prem)</td></tr>
+<tr><td><span class="lane local">local</span></td><td><code>"obliterated"</code> 🔒</td><td><code>qwen3.6-27b-obliterated</code> — 27B abliterated/uncensored, text-only (free, on-prem). <b>Requires <code>Authorization: Bearer &lt;token&gt;</code></b> (the only gated model — gemma + cloud are open).</td></tr>
 <tr><td><span class="lane cloud">cloud</span></td><td>any other id, e.g. <code>"claude-sonnet-4-6"</code></td><td>250+ (Claude, GPT, Gemini, DeepSeek, Qwen, Doubao, Grok…)</td></tr>
 </table>
 <pre><code># local GPU — just select model "local"
@@ -74,8 +74,19 @@ curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application
 <p>Local requests route to LM Studio on the <b>pbox</b> box (RTX 4090) via <code>llm.bofrid.dev</code>. Private (data stays on-prem), free. Two local models:</p>
 <ul>
 <li><code>local</code> / <code>gemma</code> → <code>google/gemma-4-26b-a4b</code> — 26B-A4B <b>MoE</b>, vision + tool calling, ~8K ctx. Vision works (send <code>image_url</code> parts incl. base64).</li>
-<li><code>obliterated</code> → <code>qwen3.6-27b-obliterated</code> — 27B abliterated/uncensored, <b>text-only reasoning</b> model. Use a generous <code>max_tokens</code> (e.g. ≥1024) — it spends tokens on a reasoning chain before the answer.</li>
+<li><code>obliterated</code> → <code>qwen3.6-27b-obliterated</code> — 27B abliterated/uncensored, <b>text-only reasoning</b> model. Use a generous <code>max_tokens</code> (e.g. ≥1024) — it spends tokens on a reasoning chain before the answer. 🔒 <b>Gated</b>: send <code>Authorization: Bearer &lt;token&gt;</code> or it returns 401.</li>
 </ul>
+<p>Drop it into any OpenAI-compatible client (opencode, Cline, Continue, the OpenAI SDK) as a custom provider — base URL <code>https://llm.hostbun.cc/v1</code>, API key = the obliterated token, model <code>obliterated</code>. <code>/v1/models</code> is open so the model list populates without a key; only obliterated <i>completions</i> need the token.</p>
+<pre><code># opencode — opencode.json (or ~/.config/opencode/opencode.json)
+{
+  "provider": {
+    "bofrid": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "https://llm.hostbun.cc/v1", "apiKey": "&lt;token&gt;" },
+      "models": { "obliterated": { "name": "Qwen3.6-27B Obliterated" } }
+    }
+  }
+}</code></pre>
 <p>The two local models are ~18–19 GB each and <b>can't both fit in the 24 GB GPU</b>, so LM Studio JIT-swaps: the first request for a model loads it and unloads the other (~20–40 s cold start on a switch). The legacy explicit path <code>/local/v1/*</code> (and Anthropic <code>/local/v1/messages</code>, native <code>/local/api/v1/chat</code>) still works too.</p>
 <pre><code># either of these reaches the local GPU:
 curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \

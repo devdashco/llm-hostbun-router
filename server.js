@@ -1,6 +1,6 @@
 // llm.hostbun.cc — single-URL OpenAI router.
 //   model "gemma" / "local" / "google/gemma-4-26b-a4b"   -> local LM Studio gemma, no key
-//   model "obliterated" / "qwen3.6-27b-obliterated"      -> local LM Studio Qwen3.6-27B abliterated
+//   model "obliterated" / "qwen3.6-27b-obliterated"      -> local LM Studio Qwen3.6-27B abliterated (Bearer-gated if OBLIT_TOKEN set)
 //   any other model                                      -> crazyrouter.com, key injected
 //   (local models JIT-swap in VRAM — both don't fit at once)
 //   GET /v1/models                            -> local gemma + crazyrouter's full list (merged)
@@ -19,6 +19,10 @@ const DOCS_FILE = process.env.DOCS_FILE || "/srv/docs/index.html";
 const PRICES_FILE = process.env.PRICES_FILE || "/srv/prices.json";
 const CANON = process.env.LOCAL_MODEL || "google/gemma-4-26b-a4b";
 const OBLIT = process.env.LOCAL_MODEL_2 || "qwen3.6-27b-obliterated";
+// Optional bearer gate for the obliterated (uncensored) model only. When set, requests
+// routed to OBLIT must send `Authorization: Bearer <OBLIT_TOKEN>` (or `x-api-key`).
+// gemma + cloud lanes stay open so existing callers (fb-bot, promopilot) are unaffected.
+const OBLIT_TOKEN = process.env.OBLIT_TOKEN || "";
 
 // ── error → HyperDX (OTLP logs, service.name=llm.hostbun.cc). Auth header has NO "Bearer". ──
 const HDX_KEY = process.env.HYPERDX_INGEST_API_KEY || "";
@@ -158,7 +162,19 @@ const server = http.createServer(async (req, res) => {
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const lane = isLocalModel(model) ? "local" : "cloud";
   console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
-  if (isLocalModel(model)) return proxy(req, res, LOCAL, { bodyBuf, injectKey: false, rewriteModel: localTarget(model), model, lane });
+  if (isLocalModel(model)) {
+    const target = localTarget(model);
+    if (target === OBLIT && OBLIT_TOKEN) {
+      const auth = String(req.headers["authorization"] || "");
+      const xkey = String(req.headers["x-api-key"] || "");
+      if (auth !== `Bearer ${OBLIT_TOKEN}` && xkey !== OBLIT_TOKEN) {
+        console.error(`[err] 401 obliterated unauthorized ip=${ip}`);
+        res.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
+        return res.end(JSON.stringify({ error: { message: `model '${OBLIT}' requires Authorization: Bearer <token>`, type: "invalid_request_error", code: "unauthorized" } }));
+      }
+    }
+    return proxy(req, res, LOCAL, { bodyBuf, injectKey: false, rewriteModel: target, model, lane });
+  }
   return proxy(req, res, CRAZY, { bodyBuf, injectKey: true, model, lane });
 });
 
