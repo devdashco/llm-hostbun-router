@@ -3,9 +3,10 @@
 //   model "gemma-4-e4b-it-obliterated"                   -> same (full id)
 //   model "gemma" / "google/gemma-4-26b-a4b"             -> local LM Studio gemma 26B MoE, no key
 //   model "obliterated" / "qwen3.6-27b-obliterated"      -> local LM Studio Qwen3.6-27B abliterated (Bearer-gated if OBLIT_TOKEN set)
+//   model "claude*" (e.g. claude-sonnet-4-6)             -> claude.hostbun.cc claudebox (real Claude via Claude Code), key injected
 //   any other model                                      -> crazyrouter.com, key injected
 //   (local models JIT-swap in VRAM — they don't all fit at once)
-//   GET /v1/models                            -> local gemma + crazyrouter's full list (merged)
+//   GET /v1/models                            -> local + claudebox + crazyrouter's list (merged)
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
 //   /local/*                                   -> kept for back-compat (strips /local -> llm.bofrid.dev)
@@ -23,6 +24,11 @@ const CANON = process.env.LOCAL_MODEL || "google/gemma-4-26b-a4b";
 const OBLIT = process.env.LOCAL_MODEL_2 || "qwen3.6-27b-obliterated";
 // Default local model: small (8GB) multimodal abliterated Gemma 4 E4B. "local" resolves here.
 const E4B = process.env.LOCAL_MODEL_3 || "gemma-4-e4b-it-obliterated";
+// Claude lane: models starting with "claude" route to the claudebox wrapper at
+// claude.hostbun.cc (real Claude via Claude Code), with CLAUDE_TOKEN injected as Bearer.
+const CLAUDE_BASE = (process.env.CLAUDE_BASE || "https://claude.hostbun.cc").replace(/\/$/, "");
+const CLAUDE_TOKEN = process.env.CLAUDE_TOKEN || "ddash";
+const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith("claude");
 // Optional bearer gate for the obliterated (uncensored) model only. When set, requests
 // routed to OBLIT must send `Authorization: Bearer <OBLIT_TOKEN>` (or `x-api-key`).
 // gemma + cloud lanes stay open so existing callers (fb-bot, promopilot) are unaffected.
@@ -87,7 +93,7 @@ function sendFile(res, path, type, cors) {
   });
 }
 
-async function proxy(req, res, base, { bodyBuf, injectKey, rewriteModel, model, lane } = {}) {
+async function proxy(req, res, base, { bodyBuf, injectKey, authToken, rewriteModel, model, lane } = {}) {
   const target = base + req.url;
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const headers = {};
@@ -95,6 +101,7 @@ async function proxy(req, res, base, { bodyBuf, injectKey, rewriteModel, model, 
     if (!HOP_REQ.has(k.toLowerCase())) headers[k] = v;
   }
   if (injectKey) headers["authorization"] = `Bearer ${KEY}`;
+  else if (authToken) headers["authorization"] = `Bearer ${authToken}`;
   let body = bodyBuf;
   if (rewriteModel && bodyBuf && bodyBuf.length) {
     try {
@@ -124,22 +131,29 @@ async function proxy(req, res, base, { bodyBuf, injectKey, rewriteModel, model, 
 }
 
 async function mergedModels(res) {
+  const local = [
+    { id: "local", object: "model", owned_by: "local-lmstudio" },
+    { id: E4B, object: "model", owned_by: "local-lmstudio" },
+    { id: CANON, object: "model", owned_by: "local-lmstudio" },
+    { id: OBLIT, object: "model", owned_by: "local-lmstudio" },
+  ];
+  // claudebox models (real Claude). Fetched independently so a dead crazyrouter key
+  // doesn't hide them. owned_by tags the lane.
+  let claude = [];
+  try {
+    const c = await fetch(CLAUDE_BASE + "/v1/models", { headers: { authorization: `Bearer ${CLAUDE_TOKEN}` } });
+    const cj = await c.json();
+    claude = ((cj && cj.data) || []).map((m) => ({ ...m, owned_by: "claudebox" }));
+  } catch { /* claudebox down — skip */ }
+  // crazyrouter's full catalog (may be empty if the key is dead — that's fine).
+  let cloud = [];
   try {
     const u = await fetch(CRAZY + "/v1/models", { headers: { authorization: `Bearer ${KEY}` } });
     const j = await u.json();
-    const local = [
-      { id: "local", object: "model", owned_by: "local-lmstudio" },
-      { id: E4B, object: "model", owned_by: "local-lmstudio" },
-      { id: CANON, object: "model", owned_by: "local-lmstudio" },
-      { id: OBLIT, object: "model", owned_by: "local-lmstudio" },
-    ];
-    j.data = [...local, ...((j && j.data) || [])];
-    res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify(j));
-  } catch (e) {
-    res.writeHead(502, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { message: "models merge failed: " + e.message } }));
-  }
+    cloud = (j && j.data) || [];
+  } catch { /* crazyrouter down — skip */ }
+  res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+  res.end(JSON.stringify({ object: "list", data: [...local, ...claude, ...cloud] }));
 }
 
 const server = http.createServer(async (req, res) => {
@@ -167,8 +181,12 @@ const server = http.createServer(async (req, res) => {
   if (bodyBuf.length) { try { model = JSON.parse(bodyBuf.toString()).model; } catch { /* not json */ } }
   // Per-request attribution (no prompt bodies): who is spending and on which lane.
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
-  const lane = isLocalModel(model) ? "local" : "cloud";
+  const lane = isLocalModel(model) ? "local" : isClaudeModel(model) ? "claude" : "cloud";
   console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
+  if (isClaudeModel(model)) {
+    // claude.hostbun.cc claudebox — inject the wrapper's bearer token, pass model through unchanged.
+    return proxy(req, res, CLAUDE_BASE, { bodyBuf, authToken: CLAUDE_TOKEN, model, lane });
+  }
   if (isLocalModel(model)) {
     const target = localTarget(model);
     if (target === OBLIT && OBLIT_TOKEN) {
