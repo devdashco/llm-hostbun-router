@@ -178,6 +178,27 @@ function validateJsonContent(content) {
   }
 }
 
+// Instruction injected in-prompt for backends we strip response_format from (so a model with no
+// native structured-output support still knows to emit raw JSON). Includes the schema if given.
+function jsonInstruction(rf) {
+  let s = "Respond with ONLY a single valid JSON value — no markdown code fences, no commentary, nothing before or after the JSON.";
+  const schema = rf && typeof rf === "object" && rf.type === "json_schema" && rf.json_schema && rf.json_schema.schema;
+  if (schema) s += " It must conform to this JSON Schema: " + JSON.stringify(schema);
+  return s;
+}
+// Append that instruction to the last string user turn (most portable across backends), or push
+// a new user turn if there isn't one.
+function injectJsonInstruction(messages, rf) {
+  const instr = jsonInstruction(rf);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user" && typeof messages[i].content === "string") {
+      messages[i] = { ...messages[i], content: messages[i].content + "\n\n" + instr };
+      return;
+    }
+  }
+  messages.push({ role: "user", content: instr });
+}
+
 // Emit the validated completion. Non-streaming → the buffered JSON body verbatim. If the caller
 // asked for stream:true we reconstruct a minimal OpenAI SSE (content in one delta + stop + [DONE])
 // so their SSE parser is satisfied — we had to buffer upstream to validate, so a true token stream
@@ -207,6 +228,17 @@ async function jsonEnforce(req, res, route) {
   reqObj.stream = false;                                   // must see the whole body to validate
   if (rewriteModel) reqObj.model = rewriteModel;
   const messages = Array.isArray(reqObj.messages) ? reqObj.messages.slice() : [];
+  // Some backends choke on response_format: claudebox (Claude Code SDK) returns an empty "{}",
+  // and LM Studio 400s on json_object (it only accepts json_schema|text). For those, strip
+  // response_format from the upstream call and instruct the model in-prompt instead — our own
+  // validate → fence-repair → retry loop is what actually guarantees the JSON. Cloud (and local
+  // json_schema, which LM Studio supports natively) keep response_format for constrained decoding.
+  const rf = reqObj.response_format;
+  const rfType = typeof rf === "string" ? rf : (rf && rf.type);
+  if (lane === "claude" || (lane === "local" && rfType === "json_object")) {
+    delete reqObj.response_format;
+    injectJsonInstruction(messages, rf);
+  }
   const headers = buildHeaders(req, { injectKey, authToken });
   headers["content-type"] = "application/json";
   headers["accept"] = "application/json";
