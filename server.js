@@ -20,6 +20,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const url = require("url");
 const { Readable } = require("stream");
 
 const PORT = parseInt(process.env.PORT || "80", 10);
@@ -27,6 +28,9 @@ const DOCS_FILE = process.env.DOCS_FILE || "/srv/docs/index.html";
 const ADMIN_FILE = process.env.ADMIN_FILE || "/srv/admin/index.html";
 const PRICES_FILE = process.env.PRICES_FILE || "/srv/prices.json";
 const CONFIG_FILE = process.env.CONFIG_FILE || "/data/config.json";
+const CALLS_DB = process.env.CALLS_DB || "/data/calls.db";
+// Max bytes of prompt / reply text stored per call (protects the DB from huge payloads).
+const CONTENT_CAP = parseInt(process.env.CALL_CONTENT_CAP || "262144", 10); // 256 KiB
 
 // Default local model ids (env-overridable). "local" -> small multimodal E4B; "gemma" -> 26B MoE;
 // "obliterated" -> Qwen3.6-27B abliterated.
@@ -86,6 +90,14 @@ function envDefaults() {
     jsonMaxRetries: parseInt(process.env.JSON_MAX_RETRIES || "2", 10),
     // Admin password (HMAC secret + login check). Weak default per request — rotate via the UI.
     adminPassword: process.env.ADMIN_PASSWORD || "ddash",
+    // Call logging → SQLite at CALLS_DB. enabled: record any call metadata at all;
+    // content: also store the prompt + the model's reply text (capped at CONTENT_CAP);
+    // retain: keep at most this many rows (oldest pruned).
+    logging: {
+      enabled: (process.env.LOG_CALLS || "1") !== "0",
+      content: (process.env.LOG_CONTENT || "1") !== "0",
+      retain: parseInt(process.env.LOG_RETAIN || "50000", 10),
+    },
   };
 }
 
@@ -144,6 +156,12 @@ function mergeConfig(base, saved) {
       model: typeof d.model === "string" ? d.model.trim() : "",
     };
   }
+  if (saved.logging && typeof saved.logging === "object") {
+    const l = saved.logging;
+    if (typeof l.enabled === "boolean") c.logging.enabled = l.enabled;
+    if (typeof l.content === "boolean") c.logging.content = l.content;
+    if (Number.isInteger(l.retain) && l.retain >= 100 && l.retain <= 1000000) c.logging.retain = l.retain;
+  }
   if (!c.claudePrefix) c.claudePrefix = "claude";
   if (!c.adminPassword) c.adminPassword = "ddash";
   return c;
@@ -173,6 +191,116 @@ function persistConfig() {
 }
 
 loadConfig();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Call log → SQLite (node:sqlite, built in). One row per request that reaches a
+// lane (incl. blocked/gated/error). Lives on the /data persistent volume so it
+// survives restarts/redeploys. All DB work is wrapped so a logging failure can
+// never break proxying.
+// ─────────────────────────────────────────────────────────────────────────────
+let db = null, insertStmt = null, pruneStmt = null, insertsSincePrune = 0;
+function initDb() {
+  try {
+    const { DatabaseSync } = require("node:sqlite");
+    fs.mkdirSync(path.dirname(CALLS_DB), { recursive: true });
+    db = new DatabaseSync(CALLS_DB);
+    db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+    db.exec(`CREATE TABLE IF NOT EXISTS calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      ip TEXT, ua TEXT, method TEXT, path TEXT,
+      req_model TEXT, lane TEXT, sent_model TEXT, key_label TEXT,
+      status INTEGER, duration_ms INTEGER, stream INTEGER,
+      prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER,
+      error TEXT, req_content TEXT, resp_content TEXT
+    );`);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts);");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(req_model);");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_calls_lane ON calls(lane);");
+    insertStmt = db.prepare(`INSERT INTO calls
+      (ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,req_content,resp_content)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    pruneStmt = db.prepare("DELETE FROM calls WHERE id NOT IN (SELECT id FROM calls ORDER BY id DESC LIMIT ?)");
+    console.log(`[log] call DB ready at ${CALLS_DB}`);
+  } catch (e) {
+    db = null;
+    console.error(`[log] call DB unavailable (${e.message}); call logging disabled`);
+  }
+}
+initDb();
+
+const clip = (s) => { const t = s == null ? "" : String(s); return t.length > CONTENT_CAP ? t.slice(0, CONTENT_CAP) : t; };
+
+// Which credential a route uses (for the "which keys" view).
+function keyLabel(route) {
+  if (route.lane === "cloud") return "crazyKey";
+  if (route.lane === "claude") return "claudeToken";
+  if (route.lane === "local") return isGated(route.target) && CFG.oblitToken ? "oblitToken" : "none (open)";
+  return "—";
+}
+
+// Extract the prompt text from a request body (chat messages / responses input / prompt).
+function extractRequestContent(bodyBuf) {
+  if (!CFG.logging.content || !bodyBuf || !bodyBuf.length) return null;
+  try {
+    const j = JSON.parse(bodyBuf.toString());
+    if (Array.isArray(j.messages)) return clip(JSON.stringify(j.messages));
+    if (j.input != null) return clip(typeof j.input === "string" ? j.input : JSON.stringify(j.input));
+    if (typeof j.prompt === "string") return clip(j.prompt);
+    return null;
+  } catch { return null; }
+}
+
+// Pull {content, usage} from a finished upstream body (handles SSE streams + plain JSON).
+function extractResponseBody(buf, isStream) {
+  const out = { content: null, usage: null };
+  if (!buf || !buf.length) return out;
+  const text = buf.toString();
+  if (isStream) {
+    let content = "";
+    for (const line of text.split("\n")) {
+      const s = line.trim();
+      if (!s.startsWith("data:")) continue;
+      const data = s.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      try {
+        const j = JSON.parse(data);
+        const d = j.choices && j.choices[0] && j.choices[0].delta;
+        if (d && typeof d.content === "string") content += d.content;
+        if (j.usage) out.usage = j.usage;
+      } catch { /* partial / non-json chunk */ }
+    }
+    if (content) out.content = content;
+    return out;
+  }
+  try {
+    const j = JSON.parse(text);
+    if (j.usage) out.usage = j.usage;
+    const m = j.choices && j.choices[0] && j.choices[0].message;
+    if (m && (m.content || m.reasoning_content)) out.content = m.content || m.reasoning_content;
+    else if (Array.isArray(j.output)) out.content = JSON.stringify(j.output); // responses API
+    else if (j.error) out.content = JSON.stringify(j.error);
+  } catch { /* non-json envelope */ }
+  return out;
+}
+
+// Persist one call. `rec` carries the request-side fields; never throws.
+function recordCall(rec) {
+  if (!db || !insertStmt || !CFG.logging.enabled) return;
+  try {
+    const u = rec.usage || {};
+    insertStmt.run(
+      rec.ts || Date.now(), rec.ip || null, rec.ua || null, rec.method || null, rec.path || null,
+      rec.reqModel || null, rec.lane || null, rec.sentModel || null, rec.keyLabel || null,
+      rec.status == null ? null : rec.status, rec.ms == null ? null : rec.ms, rec.stream ? 1 : 0,
+      u.prompt_tokens ?? null, u.completion_tokens ?? null, u.total_tokens ?? null,
+      rec.error || null,
+      CFG.logging.content ? (rec.reqContent || null) : null,
+      CFG.logging.content ? (rec.respContent == null ? null : clip(rec.respContent)) : null,
+    );
+    if (++insertsSincePrune >= 200) { insertsSincePrune = 0; try { pruneStmt.run(CFG.logging.retain); } catch {} }
+  } catch (e) { /* never let logging break a request */ }
+}
 
 function shipError(message, attrs) {
   if (!HDX_KEY) return;
@@ -228,17 +356,28 @@ function buildHeaders(req, { injectKey, authToken } = {}) {
   return headers;
 }
 
-async function proxy(req, res, base, { bodyBuf, injectKey, authToken, rewriteModel, model, lane } = {}) {
+async function proxy(req, res, base, opts = {}) {
+  const { bodyBuf, injectKey, authToken, rewriteModel, model, lane } = opts;
   const target = base + req.url;
-  const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
+  const ip = opts.ip || req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
+  const t0 = Date.now();
+  let stream = false;
   const headers = buildHeaders(req, { injectKey, authToken });
   let body = bodyBuf;
-  if (rewriteModel && bodyBuf && bodyBuf.length) {
+  if (bodyBuf && bodyBuf.length) {
     try {
       const j = JSON.parse(bodyBuf.toString());
-      if (j && j.model) { j.model = rewriteModel; body = Buffer.from(JSON.stringify(j)); headers["content-type"] = "application/json"; }
+      stream = !!j.stream;
+      if (rewriteModel && j && j.model) { j.model = rewriteModel; body = Buffer.from(JSON.stringify(j)); headers["content-type"] = "application/json"; }
     } catch { /* leave body as-is */ }
   }
+  // Common fields for the call-log row.
+  const base_rec = {
+    ts: t0, ip, ua: req.headers["user-agent"] || "", method: req.method, path: (req.url || "").split("?")[0],
+    reqModel: model || null, lane: lane || "local", sentModel: rewriteModel || model || null,
+    keyLabel: keyLabel({ lane: lane || "local", target: opts.target }), stream,
+    reqContent: extractRequestContent(bodyBuf),
+  };
   const init = { method: req.method, headers, redirect: "follow" };
   if (!["GET", "HEAD"].includes(req.method) && body && body.length) init.body = body;
   let up;
@@ -246,6 +385,7 @@ async function proxy(req, res, base, { bodyBuf, injectKey, authToken, rewriteMod
   catch (e) {
     console.error(`[err] fetch-failed lane=${lane || "?"} model=${model || "-"} ${target}: ${e.message}`);
     shipError(`upstream fetch failed: ${e.message}`, { model: model || "-", lane: lane || "?", ip, target });
+    recordCall({ ...base_rec, status: 502, ms: Date.now() - t0, error: "upstream fetch failed: " + e.message });
     res.writeHead(502, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: "upstream fetch failed: " + e.message } }));
   }
@@ -256,8 +396,27 @@ async function proxy(req, res, base, { bodyBuf, injectKey, authToken, rewriteMod
   const rh = {};
   up.headers.forEach((v, k) => { if (!HOP_RES.has(k.toLowerCase())) rh[k] = v; });
   res.writeHead(up.status, rh);
-  if (up.body) Readable.fromWeb(up.body).pipe(res);
-  else res.end();
+  const isStream = (up.headers.get("content-type") || "").includes("text/event-stream");
+  // Only chat/responses/completions calls carry content worth recording; for those we tee the
+  // body (capped) to pull tokens + reply. /v1/models etc. are skipped to keep the log signal high.
+  const recordThis = CFG.logging.enabled && req.method === "POST" && /\/(chat\/completions|responses|completions|messages|chat)$/.test(base_rec.path);
+  if (up.body) {
+    const r = Readable.fromWeb(up.body);
+    if (recordThis) {
+      const chunks = []; let size = 0;
+      r.on("data", (d) => { if (size < CONTENT_CAP + 8192) { chunks.push(Buffer.from(d)); size += d.length; } });
+      const done = () => {
+        const ex = extractResponseBody(Buffer.concat(chunks), isStream);
+        recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0, usage: ex.usage, respContent: ex.content,
+          error: up.status >= 400 ? `upstream ${up.status}` : null });
+      };
+      r.on("end", done); r.on("error", done);
+    }
+    r.pipe(res);
+  } else {
+    if (recordThis) recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0, error: up.status >= 400 ? `upstream ${up.status}` : null });
+    res.end();
+  }
 }
 
 // True when the request asks the model to emit JSON (OpenAI `response_format`).
@@ -324,6 +483,17 @@ async function jsonEnforce(req, res, route) {
   const maxRetries = CFG.jsonMaxRetries;
   const reqObj = JSON.parse(bodyBuf.toString());           // caller already verified this parses
   const wantStream = !!reqObj.stream;
+  const t0 = Date.now();
+  const logRec = {
+    ts: t0, ip, ua: req.headers["user-agent"] || "", method: req.method, path: (req.url || "").split("?")[0],
+    reqModel: model || null, lane, sentModel: rewriteModel || model || null,
+    keyLabel: keyLabel({ lane, target: route.target }), stream: wantStream,
+    reqContent: extractRequestContent(bodyBuf),
+  };
+  const logJson = (status, parsed, error) => recordCall({ ...logRec, status, ms: Date.now() - t0,
+    usage: parsed && parsed.usage, error,
+    respContent: parsed && parsed.choices && parsed.choices[0] && parsed.choices[0].message
+      ? parsed.choices[0].message.content : null });
   reqObj.stream = false;                                   // must see the whole body to validate
   if (rewriteModel) reqObj.model = rewriteModel;
   const messages = Array.isArray(reqObj.messages) ? reqObj.messages.slice() : [];
@@ -346,6 +516,7 @@ async function jsonEnforce(req, res, route) {
     catch (e) {
       console.error(`[err] json-enforce fetch-failed lane=${lane} model=${model || "-"} ${target}: ${e.message}`);
       shipError(`json-enforce upstream fetch failed: ${e.message}`, { model: model || "-", lane, ip, target });
+      recordCall({ ...logRec, status: 502, ms: Date.now() - t0, error: "upstream fetch failed: " + e.message });
       res.writeHead(502, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: { message: "upstream fetch failed: " + e.message } }));
     }
@@ -353,6 +524,7 @@ async function jsonEnforce(req, res, route) {
     if (up.status >= 400) {                                // upstream error — surface it, don't retry
       console.error(`[err] upstream=${up.status} lane=${lane} model=${model || "-"} ${target} (json-enforce)`);
       shipError(`upstream ${up.status} ${req.method} ${req.url} (json-enforce)`, { model: model || "-", lane, ip, status: up.status, body: text });
+      recordCall({ ...logRec, status: up.status, ms: Date.now() - t0, error: `upstream ${up.status}`, respContent: text });
       const rh = {}; up.headers.forEach((v, k) => { if (!HOP_RES.has(k.toLowerCase())) rh[k] = v; });
       res.writeHead(up.status, rh);
       return res.end(text);
@@ -361,12 +533,14 @@ async function jsonEnforce(req, res, route) {
     try { parsed = JSON.parse(text); } catch { /* upstream sent a non-JSON envelope */ }
     const msg = parsed && parsed.choices && parsed.choices[0] && parsed.choices[0].message;
     if (msg && Array.isArray(msg.tool_calls) && msg.tool_calls.length && (msg.content == null || msg.content === "")) {
+      logJson(up.status, parsed, null);
       return finishJson(res, wantStream, parsed, text);
     }
     const content = msg && typeof msg.content === "string" ? msg.content : null;
     const v = validateJsonContent(content);
     if (v.ok) {
-      if (v.repaired) { msg.content = v.value; return finishJson(res, wantStream, parsed, JSON.stringify(parsed)); }
+      if (v.repaired) { msg.content = v.value; logJson(up.status, parsed, null); return finishJson(res, wantStream, parsed, JSON.stringify(parsed)); }
+      logJson(up.status, parsed, null);
       return finishJson(res, wantStream, parsed, text);
     }
     lastErr = v.error; lastRaw = content == null ? "" : content;
@@ -377,6 +551,7 @@ async function jsonEnforce(req, res, route) {
     }
   }
   shipError(`json enforcement failed after ${maxRetries + 1} attempts`, { model: model || "-", lane, ip, error: lastErr });
+  recordCall({ ...logRec, status: 422, ms: Date.now() - t0, error: `json_validation_failed: ${lastErr}`, respContent: lastRaw });
   res.writeHead(422, { "content-type": "application/json" });
   res.end(JSON.stringify({
     error: {
@@ -521,6 +696,8 @@ function adminState() {
     defaultRoute: CFG.defaultRoute,
     jsonEnforce: CFG.jsonEnforce,
     jsonMaxRetries: CFG.jsonMaxRetries,
+    logging: CFG.logging,
+    loggingDbReady: !!db,
     // secrets — never returned in clear
     crazyKeySet: !!CFG.crazyKey, crazyKeyMasked: mask(CFG.crazyKey),
     claudeTokenSet: !!CFG.claudeToken, claudeTokenMasked: mask(CFG.claudeToken),
@@ -633,6 +810,7 @@ async function handleAdminApi(req, res, path) {
     if (patch.defaultRoute) next.defaultRoute = patch.defaultRoute;
     if (typeof patch.jsonEnforce === "boolean") next.jsonEnforce = patch.jsonEnforce;
     if (patch.jsonMaxRetries !== undefined) next.jsonMaxRetries = patch.jsonMaxRetries;
+    if (patch.logging && typeof patch.logging === "object") Object.assign(next.logging, patch.logging);
     for (const k of ["crazyKey", "claudeToken", "oblitToken", "adminPassword"])
       if (typeof patch[k] === "string") next[k] = patch[k];
     const merged = mergeConfig(envDefaults(), next);
@@ -691,6 +869,64 @@ async function handleAdminApi(req, res, path) {
     });
   }
 
+  // ── call log ──
+  if (sub === "calls" && req.method === "GET") {
+    if (!db) return sendJson(res, 200, { rows: [], total: 0, dbReady: false });
+    const q = url.parse(req.url, true).query;
+    const where = [], params = [];
+    if (q.lane) { where.push("lane = ?"); params.push(String(q.lane)); }
+    if (q.model) { where.push("req_model = ?"); params.push(String(q.model)); }
+    if (q.key) { where.push("key_label = ?"); params.push(String(q.key)); }
+    if (q.status === "error") where.push("status >= 400");
+    else if (q.status === "ok") where.push("status < 400");
+    else if (q.status) { where.push("status = ?"); params.push(parseInt(q.status, 10)); }
+    if (q.since) { where.push("ts >= ?"); params.push(parseInt(q.since, 10)); }
+    if (q.q) { where.push("(req_model LIKE ? OR sent_model LIKE ? OR ip LIKE ? OR ua LIKE ? OR req_content LIKE ? OR resp_content LIKE ?)");
+      const like = "%" + String(q.q) + "%"; params.push(like, like, like, like, like, like); }
+    const w = where.length ? "WHERE " + where.join(" AND ") : "";
+    const limit = Math.min(parseInt(q.limit, 10) || 100, 500);
+    const offset = parseInt(q.offset, 10) || 0;
+    try {
+      const total = db.prepare(`SELECT COUNT(*) n FROM calls ${w}`).get(...params).n;
+      // List view: omit big content blobs; send short previews instead.
+      const rows = db.prepare(`SELECT id,ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,
+        prompt_tokens,completion_tokens,total_tokens,error,
+        substr(req_content,1,160) AS req_preview, substr(resp_content,1,200) AS resp_preview
+        FROM calls ${w} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+      return sendJson(res, 200, { rows, total, limit, offset, dbReady: true });
+    } catch (e) { return sendJson(res, 500, { error: e.message }); }
+  }
+  if (sub === "call" && req.method === "GET") {
+    if (!db) return sendJson(res, 404, { error: "no db" });
+    const q = url.parse(req.url, true).query;
+    const id = parseInt(q.id, 10);
+    if (!id) return sendJson(res, 400, { error: "id required" });
+    try {
+      const row = db.prepare("SELECT * FROM calls WHERE id = ?").get(id);
+      return row ? sendJson(res, 200, row) : sendJson(res, 404, { error: "not found" });
+    } catch (e) { return sendJson(res, 500, { error: e.message }); }
+  }
+  if (sub === "stats" && req.method === "GET") {
+    if (!db) return sendJson(res, 200, { dbReady: false });
+    try {
+      const day = Date.now() - 86400000;
+      const total = db.prepare("SELECT COUNT(*) n FROM calls").get().n;
+      const last24 = db.prepare("SELECT COUNT(*) n FROM calls WHERE ts >= ?").get(day).n;
+      const errors24 = db.prepare("SELECT COUNT(*) n FROM calls WHERE ts >= ? AND status >= 400").get(day).n;
+      const tokens24 = db.prepare("SELECT COALESCE(SUM(total_tokens),0) t FROM calls WHERE ts >= ?").get(day).t;
+      const byLane = db.prepare("SELECT lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok FROM calls GROUP BY lane ORDER BY n DESC").all();
+      const byKey = db.prepare("SELECT key_label, COUNT(*) n FROM calls GROUP BY key_label ORDER BY n DESC").all();
+      const byModel = db.prepare("SELECT req_model, lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok, ROUND(AVG(duration_ms)) avg_ms FROM calls GROUP BY req_model ORDER BY n DESC LIMIT 30").all();
+      const oldest = db.prepare("SELECT MIN(ts) t FROM calls").get().t;
+      return sendJson(res, 200, { dbReady: true, total, last24, errors24, tokens24, byLane, byKey, byModel, oldest, retain: CFG.logging.retain });
+    } catch (e) { return sendJson(res, 500, { error: e.message }); }
+  }
+  if (sub === "calls/clear" && req.method === "POST") {
+    if (!db) return sendJson(res, 200, { ok: true, dbReady: false });
+    try { db.exec("DELETE FROM calls;"); console.log(`[admin] call log cleared ip=${ip}`); return sendJson(res, 200, { ok: true }); }
+    catch (e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
   return sendJson(res, 404, { error: "unknown admin endpoint" });
 }
 
@@ -733,6 +969,9 @@ const server = http.createServer(async (req, res) => {
   // Flow policy blocked this model (cloud off / not allowlisted / unknown with no default route).
   if (route.blocked) {
     console.error(`[err] 400 blocked ip=${ip} model=${model || "-"} (${route.why})`);
+    recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
+      reqModel: model || null, lane: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
+      error: `not routable: ${route.why}`, reqContent: extractRequestContent(bodyBuf) });
     res.writeHead(400, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: `model '${model || ""}' is not routable: ${route.why}. Set a model override, cloud allowlist entry, or default route in /admin.`, type: "invalid_request_error", code: "model_not_routable" } }));
   }
@@ -743,6 +982,9 @@ const server = http.createServer(async (req, res) => {
     const xkey = String(req.headers["x-api-key"] || "");
     if (auth !== `Bearer ${CFG.oblitToken}` && xkey !== CFG.oblitToken) {
       console.error(`[err] 401 gated model unauthorized ip=${ip} model=${route.target}`);
+      recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
+        reqModel: model || null, lane: "local", sentModel: route.target, keyLabel: "oblitToken", status: 401, ms: 0,
+        error: "gate: missing/invalid token", reqContent: extractRequestContent(bodyBuf) });
       res.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
       return res.end(JSON.stringify({ error: { message: `model '${route.target}' requires Authorization: Bearer <token>`, type: "invalid_request_error", code: "unauthorized" } }));
     }
