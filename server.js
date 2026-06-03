@@ -66,6 +66,21 @@ function envDefaults() {
       "obliteratus": OBLIT,
       [OBLIT.toLowerCase()]: OBLIT,
     },
+    // ── flow control (admin-editable) ──
+    // forceModel: when enabled, EVERY request is rewritten to this lane+model regardless of what
+    // the caller asked for. The big red switch.
+    forceModel: { enabled: false, lane: "claude", model: "" },
+    // modelRoutes: explicit per-incoming-model overrides to ANY lane (highest priority after
+    // forceModel). key = incoming model name (lowercased). value = { lane, model }.
+    modelRoutes: {},
+    // cloudPolicy governs models that fall through to the cloud (crazyrouter) lane:
+    //   "open"      → forward anything (legacy behaviour)
+    //   "allowlist" → only ids in cloudAllowlist reach crazyrouter; everything else → defaultRoute
+    //   "off"       → nothing reaches crazyrouter; everything → defaultRoute
+    cloudPolicy: "open",
+    cloudAllowlist: [],
+    // defaultRoute: where unknown / empty / cloud-blocked models go. lane "none" = reject with 400.
+    defaultRoute: { lane: "none", model: "" },
     // JSON-output enforcement for chat completions that set response_format json_object/json_schema.
     jsonEnforce: (process.env.JSON_ENFORCE || "1") !== "0",
     jsonMaxRetries: parseInt(process.env.JSON_MAX_RETRIES || "2", 10),
@@ -101,6 +116,34 @@ function mergeConfig(base, saved) {
   if (typeof saved.jsonEnforce === "boolean") c.jsonEnforce = saved.jsonEnforce;
   if (Number.isInteger(saved.jsonMaxRetries) && saved.jsonMaxRetries >= 0 && saved.jsonMaxRetries <= 5)
     c.jsonMaxRetries = saved.jsonMaxRetries;
+  // ── flow control ──
+  const LANES = new Set(["local", "cloud", "claude"]);
+  if (saved.forceModel && typeof saved.forceModel === "object") {
+    const f = saved.forceModel;
+    c.forceModel = {
+      enabled: !!f.enabled,
+      lane: LANES.has(f.lane) ? f.lane : "claude",
+      model: typeof f.model === "string" ? f.model.trim() : "",
+    };
+  }
+  if (saved.modelRoutes && typeof saved.modelRoutes === "object" && !Array.isArray(saved.modelRoutes)) {
+    const mr = {};
+    for (const [k, v] of Object.entries(saved.modelRoutes)) {
+      if (typeof k === "string" && k.trim() && v && typeof v === "object" && LANES.has(v.lane))
+        mr[k.trim().toLowerCase()] = { lane: v.lane, model: typeof v.model === "string" ? v.model.trim() : "" };
+    }
+    c.modelRoutes = mr;
+  }
+  if (["open", "allowlist", "off"].includes(saved.cloudPolicy)) c.cloudPolicy = saved.cloudPolicy;
+  if (Array.isArray(saved.cloudAllowlist))
+    c.cloudAllowlist = saved.cloudAllowlist.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
+  if (saved.defaultRoute && typeof saved.defaultRoute === "object") {
+    const d = saved.defaultRoute;
+    c.defaultRoute = {
+      lane: ["none", "local", "cloud", "claude"].includes(d.lane) ? d.lane : "none",
+      model: typeof d.model === "string" ? d.model.trim() : "",
+    };
+  }
   if (!c.claudePrefix) c.claudePrefix = "claude";
   if (!c.adminPassword) c.adminPassword = "ddash";
   return c;
@@ -150,7 +193,6 @@ function shipError(message, attrs) {
 
 // ── lane resolution (reads live CFG) ──
 const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCase()] || null);
-const isLocalModel = (m) => localTarget(m) !== null;
 const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.claudePrefix || "claude").toLowerCase());
 const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.includes(target);
 
@@ -381,14 +423,40 @@ async function mergedModels(res) {
   res.end(JSON.stringify({ object: "list", data: [...local, ...claude, ...cloud] }));
 }
 
-// Resolve a model name into a concrete upstream route (base + auth + rewrite + lane).
+// Build a concrete route for an explicit (lane, model) — used by forceModel / modelRoutes /
+// defaultRoute. `model` is the id actually sent upstream (rewriteModel).
+function laneRoute(lane, model, reason) {
+  if (lane === "claude") return { lane: "claude", base: CFG.bases.claude, authToken: CFG.claudeToken, rewriteModel: model || undefined, reason };
+  if (lane === "local") return { lane: "local", base: CFG.bases.local, rewriteModel: model, target: model, reason };
+  return { lane: "cloud", base: CFG.bases.crazy, injectKey: true, rewriteModel: model || undefined, reason }; // cloud
+}
+
+// Where unknown / empty / cloud-blocked models go. lane "none" → blocked (caller gets 400).
+function defaultRouteResolved(why) {
+  const d = CFG.defaultRoute || { lane: "none" };
+  if (!d.lane || d.lane === "none" || !d.model) return { lane: "blocked", blocked: true, why, reason: why + "; no default route" };
+  return { ...laneRoute(d.lane, d.model, `default route (${why})`), via: "default" };
+}
+
+// Resolve a model name into a concrete upstream route. Priority:
+//   1. forceModel (global override)  2. modelRoutes (per-model, any lane)  3. local alias map
+//   4. claude prefix  5. empty model → default route  6. cloud policy (open/allowlist/off)
 function resolveRoute(model) {
-  if (isClaudeModel(model)) return { lane: "claude", base: CFG.bases.claude, authToken: CFG.claudeToken };
-  if (isLocalModel(model)) {
-    const target = localTarget(model);
-    return { lane: "local", base: CFG.bases.local, rewriteModel: target, target };
-  }
-  return { lane: "cloud", base: CFG.bases.crazy, injectKey: true };
+  const m = model == null ? "" : String(model);
+  const key = m.toLowerCase();
+  if (CFG.forceModel && CFG.forceModel.enabled && CFG.forceModel.model)
+    return laneRoute(CFG.forceModel.lane, CFG.forceModel.model, "forced (global)");
+  if (CFG.modelRoutes && CFG.modelRoutes[key])
+    return laneRoute(CFG.modelRoutes[key].lane, CFG.modelRoutes[key].model || m, `override: ${key}`);
+  const lt = localTarget(m);
+  if (lt) return { lane: "local", base: CFG.bases.local, rewriteModel: lt, target: lt, reason: "local alias" };
+  if (isClaudeModel(m)) return { lane: "claude", base: CFG.bases.claude, authToken: CFG.claudeToken, reason: "claude prefix" };
+  if (!m) return defaultRouteResolved("no model specified");
+  const pol = CFG.cloudPolicy || "open";
+  if (pol === "open") return { lane: "cloud", base: CFG.bases.crazy, injectKey: true, reason: "cloud (open)" };
+  if (pol === "allowlist" && (CFG.cloudAllowlist || []).some((x) => x.toLowerCase() === key))
+    return { lane: "cloud", base: CFG.bases.crazy, injectKey: true, reason: "cloud (allowlisted)" };
+  return defaultRouteResolved(pol === "off" ? "cloud lane disabled" : "not in cloud allowlist");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -446,6 +514,11 @@ function adminState() {
     localMap: CFG.localMap,
     gatedModels: CFG.gatedModels,
     claudePrefix: CFG.claudePrefix,
+    forceModel: CFG.forceModel,
+    modelRoutes: CFG.modelRoutes,
+    cloudPolicy: CFG.cloudPolicy,
+    cloudAllowlist: CFG.cloudAllowlist,
+    defaultRoute: CFG.defaultRoute,
     jsonEnforce: CFG.jsonEnforce,
     jsonMaxRetries: CFG.jsonMaxRetries,
     // secrets — never returned in clear
@@ -553,6 +626,11 @@ async function handleAdminApi(req, res, path) {
     if (patch.localMap) next.localMap = patch.localMap;
     if (patch.gatedModels) next.gatedModels = patch.gatedModels;
     if (typeof patch.claudePrefix === "string") next.claudePrefix = patch.claudePrefix;
+    if (patch.forceModel) next.forceModel = patch.forceModel;
+    if (patch.modelRoutes) next.modelRoutes = patch.modelRoutes;
+    if (patch.cloudPolicy) next.cloudPolicy = patch.cloudPolicy;
+    if (patch.cloudAllowlist) next.cloudAllowlist = patch.cloudAllowlist;
+    if (patch.defaultRoute) next.defaultRoute = patch.defaultRoute;
     if (typeof patch.jsonEnforce === "boolean") next.jsonEnforce = patch.jsonEnforce;
     if (patch.jsonMaxRetries !== undefined) next.jsonMaxRetries = patch.jsonMaxRetries;
     for (const k of ["crazyKey", "claudeToken", "oblitToken", "adminPassword"])
@@ -599,6 +677,20 @@ async function handleAdminApi(req, res, path) {
     return sendJson(res, 200, await adminTest(p.model, p.prompt, p.max_tokens));
   }
 
+  // Dry-run: show exactly where a model name routes, without calling upstream.
+  if (sub === "resolve" && req.method === "POST") {
+    const body = await readBody(req); let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "invalid JSON body" }); }
+    const r = resolveRoute(p.model);
+    const sent = r.rewriteModel || (r.lane === "local" ? r.target : p.model) || p.model || "";
+    const gated = r.lane === "local" && isGated(r.target) && !!CFG.oblitToken;
+    return sendJson(res, 200, {
+      input: p.model || "", lane: r.lane, sentModel: sent, reason: r.reason || "",
+      blocked: !!r.blocked, why: r.why, gated,
+      base: r.base || (r.lane === "local" ? CFG.bases.local : r.lane === "claude" ? CFG.bases.claude : r.lane === "cloud" ? CFG.bases.crazy : ""),
+    });
+  }
+
   return sendJson(res, 404, { error: "unknown admin endpoint" });
 }
 
@@ -636,7 +728,14 @@ const server = http.createServer(async (req, res) => {
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const route = resolveRoute(model);
   const lane = route.lane;
-  console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
+  console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
+
+  // Flow policy blocked this model (cloud off / not allowlisted / unknown with no default route).
+  if (route.blocked) {
+    console.error(`[err] 400 blocked ip=${ip} model=${model || "-"} (${route.why})`);
+    res.writeHead(400, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: { message: `model '${model || ""}' is not routable: ${route.why}. Set a model override, cloud allowlist entry, or default route in /admin.`, type: "invalid_request_error", code: "model_not_routable" } }));
+  }
 
   // Bearer gate for the uncensored local model(s).
   if (lane === "local" && isGated(route.target) && CFG.oblitToken) {

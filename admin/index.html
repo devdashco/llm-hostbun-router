@@ -84,7 +84,54 @@ small.hint{color:var(--mut);font-size:12px}
 
   <!-- ROUTING -->
   <div class="tab hide" data-tab="Routing">
-    <h2>Routing & models</h2>
+    <h2>Routing & flow control</h2>
+
+    <div class="card" style="border-color:var(--amb)">
+      <h3 style="color:var(--amb)">⏻ Force model <small class="hint">— override EVERY request, ignore what the caller asks for</small></h3>
+      <div class="row">
+        <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="forceEnabled" style="width:auto;margin-right:8px"/> force enabled</label>
+        <select id="forceLane" style="flex:0 0 120px"><option>claude</option><option>local</option><option>cloud</option></select>
+        <input id="forceModel" list="modellist" placeholder="model id sent to that lane" style="flex:2"/>
+      </div>
+      <small class="hint">When on, all traffic (incl. fb-bot / promopilot) is rewritten to this lane+model. Use to pin everything to e.g. <code>claude-sonnet-4-6</code> or <code>gemini-2.5-flash-lite</code>.</small>
+    </div>
+
+    <div class="card">
+      <h3>🔎 Resolve / trace <small class="hint">— see where a model goes, without calling it</small></h3>
+      <div class="row">
+        <input id="resolveIn" list="modellist" placeholder="model name e.g. deepseek-v3" style="flex:2"/>
+        <button class="ghost" style="flex:0 0 auto" onclick="doResolve()">Trace</button>
+      </div>
+      <pre id="resolveOut" class="hide"></pre>
+    </div>
+
+    <div class="card">
+      <h3>↪ Model overrides <small class="hint">— force a specific incoming model to ANY lane + model</small></h3>
+      <table id="routetbl"><tr><th>Incoming model</th><th>→ lane</th><th>→ sent model</th><th></th></tr></table>
+      <div class="row" style="margin-top:8px">
+        <input id="newrin" placeholder="incoming e.g. deepseek-v3"/>
+        <select id="newrlane" style="flex:0 0 110px"><option>claude</option><option>local</option><option>cloud</option></select>
+        <input id="newrmodel" placeholder="sent model id"/>
+        <button class="ghost sm" style="flex:0 0 auto" onclick="addRoute()">+ Add</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>☁ Cloud (crazyrouter) policy <small class="hint">— stop unknown models silently hitting crazyrouter</small></h3>
+      <div class="row" style="gap:18px">
+        <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="open" style="width:auto;margin-right:6px"/> open (forward anything)</label>
+        <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="allowlist" style="width:auto;margin-right:6px"/> allowlist only</label>
+        <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="off" style="width:auto;margin-right:6px"/> off (block cloud)</label>
+      </div>
+      <label>cloud allowlist <small class="hint">(comma-separated model ids; used when policy = allowlist)</small></label>
+      <input id="cloudAllowlist" placeholder="gemini-2.5-flash-lite, gpt-5.5, …"/>
+      <h3 style="margin-top:14px">Default route <small class="hint">— for unknown / empty / cloud-blocked models. lane <code>none</code> = reject with 400.</small></h3>
+      <div class="row">
+        <select id="drLane" style="flex:0 0 120px"><option>none</option><option>claude</option><option>local</option><option>cloud</option></select>
+        <input id="drModel" list="modellist" placeholder="default model id (when lane ≠ none)"/>
+      </div>
+    </div>
+
     <div class="card">
       <h3>Local model aliases <small class="hint">— what a caller types as <code>model</code> → exact id sent to LM Studio (local lane)</small></h3>
       <table id="maptbl"><tr><th>Alias (model name)</th><th>→ Upstream id</th><th>gated?</th><th></th></tr></table>
@@ -225,15 +272,20 @@ function selTab(name){
 
 // ---- render state ----
 function renderState(s){
-  S=s;
+  S=s; if(!S.modelRoutes)S.modelRoutes={};
   // overview
-  $('ovcfgpre').textContent=JSON.stringify({bases:s.bases,localMap:s.localMap,gatedModels:s.gatedModels,claudePrefix:s.claudePrefix,jsonEnforce:s.jsonEnforce,jsonMaxRetries:s.jsonMaxRetries,configFile:s.configFile,configPersisted:s.configPersisted},null,2);
+  $('ovcfgpre').textContent=JSON.stringify({forceModel:s.forceModel,modelRoutes:s.modelRoutes,cloudPolicy:s.cloudPolicy,cloudAllowlist:s.cloudAllowlist,defaultRoute:s.defaultRoute,localMap:s.localMap,gatedModels:s.gatedModels,bases:s.bases,jsonEnforce:s.jsonEnforce,configPersisted:s.configPersisted},null,2);
   // routing forms
   $('b-local').value=s.bases.local; $('b-crazy').value=s.bases.crazy; $('b-claude').value=s.bases.claude;
   $('claudePrefix').value=s.claudePrefix; $('jsonEnforce').checked=!!s.jsonEnforce; $('jsonMaxRetries').value=s.jsonMaxRetries;
   $('gatedModels').value=(s.gatedModels||[]).join(', ');
   $('kid-e4b').textContent=s.knownLocalIds.e4b; $('kid-gemma').textContent=s.knownLocalIds.gemma; $('kid-obl').textContent=s.knownLocalIds.obliterated;
-  renderMap();
+  // flow control
+  const fm=s.forceModel||{}; $('forceEnabled').checked=!!fm.enabled; $('forceLane').value=fm.lane||'claude'; $('forceModel').value=fm.model||'';
+  document.querySelectorAll('input[name=cp]').forEach(r=>r.checked=(r.value===(s.cloudPolicy||'open')));
+  $('cloudAllowlist').value=(s.cloudAllowlist||[]).join(', ');
+  const dr=s.defaultRoute||{}; $('drLane').value=dr.lane||'none'; $('drModel').value=dr.model||'';
+  renderMap(); renderRoutes();
   // secrets
   $('m-claude').textContent=s.claudeTokenMasked||'(none)';
   $('m-oblit').textContent=s.oblitTokenSet?s.oblitTokenMasked:'(open — no gate)';
@@ -259,15 +311,46 @@ function addAlias(){
 }
 function delAlias(a){ delete S.localMap[a]; renderMap(); toast('removed (unsaved) — click Save routing'); }
 
+const laneCls={local:'local',cloud:'cloud',claude:'claude'};
+function renderRoutes(){
+  const t=$('routetbl'); t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
+  Object.entries(S.modelRoutes||{}).forEach(([k,v])=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td class="mono">${esc(k)}</td><td><span class="pill ${laneCls[v.lane]||''}">${esc(v.lane)}</span></td><td class="mono">${esc(v.model||'(unchanged)')}</td><td style="width:34px"><span class="x" title="remove" onclick="delRoute('${esc(k)}')">✕</span></td>`;
+    t.appendChild(tr);
+  });
+}
+function addRoute(){
+  const k=$('newrin').value.trim().toLowerCase(), lane=$('newrlane').value, model=$('newrmodel').value.trim();
+  if(!k){toast('incoming model required',true);return;}
+  S.modelRoutes[k]={lane,model}; $('newrin').value='';$('newrmodel').value=''; renderRoutes();
+  toast('added (unsaved) — click Save routing');
+}
+function delRoute(k){ delete S.modelRoutes[k]; renderRoutes(); toast('removed (unsaved) — click Save routing'); }
+
+async function doResolve(){
+  const model=$('resolveIn').value.trim(); const out=$('resolveOut'); out.classList.remove('hide'); out.textContent='…';
+  try{ const r=await api('resolve',{method:'POST',body:JSON.stringify({model})});
+    out.textContent=(r.blocked?`❌ BLOCKED — ${r.why}\n`:`✅ ${r.input||'(empty)'}  →  lane=${r.lane}  model=${r.sentModel}${r.gated?'  🔒gated':''}\n`)+`reason: ${r.reason}\nupstream: ${r.base}`;
+  }catch(e){ out.textContent='error: '+e.message; }
+}
+
 async function saveRouting(){
+  const cp=(document.querySelector('input[name=cp]:checked')||{}).value||'open';
   const patch={
     bases:{local:$('b-local').value.trim(),crazy:$('b-crazy').value.trim(),claude:$('b-claude').value.trim()},
     localMap:S.localMap,
+    modelRoutes:S.modelRoutes,
+    forceModel:{enabled:$('forceEnabled').checked,lane:$('forceLane').value,model:$('forceModel').value.trim()},
+    cloudPolicy:cp,
+    cloudAllowlist:$('cloudAllowlist').value.split(',').map(x=>x.trim()).filter(Boolean),
+    defaultRoute:{lane:$('drLane').value,model:$('drModel').value.trim()},
     claudePrefix:$('claudePrefix').value.trim()||'claude',
     jsonEnforce:$('jsonEnforce').checked,
     jsonMaxRetries:parseInt($('jsonMaxRetries').value||'2',10),
     gatedModels:$('gatedModels').value.split(',').map(x=>x.trim()).filter(Boolean),
   };
+  if(patch.forceModel.enabled && !patch.forceModel.model){toast('force model is on but no model id set',true);return;}
   try{ const r=await api('config',{method:'POST',body:JSON.stringify(patch)}); renderState(r.state); toast('saved'+(r.persisted?' & persisted':' (NOT persisted!)'),!r.persisted); }
   catch(e){ toast(e.message,true); }
 }
@@ -304,10 +387,13 @@ async function loadHealth(){
   });
   // overview cards
   const up=[h.local,h.claude,h.cloud].filter(x=>x.up).length;
+  const fm=S.forceModel||{};
   $('ovgrid').innerHTML=
     kv('Lanes up',up+' / 3')+
+    kv('Force model',fm.enabled?`<span class="warnp">${esc(fm.lane)}/${esc(fm.model)}</span>`:'off')+
+    kv('Cloud policy',S.cloudPolicy||'open')+
+    kv('Overrides',Object.keys(S.modelRoutes||{}).length)+
     kv('JSON enforce',S.jsonEnforce?'ON':'OFF')+
-    kv('Local aliases',Object.keys(S.localMap).length)+
     kv('Config',S.configPersisted?'file-backed':'env defaults');
 }
 function kv(n,v){return `<div class="kv"><div class="n">${n}</div><div class="v">${v}</div></div>`;}
