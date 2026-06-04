@@ -27,7 +27,7 @@ th{background:#1f2630}
 .row>*{flex:1}
 .pill{display:inline-block;font:12px ui-monospace,monospace;padding:2px 9px;border-radius:20px;border:1px solid var(--bd)}
 .up{color:var(--grn);border-color:var(--grn)} .down{color:var(--red);border-color:var(--red)} .warnp{color:var(--amb);border-color:var(--amb)}
-.cloud{color:var(--acc);border-color:var(--acc)} .local{color:var(--grn);border-color:var(--grn)} .claude{color:var(--clr);border-color:var(--clr)}
+.cloud,.crazyrouter{color:var(--acc);border-color:var(--acc)} .local{color:var(--grn);border-color:var(--grn)} .claude,.wrappy{color:var(--clr);border-color:var(--clr)}
 .mut{color:var(--mut)} .mono{font:13px ui-monospace,monospace}
 .tabs{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0}
 .tabs button{background:#21262d;color:var(--mut);border:1px solid var(--bd)}
@@ -89,7 +89,7 @@ small.hint{color:var(--mut);font-size:12px}
       <div class="row">
         <input id="callq" placeholder="search model / ip / ua / prompt / reply…" style="flex:3" onkeydown="if(event.key==='Enter')loadCalls()"/>
         <input id="callmodel" placeholder="exact model" style="flex:1"/>
-        <select id="calllane" style="flex:0 0 110px"><option value="">any lane</option><option>local</option><option>cloud</option><option>claude</option><option>blocked</option></select>
+        <select id="calllane" style="flex:0 0 130px"><option value="">any lane</option><option>local</option><option>crazyrouter</option><option>wrappy</option><option>blocked</option></select>
         <select id="callstatus" style="flex:0 0 110px"><option value="">any status</option><option value="ok">ok (&lt;400)</option><option value="error">error (≥400)</option></select>
         <button class="ghost sm" style="flex:0 0 auto" onclick="loadCalls()">↻ Load</button>
       </div>
@@ -134,10 +134,10 @@ small.hint{color:var(--mut);font-size:12px}
       <h3 style="color:var(--amb)">⏻ Force model <small class="hint">— override EVERY request, ignore what the caller asks for</small></h3>
       <div class="row">
         <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="forceEnabled" style="width:auto;margin-right:8px"/> force enabled</label>
-        <select id="forceLane" style="flex:0 0 120px"><option>claude</option><option>local</option><option>cloud</option></select>
+        <select id="forceLane" style="flex:0 0 140px"><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
         <input id="forceModel" list="modellist" placeholder="model id sent to that lane" style="flex:2"/>
       </div>
-      <small class="hint">When on, all traffic (incl. fb-bot / promopilot) is rewritten to this lane+model. Use to pin everything to e.g. <code>claude-sonnet-4-6</code> or <code>gemini-2.5-flash-lite</code>.</small>
+      <small class="hint">When on, all traffic (incl. fb-bot / promopilot) is rewritten to this lane+model. Use to pin everything to e.g. <code>claude-sonnet-4-6</code> (wrappy) or <code>gemini-2.5-flash-lite</code> (crazyrouter).</small>
     </div>
 
     <div class="card">
@@ -154,24 +154,24 @@ small.hint{color:var(--mut);font-size:12px}
       <table id="routetbl"><tr><th>Incoming model</th><th>→ lane</th><th>→ sent model</th><th></th></tr></table>
       <div class="row" style="margin-top:8px">
         <input id="newrin" placeholder="incoming e.g. deepseek-v3"/>
-        <select id="newrlane" style="flex:0 0 110px"><option>claude</option><option>local</option><option>cloud</option></select>
+        <select id="newrlane" style="flex:0 0 130px"><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
         <input id="newrmodel" placeholder="sent model id"/>
         <button class="ghost sm" style="flex:0 0 auto" onclick="addRoute()">+ Add</button>
       </div>
     </div>
 
     <div class="card">
-      <h3>☁ Cloud (crazyrouter) policy <small class="hint">— stop unknown models silently hitting crazyrouter</small></h3>
+      <h3>☁ Crazyrouter policy <small class="hint">— stop unknown models silently hitting the crazyrouter cloud lane</small></h3>
       <div class="row" style="gap:18px">
         <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="open" style="width:auto;margin-right:6px"/> open (forward anything)</label>
         <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="allowlist" style="width:auto;margin-right:6px"/> allowlist only</label>
-        <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="off" style="width:auto;margin-right:6px"/> off (block cloud)</label>
+        <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="off" style="width:auto;margin-right:6px"/> off (block crazyrouter)</label>
       </div>
-      <label>cloud allowlist <small class="hint">(comma-separated model ids; used when policy = allowlist)</small></label>
+      <label>crazyrouter allowlist <small class="hint">(comma-separated model ids; used when policy = allowlist)</small></label>
       <input id="cloudAllowlist" placeholder="gemini-2.5-flash-lite, gpt-5.5, …"/>
-      <h3 style="margin-top:14px">Default route <small class="hint">— for unknown / empty / cloud-blocked models. lane <code>none</code> = reject with 400.</small></h3>
+      <h3 style="margin-top:14px">Default route <small class="hint">— for unknown / empty / crazyrouter-blocked models. lane <code>none</code> = reject with 400.</small></h3>
       <div class="row">
-        <select id="drLane" style="flex:0 0 120px"><option>none</option><option>claude</option><option>local</option><option>cloud</option></select>
+        <select id="drLane" style="flex:0 0 140px"><option>none</option><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
         <input id="drModel" list="modellist" placeholder="default model id (when lane ≠ none)"/>
       </div>
     </div>
@@ -188,11 +188,11 @@ small.hint{color:var(--mut);font-size:12px}
     </div>
 
     <div class="card">
-      <h3>Lane base URLs</h3>
-      <label>local lane (LM Studio)</label><input id="b-local"/>
-      <label>cloud lane (crazyrouter)</label><input id="b-crazy"/>
-      <label>claude lane (claudebox)</label><input id="b-claude"/>
-      <label>claude prefix <small class="hint">— models starting with this route to the claude lane</small></label><input id="claudePrefix"/>
+      <h3>Lane base URLs <small class="hint">— the three providers</small></h3>
+      <label>local lane (LM Studio @ llm.bofrid.dev)</label><input id="b-local"/>
+      <label>crazyrouter lane (crazyrouter.com cloud)</label><input id="b-crazy"/>
+      <label>wrappy lane (claudebox / claude-code @ claude.hostbun.cc)</label><input id="b-claude"/>
+      <label>wrappy prefix <small class="hint">— models starting with this route to the wrappy lane (default <code>claude</code>)</small></label><input id="claudePrefix"/>
     </div>
 
     <div class="card">
@@ -254,8 +254,8 @@ small.hint{color:var(--mut);font-size:12px}
     <h2>Secrets & gate</h2>
     <div class="warn">These are live, file-backed overrides (<code id="cfgfile"></code>). Leaving a field blank keeps the current value.</div>
     <div class="card">
-      <h3>Claude lane token <span class="mut">(current: <span id="m-claude"></span>)</span></h3>
-      <div class="flex"><input id="s-claudeToken" type="password" placeholder="new claude token"/><button class="sm" style="flex:0 0 auto" onclick="setSecret('claudeToken','s-claudeToken')">Update</button></div>
+      <h3>Wrappy lane token <small class="hint">(claudebox @ claude.hostbun.cc)</small> <span class="mut">(current: <span id="m-claude"></span>)</span></h3>
+      <div class="flex"><input id="s-claudeToken" type="password" placeholder="new wrappy token"/><button class="sm" style="flex:0 0 auto" onclick="setSecret('wrappyToken','s-claudeToken')">Update</button></div>
     </div>
     <div class="card">
       <h3>Obliterated / uncensored gate <span class="mut">(token: <span id="m-oblit"></span>)</span></h3>
@@ -322,18 +322,18 @@ function renderState(s){
   // overview
   $('ovcfgpre').textContent=JSON.stringify({forceModel:s.forceModel,modelRoutes:s.modelRoutes,cloudPolicy:s.cloudPolicy,cloudAllowlist:s.cloudAllowlist,defaultRoute:s.defaultRoute,localMap:s.localMap,gatedModels:s.gatedModels,bases:s.bases,jsonEnforce:s.jsonEnforce,configPersisted:s.configPersisted},null,2);
   // routing forms
-  $('b-local').value=s.bases.local; $('b-crazy').value=s.bases.crazy; $('b-claude').value=s.bases.claude;
-  $('claudePrefix').value=s.claudePrefix; $('jsonEnforce').checked=!!s.jsonEnforce; $('jsonMaxRetries').value=s.jsonMaxRetries;
+  $('b-local').value=s.bases.local; $('b-crazy').value=s.bases.crazyrouter; $('b-claude').value=s.bases.wrappy;
+  $('claudePrefix').value=s.wrappyPrefix; $('jsonEnforce').checked=!!s.jsonEnforce; $('jsonMaxRetries').value=s.jsonMaxRetries;
   $('gatedModels').value=(s.gatedModels||[]).join(', ');
   $('kid-e4b').textContent=s.knownLocalIds.e4b; $('kid-gemma').textContent=s.knownLocalIds.gemma; $('kid-obl').textContent=s.knownLocalIds.obliterated;
   // flow control
-  const fm=s.forceModel||{}; $('forceEnabled').checked=!!fm.enabled; $('forceLane').value=fm.lane||'claude'; $('forceModel').value=fm.model||'';
+  const fm=s.forceModel||{}; $('forceEnabled').checked=!!fm.enabled; $('forceLane').value=fm.lane||'wrappy'; $('forceModel').value=fm.model||'';
   document.querySelectorAll('input[name=cp]').forEach(r=>r.checked=(r.value===(s.cloudPolicy||'open')));
   $('cloudAllowlist').value=(s.cloudAllowlist||[]).join(', ');
   const dr=s.defaultRoute||{}; $('drLane').value=dr.lane||'none'; $('drModel').value=dr.model||'';
   renderMap(); renderRoutes();
   // secrets
-  $('m-claude').textContent=s.claudeTokenMasked||'(none)';
+  $('m-claude').textContent=s.wrappyTokenMasked||'(none)';
   $('m-oblit').textContent=s.oblitTokenSet?s.oblitTokenMasked:'(open — no gate)';
   $('m-admin').textContent=s.adminPasswordMasked;
   $('cfgfile').textContent=s.configFile;
@@ -360,7 +360,7 @@ function addAlias(){
 }
 function delAlias(a){ delete S.localMap[a]; renderMap(); toast('removed (unsaved) — click Save routing'); }
 
-const laneCls={local:'local',cloud:'cloud',claude:'claude'};
+const laneCls={local:'local',crazyrouter:'crazyrouter',wrappy:'wrappy',cloud:'crazyrouter',claude:'wrappy',blocked:'down'};
 function renderRoutes(){
   const t=$('routetbl'); t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
   Object.entries(S.modelRoutes||{}).forEach(([k,v])=>{
@@ -387,14 +387,14 @@ async function doResolve(){
 async function saveRouting(){
   const cp=(document.querySelector('input[name=cp]:checked')||{}).value||'open';
   const patch={
-    bases:{local:$('b-local').value.trim(),crazy:$('b-crazy').value.trim(),claude:$('b-claude').value.trim()},
+    bases:{local:$('b-local').value.trim(),crazyrouter:$('b-crazy').value.trim(),wrappy:$('b-claude').value.trim()},
     localMap:S.localMap,
     modelRoutes:S.modelRoutes,
     forceModel:{enabled:$('forceEnabled').checked,lane:$('forceLane').value,model:$('forceModel').value.trim()},
     cloudPolicy:cp,
     cloudAllowlist:$('cloudAllowlist').value.split(',').map(x=>x.trim()).filter(Boolean),
     defaultRoute:{lane:$('drLane').value,model:$('drModel').value.trim()},
-    claudePrefix:$('claudePrefix').value.trim()||'claude',
+    wrappyPrefix:$('claudePrefix').value.trim()||'claude',
     jsonEnforce:$('jsonEnforce').checked,
     jsonMaxRetries:parseInt($('jsonMaxRetries').value||'2',10),
     gatedModels:$('gatedModels').value.split(',').map(x=>x.trim()).filter(Boolean),
@@ -426,7 +426,7 @@ async function changePw(){
 // ---- health / overview ----
 async function loadHealth(){
   let h; try{h=await api('health');}catch(e){return;}
-  const rows=[['local',S.bases.local,h.local,''],['claude',S.bases.claude,h.claude,''],['cloud',S.bases.crazy,h.cloud,'']];
+  const rows=[['local',S.bases.local,h.local,''],['wrappy',S.bases.wrappy,h.wrappy,''],['crazyrouter',S.bases.crazyrouter,h.crazyrouter,'']];
   const t=$('healthtbl'); t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
   rows.forEach(([lane,base,r])=>{
     const tr=document.createElement('tr');
@@ -435,7 +435,7 @@ async function loadHealth(){
     t.appendChild(tr);
   });
   // overview cards
-  const up=[h.local,h.claude,h.cloud].filter(x=>x.up).length;
+  const up=[h.local,h.wrappy,h.crazyrouter].filter(x=>x&&x.up).length;
   const fm=S.forceModel||{};
   $('ovgrid').innerHTML=
     kv('Lanes up',up+' / 3')+
@@ -451,8 +451,8 @@ function kv(n,v){return `<div class="kv"><div class="n">${n}</div><div class="v"
 async function loadModels(){
   try{ MODELS=await api('models'); }catch(e){return;}
   const dl=$('modellist'); dl.innerHTML='';
-  [...MODELS.local,...MODELS.claude,...MODELS.cloud].forEach(m=>{const o=document.createElement('option');o.value=m.id;dl.appendChild(o);});
-  $('modelcounts').textContent=`(local ${MODELS.local.length} · claude ${MODELS.claude.length} · cloud ${MODELS.cloud.length})`;
+  [...MODELS.local,...MODELS.wrappy,...MODELS.crazyrouter].forEach(m=>{const o=document.createElement('option');o.value=m.id;dl.appendChild(o);});
+  $('modelcounts').textContent=`(local ${MODELS.local.length} · wrappy ${MODELS.wrappy.length} · crazyrouter ${MODELS.crazyrouter.length})`;
   renderModels();
 }
 function renderModels(){
@@ -464,7 +464,7 @@ function renderModels(){
     return `<div style="margin:10px 0 4px"><span class="pill ${cls}">${title}</span> <span class="mut">${items.length}</span></div>`+
       items.map(m=>`<div style="padding:3px 0">${esc(m.id)} <span class="mut">· ${esc(m.owned_by||'')}</span></div>`).join('');
   };
-  $('modelwrap').innerHTML=sec('local','local',MODELS.local)+sec('claude','claude',MODELS.claude)+sec('cloud','cloud',MODELS.cloud)||'<span class="mut">no matches</span>';
+  $('modelwrap').innerHTML=sec('local','local',MODELS.local)+sec('wrappy','wrappy',MODELS.wrappy)+sec('crazyrouter','crazyrouter',MODELS.crazyrouter)||'<span class="mut">no matches</span>';
 }
 async function runTest(){
   const model=$('testmodel').value.trim(); if(!model){toast('enter a model',true);return;}
@@ -501,7 +501,7 @@ async function testKey(){
 }
 async function saveKey(){
   const key=$('newkey').value.trim(); if(!key){toast('paste a key',true);return;}
-  try{ const r=await api('config',{method:'POST',body:JSON.stringify({crazyKey:key})}); $('newkey').value=''; renderState(r.state); toast('key saved (live)'); loadCrazy(); }catch(e){toast(e.message,true);}
+  try{ const r=await api('config',{method:'POST',body:JSON.stringify({crazyrouterKey:key})}); $('newkey').value=''; renderState(r.state); toast('key saved (live)'); loadCrazy(); }catch(e){toast(e.message,true);}
 }
 
 // ---- calls ----

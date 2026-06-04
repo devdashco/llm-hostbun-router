@@ -18,7 +18,7 @@ th,td{border:1px solid var(--bd);padding:8px 10px;text-align:left;vertical-align
 th{background:#1f2630;position:sticky;top:0}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px 18px;margin:14px 0}
 .lane{display:inline-block;font:12px ui-monospace,monospace;padding:2px 8px;border-radius:20px;border:1px solid var(--bd)}
-.cloud{color:var(--acc);border-color:var(--acc)}.local{color:var(--grn);border-color:var(--grn)}.meta{color:var(--mut)}.claude{color:#d08770;border-color:#d08770}
+.cloud,.crazyrouter{color:var(--acc);border-color:var(--acc)}.local{color:var(--grn);border-color:var(--grn)}.meta{color:var(--mut)}.claude,.wrappy{color:#d08770;border-color:#d08770}
 .warn{background:#2d2212;border:1px solid #9e6a03;border-radius:8px;padding:12px 16px}
 .method{font:12px ui-monospace,monospace;color:var(--grn)}
 #pwrap{max-height:460px;overflow:auto;border:1px solid var(--bd);border-radius:8px}
@@ -28,20 +28,20 @@ summary{cursor:pointer;font-weight:600}
 </style></head><body><div class="wrap">
 
 <h1>llm.hostbun.cc</h1>
-<p class="sub">One OpenAI-compatible endpoint at <code>https://llm.hostbun.cc/v1</code>. Pick the lane by <b>model name</b>: <code>local</code> → this machine's local GPU (free), <code>claude*</code> → real Claude (via claude.hostbun.cc), anything else → <b>cloud</b> (Crazyrouter, 250+ models). No API key needed; auth is handled server-side. Docs also at <a href="https://docs.llm.hostbun.cc">docs.llm.hostbun.cc</a>.</p>
+<p class="sub">One OpenAI-compatible endpoint at <code>https://llm.hostbun.cc/v1</code>. Three providers, picked by <b>model name</b>: <span class="lane local">local</span> <code>local</code> → on-prem GPU (free), <span class="lane wrappy">wrappy</span> <code>claude*</code> → real Claude via claudebox (claude.hostbun.cc), <span class="lane crazyrouter">crazyrouter</span> anything else → cloud relay (250+ models). No API key needed; auth is handled server-side. Docs also at <a href="https://docs.llm.hostbun.cc">docs.llm.hostbun.cc</a>.</p>
 
 <h2>All endpoints</h2>
 <div class="card"><table>
 <tr><th>Method</th><th>Path</th><th>Lane</th><th>Purpose</th></tr>
-<tr><td class="method">POST</td><td><code>/v1/chat/completions</code></td><td><span class="lane cloud">cloud</span> / <span class="lane local">local</span></td><td>Chat — routed by <code>model</code>: <code>local</code> → local GPU, anything else → cloud (streaming, tools, structured outputs, vision). <code>response_format</code> JSON is <b>enforced</b> — see below.</td></tr>
-<tr><td class="method">POST</td><td><code>/v1/completions</code> · <code>/v1/embeddings</code> · <code>/v1/images/generations</code> · <code>/v1/audio/*</code> · <code>/v1/rerank</code></td><td><span class="lane cloud">cloud</span></td><td>Full Crazyrouter OpenAI-compatible surface (key injected)</td></tr>
-<tr><td class="method">GET</td><td><code>/v1/models</code></td><td><span class="lane cloud">cloud</span> + <span class="lane local">local</span></td><td>Merged list — <code>local</code> (e4b default) + <code>gemma</code> + <code>obliterated</code> + <code>claude*</code> + all cloud models</td></tr>
+<tr><td class="method">POST</td><td><code>/v1/chat/completions</code></td><td><span class="lane crazyrouter">crazyrouter</span> / <span class="lane local">local</span></td><td>Chat — routed by <code>model</code>: <code>local</code> → local GPU, anything else → cloud (streaming, tools, structured outputs, vision). <code>response_format</code> JSON is <b>enforced</b> — see below.</td></tr>
+<tr><td class="method">POST</td><td><code>/v1/completions</code> · <code>/v1/embeddings</code> · <code>/v1/images/generations</code> · <code>/v1/audio/*</code> · <code>/v1/rerank</code></td><td><span class="lane crazyrouter">crazyrouter</span></td><td>Full Crazyrouter OpenAI-compatible surface (key injected)</td></tr>
+<tr><td class="method">GET</td><td><code>/v1/models</code></td><td><span class="lane crazyrouter">crazyrouter</span> + <span class="lane local">local</span></td><td>Merged list — <code>local</code> (e4b default) + <code>gemma</code> + <code>obliterated</code> + <code>claude*</code> + all cloud models</td></tr>
 <tr><td class="method">POST</td><td><code>/local/v1/chat/completions</code></td><td><span class="lane local">local</span></td><td>Legacy explicit local path (still works; or just set <code>model:"local"</code> on <code>/v1</code>)</td></tr>
 <tr><td class="method">GET</td><td><code>/local/v1/models</code></td><td><span class="lane local">local</span></td><td>List local models (legacy)</td></tr>
 <tr><td class="method">GET</td><td><code>/prices.json</code> · <code>/prices</code></td><td><span class="lane meta">meta</span></td><td>Computed actual prices (discount applied); refreshes every 6h</td></tr>
 <tr><td class="method">GET</td><td><code>/dashboard/billing/subscription</code></td><td><span class="lane meta">meta</span></td><td>Credit limit (<code>hard_limit_usd</code>)</td></tr>
 <tr><td class="method">GET</td><td><code>/dashboard/billing/usage</code></td><td><span class="lane meta">meta</span></td><td>Usage to date</td></tr>
-<tr><td class="method">GET</td><td><code>/api/pricing</code></td><td><span class="lane cloud">cloud</span></td><td>Raw Crazyrouter pricing (ratios/discount)</td></tr>
+<tr><td class="method">GET</td><td><code>/api/pricing</code></td><td><span class="lane crazyrouter">crazyrouter</span></td><td>Raw Crazyrouter pricing (ratios/discount)</td></tr>
 <tr><td class="method">GET</td><td><code>/docs</code></td><td><span class="lane meta">meta</span></td><td>This page</td></tr>
 <tr><td class="method">GET</td><td><code>/admin</code></td><td><span class="lane meta">meta</span></td><td><b>Admin UI</b> (password-gated) — <b>force a model</b> globally, <b>override</b> any incoming model to any lane, set a <b>cloud policy</b> (open / allowlist / off) so unknown models stop hitting Crazyrouter, set a <b>default route</b>, <b>trace</b> where a model resolves, edit local aliases, swap the Crazyrouter key, toggle the gate &amp; JSON enforcement, check lane health, and live-test any model. It also keeps a <b>call log</b> (every request: which model was asked, which lane/key served it, status, latency, token usage, and the full prompt + reply) with a <b>usage-stats</b> view — stored in SQLite on the volume. Changes apply instantly (no redeploy) and persist on a volume.</td></tr>
 </table></div>
@@ -53,8 +53,8 @@ summary{cursor:pointer;font-weight:600}
 <tr><td><span class="lane local">local</span></td><td><code>"local"</code> <b>(default)</b></td><td><code>gemma-4-e4b-it-obliterated</code> — Gemma 4 E4B abliterated, ~8 GB, <b>multimodal (vision)</b> + tools (free, on-prem)</td></tr>
 <tr><td><span class="lane local">local</span></td><td><code>"gemma"</code></td><td><code>google/gemma-4-26b-a4b</code> — 26B-A4B MoE (free, on-prem, vision + tools)</td></tr>
 <tr><td><span class="lane local">local</span></td><td><code>"obliterated"</code> 🔒</td><td><code>qwen3.6-27b-obliterated</code> — 27B abliterated/uncensored, text-only (free, on-prem). <b>Requires <code>Authorization: Bearer &lt;token&gt;</code></b> (the only gated model — local/gemma + cloud are open).</td></tr>
-<tr><td><span class="lane claude">claude</span></td><td><code>"claude-*"</code>, e.g. <code>"claude-sonnet-4-6"</code></td><td>Real Claude via <code>claude.hostbun.cc</code> (Claude Code wrapper): <code>claude-opus-4-8/4-7/4-6</code>, <code>claude-sonnet-4-6</code>, <code>claude-opus-4-5</code>. Chat + streaming.</td></tr>
-<tr><td><span class="lane cloud">cloud</span></td><td>any other id, e.g. <code>"gemini-2.5-pro"</code></td><td>250+ (GPT, Gemini, DeepSeek, Qwen, Doubao, Grok…)</td></tr>
+<tr><td><span class="lane wrappy">wrappy</span></td><td><code>"claude-*"</code>, e.g. <code>"claude-sonnet-4-6"</code></td><td>Real Claude via <code>claude.hostbun.cc</code> (Claude Code wrapper): <code>claude-opus-4-8/4-7/4-6</code>, <code>claude-sonnet-4-6</code>, <code>claude-opus-4-5</code>. Chat + streaming.</td></tr>
+<tr><td><span class="lane crazyrouter">crazyrouter</span></td><td>any other id, e.g. <code>"gemini-2.5-pro"</code></td><td>250+ (GPT, Gemini, DeepSeek, Qwen, Doubao, Grok…)</td></tr>
 </table>
 <pre><code># local GPU — just select model "local"
 curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
@@ -71,12 +71,12 @@ client.chat.completions.create(model="local",             messages=[{"role":"use
 client.chat.completions.create(model="claude-sonnet-4-6", messages=[{"role":"user","content":"hi"}])   # real Claude
 client.chat.completions.create(model="gpt-4o",            messages=[{"role":"user","content":"hi"}])   # cloud</code></pre>
 
-<h2>Claude lane — claudebox <span class="lane claude">model: claude*</span></h2>
+<h2>Wrappy lane — claudebox <span class="lane wrappy">model: claude*</span></h2>
 <p>Any model whose id starts with <code>claude</code> is routed to <code>claude.hostbun.cc</code> — a <a href="https://claude.hostbun.cc/docs" target="_blank">claudebox</a> (Claude Code) wrapper backed by <b>real Claude</b>. The gateway injects the wrapper's token, so you don't send a key. Available: <code>claude-opus-4-8</code>, <code>claude-opus-4-7</code>, <code>claude-opus-4-6</code>, <code>claude-sonnet-4-6</code>, <code>claude-opus-4-5</code>. Supports chat completions + streaming via the OpenAI API. (The Anthropic-native <code>/v1/messages</code> shape on the wrapper is currently not working — use <code>/v1/chat/completions</code>.)</p>
 <pre><code>curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]}'</code></pre>
 
-<h2>Cloud lane — Crazyrouter <span class="lane cloud">/v1</span></h2>
+<h2>Crazyrouter lane — cloud relay <span class="lane crazyrouter">/v1</span></h2>
 <p>OpenAI-compatible aggregator (upstream <code>api.crazyrouter.com/v1</code>). Every request whose <code>model</code> isn't a local id (<code>local</code> / <code>gemma</code> / <code>obliterated</code>) and isn't a <code>claude*</code> model is proxied here with the key injected. Capabilities: chat, streaming (<code>"stream":true</code>), tool/function calling, structured outputs, vision, image/video/audio generation, embeddings, rerank. Full upstream reference: <a href="https://crazyrouter.com/docs" target="_blank">crazyrouter.com/docs</a>.</p>
 <pre><code># streaming
 curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
@@ -90,7 +90,7 @@ curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application
 <li>If it still isn't valid JSON → the gateway re-prompts the <i>same</i> model with the parse error (<i>"your reply was not valid JSON, remake it"</i>) and retries (default 2 retries).</li>
 <li>If the model never complies → you get <code>HTTP 422</code> with <code>{"error":{"code":"json_validation_failed",…}}</code> and the last raw content, instead of a malformed body that breaks your <code>JSON.parse</code>.</li>
 </ul>
-<p>This even works for backends that <b>don't natively support</b> <code>response_format</code>. The <span class="lane claude">claude</span> wrapper returns an empty <code>{}</code> if you pass it <code>response_format</code>, and LM Studio (local) rejects <code>json_object</code>. For those the gateway <b>strips <code>response_format</code> and instructs the model in-prompt instead</b> (including your JSON Schema, when given), then validates the reply the same way — so <code>model:"claude-…"</code> with <code>json_schema</code> returns exactly the shape you asked for. The cloud lane and local <code>json_schema</code> keep native constrained decoding.</p>
+<p>This even works for backends that <b>don't natively support</b> <code>response_format</code>. The <span class="lane wrappy">wrappy</span> wrapper returns an empty <code>{}</code> if you pass it <code>response_format</code>, and LM Studio (local) rejects <code>json_object</code>. For those the gateway <b>strips <code>response_format</code> and instructs the model in-prompt instead</b> (including your JSON Schema, when given), then validates the reply the same way — so <code>model:"claude-…"</code> with <code>json_schema</code> returns exactly the shape you asked for. The cloud lane and local <code>json_schema</code> keep native constrained decoding.</p>
 <p class="sub">Note: because the whole reply must be buffered to validate it, <code>stream:true</code> + a JSON <code>response_format</code> returns the content in a single reconstructed SSE chunk rather than token-by-token. Validation is structural JSON (not full JSON-Schema). Tune with env <code>JSON_MAX_RETRIES</code> (default 2); disable entirely with <code>JSON_ENFORCE=0</code>.</p>
 <pre><code>curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"local","response_format":{"type":"json_object"},

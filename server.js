@@ -1,12 +1,18 @@
 // llm.hostbun.cc — single-URL OpenAI router + admin UI.
-//   model "local"                                        -> local LM Studio gemma-4-e4b-it-obliterated (DEFAULT, multimodal, open)
+//
+// THREE PROVIDERS (lanes):
+//   • local       -> LM Studio @ llm.bofrid.dev (gemma / qwen, no key; obliterated optionally gated)
+//   • crazyrouter -> crazyrouter.com cloud relay (CRAZYROUTER_KEY injected server-side)
+//   • wrappy      -> claudebox / claude-code OpenAI shim @ claude.hostbun.cc (wrappyToken injected)
+//
+//   model "local"                                        -> local gemma-4-e4b-it-obliterated (DEFAULT, multimodal, open)
 //   model "gemma-4-e4b-it-obliterated"                   -> same (full id)
-//   model "gemma" / "google/gemma-4-26b-a4b"             -> local LM Studio gemma 26B MoE, no key
-//   model "obliterated" / "qwen3.6-27b-obliterated"      -> local LM Studio Qwen3.6-27B abliterated (Bearer-gated if OBLIT_TOKEN set)
-//   model "claude*" (e.g. claude-sonnet-4-6)             -> claude.hostbun.cc claudebox (real Claude via Claude Code), key injected
-//   any other model                                      -> crazyrouter.com, key injected
+//   model "gemma" / "google/gemma-4-26b-a4b"             -> local gemma 26B MoE, no key
+//   model "obliterated" / "qwen3.6-27b-obliterated"      -> local Qwen3.6-27B abliterated (Bearer-gated if OBLIT_TOKEN set)
+//   model "claude*" (e.g. claude-sonnet-4-6)             -> wrappy (claudebox), token injected
+//   any other model                                      -> crazyrouter, key injected
 //   (local models JIT-swap in VRAM — they don't all fit at once)
-//   GET /v1/models                            -> local + claudebox + crazyrouter's list (merged)
+//   GET /v1/models                            -> local + wrappy + crazyrouter list (merged)
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
 //   /local/*                                   -> kept for back-compat (strips /local -> llm.bofrid.dev)
@@ -16,6 +22,10 @@
 // overlaid with /data/config.json (a Coolify-managed persistent volume) — so edits made in the
 // admin UI take effect immediately AND survive restarts/reboots/redeploys. Nothing here needs a
 // redeploy to change routing.
+//
+// LANE NAMING: canonical lane ids are `local`, `crazyrouter`, `wrappy`. Legacy ids `cloud`
+// (=crazyrouter) and `claude` (=wrappy) are still accepted on input and migrated, so older
+// /data/config.json files and call-log rows keep working without a reset.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -43,21 +53,35 @@ const HDX_KEY = process.env.HYPERDX_INGEST_API_KEY || "";
 const HDX_URL = process.env.HYPERDX_OTLP_URL || "https://otel.hyperdx.hostbun.cc/v1/logs";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Lane taxonomy. The three providers, plus legacy-id normalization.
+// ─────────────────────────────────────────────────────────────────────────────
+const LANES = ["local", "crazyrouter", "wrappy"];
+const LANE_SET = new Set(LANES);
+const LEGACY_LANE = { cloud: "crazyrouter", claude: "wrappy" };
+// Normalize any lane id (legacy or canonical) to a canonical one; returns "" if unrecognized.
+function normLane(l) {
+  const s = String(l || "").trim().toLowerCase();
+  const c = LEGACY_LANE[s] || s;
+  return LANE_SET.has(c) ? c : "";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Live config: env defaults, then /data/config.json overlay.
 // ─────────────────────────────────────────────────────────────────────────────
 function envDefaults() {
   return {
     bases: {
       local: (process.env.LOCAL_BASE || "https://llm.bofrid.dev").replace(/\/$/, ""),
-      crazy: (process.env.CRAZY_BASE || "https://crazyrouter.com").replace(/\/$/, ""),
-      claude: (process.env.CLAUDE_BASE || "https://claude.hostbun.cc").replace(/\/$/, ""),
+      crazyrouter: (process.env.CRAZYROUTER_BASE || process.env.CRAZY_BASE || "https://crazyrouter.com").replace(/\/$/, ""),
+      wrappy: (process.env.WRAPPY_BASE || process.env.CLAUDE_BASE || "https://claude.hostbun.cc").replace(/\/$/, ""),
     },
-    crazyKey: process.env.CRAZYROUTER_KEY || "",
-    claudeToken: process.env.CLAUDE_TOKEN || "ddash",
-    claudePrefix: "claude",
+    crazyrouterKey: process.env.CRAZYROUTER_KEY || "",
+    wrappyToken: process.env.WRAPPY_TOKEN || process.env.CLAUDE_TOKEN || "ddash",
+    // models starting with this prefix (lowercased) route to the wrappy lane.
+    wrappyPrefix: process.env.WRAPPY_PREFIX || "claude",
     // Bearer gate for the uncensored model(s). When oblitToken is set, requests routed to a model
     // id listed in gatedModels require Authorization: Bearer <oblitToken> (or x-api-key). Empty
-    // token = open. gemma + cloud stay open so fb-bot/promopilot are unaffected.
+    // token = open. gemma + crazyrouter stay open so fb-bot/promopilot are unaffected.
     oblitToken: process.env.OBLIT_TOKEN || "",
     gatedModels: [OBLIT],
     // alias (lowercased) -> exact model id sent to LM Studio.
@@ -73,17 +97,17 @@ function envDefaults() {
     // ── flow control (admin-editable) ──
     // forceModel: when enabled, EVERY request is rewritten to this lane+model regardless of what
     // the caller asked for. The big red switch.
-    forceModel: { enabled: false, lane: "claude", model: "" },
+    forceModel: { enabled: false, lane: "wrappy", model: "" },
     // modelRoutes: explicit per-incoming-model overrides to ANY lane (highest priority after
     // forceModel). key = incoming model name (lowercased). value = { lane, model }.
     modelRoutes: {},
-    // cloudPolicy governs models that fall through to the cloud (crazyrouter) lane:
+    // cloudPolicy governs models that fall through to the crazyrouter lane:
     //   "open"      → forward anything (legacy behaviour)
     //   "allowlist" → only ids in cloudAllowlist reach crazyrouter; everything else → defaultRoute
     //   "off"       → nothing reaches crazyrouter; everything → defaultRoute
     cloudPolicy: "open",
     cloudAllowlist: [],
-    // defaultRoute: where unknown / empty / cloud-blocked models go. lane "none" = reject with 400.
+    // defaultRoute: where unknown / empty / crazyrouter-blocked models go. lane "none" = reject 400.
     defaultRoute: { lane: "none", model: "" },
     // JSON-output enforcement for chat completions that set response_format json_object/json_schema.
     jsonEnforce: (process.env.JSON_ENFORCE || "1") !== "0",
@@ -104,14 +128,17 @@ function envDefaults() {
 let CFG = envDefaults();
 
 // Merge a saved overlay (from disk / admin POST) over a base, key by key, validating shapes.
+// Accepts both new keys (crazyrouter/wrappy/...) and legacy keys (crazy/claude/crazyKey/claudeToken/
+// claudePrefix) so older config files migrate transparently.
 function mergeConfig(base, saved) {
   const c = JSON.parse(JSON.stringify(base));
   if (!saved || typeof saved !== "object") return c;
   if (saved.bases && typeof saved.bases === "object") {
-    for (const k of ["local", "crazy", "claude"]) {
-      if (typeof saved.bases[k] === "string" && saved.bases[k].trim())
-        c.bases[k] = saved.bases[k].trim().replace(/\/$/, "");
-    }
+    const b = saved.bases;
+    const pick = (...keys) => { for (const k of keys) if (typeof b[k] === "string" && b[k].trim()) return b[k].trim().replace(/\/$/, ""); return null; };
+    const loc = pick("local"); if (loc) c.bases.local = loc;
+    const cr = pick("crazyrouter", "crazy"); if (cr) c.bases.crazyrouter = cr;
+    const wr = pick("wrappy", "claude"); if (wr) c.bases.wrappy = wr;
   }
   if (saved.localMap && typeof saved.localMap === "object" && !Array.isArray(saved.localMap)) {
     const m = {};
@@ -123,26 +150,33 @@ function mergeConfig(base, saved) {
   }
   if (Array.isArray(saved.gatedModels))
     c.gatedModels = saved.gatedModels.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
-  for (const k of ["crazyKey", "claudeToken", "claudePrefix", "oblitToken", "adminPassword"])
+  // Secrets / scalars, with legacy aliases.
+  if (typeof saved.crazyrouterKey === "string") c.crazyrouterKey = saved.crazyrouterKey;
+  else if (typeof saved.crazyKey === "string") c.crazyrouterKey = saved.crazyKey;
+  if (typeof saved.wrappyToken === "string") c.wrappyToken = saved.wrappyToken;
+  else if (typeof saved.claudeToken === "string") c.wrappyToken = saved.claudeToken;
+  if (typeof saved.wrappyPrefix === "string") c.wrappyPrefix = saved.wrappyPrefix;
+  else if (typeof saved.claudePrefix === "string") c.wrappyPrefix = saved.claudePrefix;
+  for (const k of ["oblitToken", "adminPassword"])
     if (typeof saved[k] === "string") c[k] = saved[k];
   if (typeof saved.jsonEnforce === "boolean") c.jsonEnforce = saved.jsonEnforce;
   if (Number.isInteger(saved.jsonMaxRetries) && saved.jsonMaxRetries >= 0 && saved.jsonMaxRetries <= 5)
     c.jsonMaxRetries = saved.jsonMaxRetries;
   // ── flow control ──
-  const LANES = new Set(["local", "cloud", "claude"]);
   if (saved.forceModel && typeof saved.forceModel === "object") {
     const f = saved.forceModel;
     c.forceModel = {
       enabled: !!f.enabled,
-      lane: LANES.has(f.lane) ? f.lane : "claude",
+      lane: normLane(f.lane) || "wrappy",
       model: typeof f.model === "string" ? f.model.trim() : "",
     };
   }
   if (saved.modelRoutes && typeof saved.modelRoutes === "object" && !Array.isArray(saved.modelRoutes)) {
     const mr = {};
     for (const [k, v] of Object.entries(saved.modelRoutes)) {
-      if (typeof k === "string" && k.trim() && v && typeof v === "object" && LANES.has(v.lane))
-        mr[k.trim().toLowerCase()] = { lane: v.lane, model: typeof v.model === "string" ? v.model.trim() : "" };
+      const lane = v && typeof v === "object" ? normLane(v.lane) : "";
+      if (typeof k === "string" && k.trim() && lane)
+        mr[k.trim().toLowerCase()] = { lane, model: typeof v.model === "string" ? v.model.trim() : "" };
     }
     c.modelRoutes = mr;
   }
@@ -151,8 +185,9 @@ function mergeConfig(base, saved) {
     c.cloudAllowlist = saved.cloudAllowlist.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
   if (saved.defaultRoute && typeof saved.defaultRoute === "object") {
     const d = saved.defaultRoute;
+    const dl = String(d.lane || "").toLowerCase() === "none" ? "none" : normLane(d.lane);
     c.defaultRoute = {
-      lane: ["none", "local", "cloud", "claude"].includes(d.lane) ? d.lane : "none",
+      lane: dl || "none",
       model: typeof d.model === "string" ? d.model.trim() : "",
     };
   }
@@ -162,7 +197,7 @@ function mergeConfig(base, saved) {
     if (typeof l.content === "boolean") c.logging.content = l.content;
     if (Number.isInteger(l.retain) && l.retain >= 100 && l.retain <= 1000000) c.logging.retain = l.retain;
   }
-  if (!c.claudePrefix) c.claudePrefix = "claude";
+  if (!c.wrappyPrefix) c.wrappyPrefix = "claude";
   if (!c.adminPassword) c.adminPassword = "ddash";
   return c;
 }
@@ -233,8 +268,8 @@ const clip = (s) => { const t = s == null ? "" : String(s); return t.length > CO
 
 // Which credential a route uses (for the "which keys" view).
 function keyLabel(route) {
-  if (route.lane === "cloud") return "crazyKey";
-  if (route.lane === "claude") return "claudeToken";
+  if (route.lane === "crazyrouter") return "crazyrouterKey";
+  if (route.lane === "wrappy") return "wrappyToken";
   if (route.lane === "local") return isGated(route.target) && CFG.oblitToken ? "oblitToken" : "none (open)";
   return "—";
 }
@@ -321,7 +356,7 @@ function shipError(message, attrs) {
 
 // ── lane resolution (reads live CFG) ──
 const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCase()] || null);
-const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.claudePrefix || "claude").toLowerCase());
+const isWrappyModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.wrappyPrefix || "claude").toLowerCase());
 const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.includes(target);
 
 const HOP_REQ = new Set(["host", "connection", "content-length", "accept-encoding",
@@ -351,7 +386,7 @@ function buildHeaders(req, { injectKey, authToken } = {}) {
   for (const [k, v] of Object.entries(req.headers)) {
     if (!HOP_REQ.has(k.toLowerCase())) headers[k] = v;
   }
-  if (injectKey) headers["authorization"] = `Bearer ${CFG.crazyKey}`;
+  if (injectKey) headers["authorization"] = `Bearer ${CFG.crazyrouterKey}`;
   else if (authToken) headers["authorization"] = `Bearer ${authToken}`;
   return headers;
 }
@@ -499,7 +534,9 @@ async function jsonEnforce(req, res, route) {
   const messages = Array.isArray(reqObj.messages) ? reqObj.messages.slice() : [];
   const rf = reqObj.response_format;
   const rfType = typeof rf === "string" ? rf : (rf && rf.type);
-  if (lane === "claude" || (lane === "local" && rfType === "json_object")) {
+  // wrappy (claudebox) and local json_object don't honour response_format natively → strip it and
+  // steer with a plain instruction instead.
+  if (lane === "wrappy" || (lane === "local" && rfType === "json_object")) {
     delete reqObj.response_format;
     injectJsonInstruction(messages, rf);
   }
@@ -568,45 +605,46 @@ function localModelEntries() {
   const out = [];
   for (const [alias, target] of Object.entries(CFG.localMap)) {
     for (const id of [alias, target]) {
-      if (!ids.has(id)) { ids.add(id); out.push({ id, object: "model", owned_by: "local-lmstudio" }); }
+      if (!ids.has(id)) { ids.add(id); out.push({ id, object: "model", owned_by: "local" }); }
     }
   }
   return out;
 }
 
-// Fetch claudebox + crazyrouter catalogs (best-effort). Returns {claude, cloud}.
+// Fetch wrappy + crazyrouter catalogs (best-effort). Returns {wrappy, crazyrouter}.
 async function upstreamCatalogs() {
-  let claude = [];
+  let wrappy = [];
   try {
-    const c = await fetch(CFG.bases.claude + "/v1/models", { headers: { authorization: `Bearer ${CFG.claudeToken}` } });
+    const c = await fetch(CFG.bases.wrappy + "/v1/models", { headers: { authorization: `Bearer ${CFG.wrappyToken}` } });
     const cj = await c.json();
-    claude = ((cj && cj.data) || []).map((m) => ({ ...m, owned_by: "claudebox" }));
-  } catch { /* claudebox down — skip */ }
-  let cloud = [];
+    wrappy = ((cj && cj.data) || []).map((m) => ({ ...m, owned_by: "wrappy" }));
+  } catch { /* wrappy down — skip */ }
+  let crazyrouter = [];
   try {
-    const u = await fetch(CFG.bases.crazy + "/v1/models", { headers: { authorization: `Bearer ${CFG.crazyKey}` } });
+    const u = await fetch(CFG.bases.crazyrouter + "/v1/models", { headers: { authorization: `Bearer ${CFG.crazyrouterKey}` } });
     const j = await u.json();
-    cloud = (j && j.data) || [];
+    crazyrouter = (j && j.data) || [];
   } catch { /* crazyrouter down — skip */ }
-  return { claude, cloud };
+  return { wrappy, crazyrouter };
 }
 
 async function mergedModels(res) {
   const local = localModelEntries();
-  const { claude, cloud } = await upstreamCatalogs();
+  const { wrappy, crazyrouter } = await upstreamCatalogs();
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-  res.end(JSON.stringify({ object: "list", data: [...local, ...claude, ...cloud] }));
+  res.end(JSON.stringify({ object: "list", data: [...local, ...wrappy, ...crazyrouter] }));
 }
 
 // Build a concrete route for an explicit (lane, model) — used by forceModel / modelRoutes /
 // defaultRoute. `model` is the id actually sent upstream (rewriteModel).
 function laneRoute(lane, model, reason) {
-  if (lane === "claude") return { lane: "claude", base: CFG.bases.claude, authToken: CFG.claudeToken, rewriteModel: model || undefined, reason };
-  if (lane === "local") return { lane: "local", base: CFG.bases.local, rewriteModel: model, target: model, reason };
-  return { lane: "cloud", base: CFG.bases.crazy, injectKey: true, rewriteModel: model || undefined, reason }; // cloud
+  const l = normLane(lane) || "crazyrouter";
+  if (l === "wrappy") return { lane: "wrappy", base: CFG.bases.wrappy, authToken: CFG.wrappyToken, rewriteModel: model || undefined, reason };
+  if (l === "local") return { lane: "local", base: CFG.bases.local, rewriteModel: model, target: model, reason };
+  return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
 }
 
-// Where unknown / empty / cloud-blocked models go. lane "none" → blocked (caller gets 400).
+// Where unknown / empty / crazyrouter-blocked models go. lane "none" → blocked (caller gets 400).
 function defaultRouteResolved(why) {
   const d = CFG.defaultRoute || { lane: "none" };
   if (!d.lane || d.lane === "none" || !d.model) return { lane: "blocked", blocked: true, why, reason: why + "; no default route" };
@@ -615,7 +653,7 @@ function defaultRouteResolved(why) {
 
 // Resolve a model name into a concrete upstream route. Priority:
 //   1. forceModel (global override)  2. modelRoutes (per-model, any lane)  3. local alias map
-//   4. claude prefix  5. empty model → default route  6. cloud policy (open/allowlist/off)
+//   4. wrappy prefix  5. empty model → default route  6. cloud policy (open/allowlist/off)
 function resolveRoute(model) {
   const m = model == null ? "" : String(model);
   const key = m.toLowerCase();
@@ -625,13 +663,13 @@ function resolveRoute(model) {
     return laneRoute(CFG.modelRoutes[key].lane, CFG.modelRoutes[key].model || m, `override: ${key}`);
   const lt = localTarget(m);
   if (lt) return { lane: "local", base: CFG.bases.local, rewriteModel: lt, target: lt, reason: "local alias" };
-  if (isClaudeModel(m)) return { lane: "claude", base: CFG.bases.claude, authToken: CFG.claudeToken, reason: "claude prefix" };
+  if (isWrappyModel(m)) return { lane: "wrappy", base: CFG.bases.wrappy, authToken: CFG.wrappyToken, reason: "wrappy prefix" };
   if (!m) return defaultRouteResolved("no model specified");
   const pol = CFG.cloudPolicy || "open";
-  if (pol === "open") return { lane: "cloud", base: CFG.bases.crazy, injectKey: true, reason: "cloud (open)" };
+  if (pol === "open") return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, reason: "crazyrouter (open)" };
   if (pol === "allowlist" && (CFG.cloudAllowlist || []).some((x) => x.toLowerCase() === key))
-    return { lane: "cloud", base: CFG.bases.crazy, injectKey: true, reason: "cloud (allowlisted)" };
-  return defaultRouteResolved(pol === "off" ? "cloud lane disabled" : "not in cloud allowlist");
+    return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, reason: "crazyrouter (allowlisted)" };
+  return defaultRouteResolved(pol === "off" ? "crazyrouter lane disabled" : "not in crazyrouter allowlist");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -685,10 +723,11 @@ function throttled(ip) {
 
 function adminState() {
   return {
+    lanes: LANES,
     bases: CFG.bases,
     localMap: CFG.localMap,
     gatedModels: CFG.gatedModels,
-    claudePrefix: CFG.claudePrefix,
+    wrappyPrefix: CFG.wrappyPrefix,
     forceModel: CFG.forceModel,
     modelRoutes: CFG.modelRoutes,
     cloudPolicy: CFG.cloudPolicy,
@@ -699,8 +738,8 @@ function adminState() {
     logging: CFG.logging,
     loggingDbReady: !!db,
     // secrets — never returned in clear
-    crazyKeySet: !!CFG.crazyKey, crazyKeyMasked: mask(CFG.crazyKey),
-    claudeTokenSet: !!CFG.claudeToken, claudeTokenMasked: mask(CFG.claudeToken),
+    crazyrouterKeySet: !!CFG.crazyrouterKey, crazyrouterKeyMasked: mask(CFG.crazyrouterKey),
+    wrappyTokenSet: !!CFG.wrappyToken, wrappyTokenMasked: mask(CFG.wrappyToken),
     oblitTokenSet: !!CFG.oblitToken, oblitTokenMasked: mask(CFG.oblitToken),
     adminPasswordMasked: mask(CFG.adminPassword),
     configFile: CONFIG_FILE,
@@ -723,10 +762,10 @@ async function probe(base, authToken) {
 
 // Check a crazyrouter key (defaults to the configured one): billing + catalog reachability.
 async function crazyCheck(key) {
-  const k = key || CFG.crazyKey;
+  const k = key || CFG.crazyrouterKey;
   const out = { keySet: !!k, keyMasked: mask(k) };
   if (!k) return { ...out, error: "no key set" };
-  const base = CFG.bases.crazy;
+  const base = CFG.bases.crazyrouter;
   const hdr = { authorization: `Bearer ${k}` };
   async function get(p) {
     try {
@@ -753,8 +792,8 @@ async function crazyCheck(key) {
 async function adminTest(model, prompt, maxTokens) {
   const route = resolveRoute(model);
   const headers = { "content-type": "application/json" };
-  if (route.lane === "cloud") headers.authorization = `Bearer ${CFG.crazyKey}`;
-  else if (route.lane === "claude") headers.authorization = `Bearer ${CFG.claudeToken}`;
+  if (route.lane === "crazyrouter") headers.authorization = `Bearer ${CFG.crazyrouterKey}`;
+  else if (route.lane === "wrappy") headers.authorization = `Bearer ${CFG.wrappyToken}`;
   else if (route.lane === "local" && isGated(route.target) && CFG.oblitToken) headers.authorization = `Bearer ${CFG.oblitToken}`;
   const sendModel = route.rewriteModel || model;
   const body = { model: sendModel, messages: [{ role: "user", content: prompt || "Reply with a short greeting." }], max_tokens: maxTokens || 256, stream: false };
@@ -799,10 +838,14 @@ async function handleAdminApi(req, res, path) {
     try { patch = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "invalid JSON body" }); }
     // Secret fields: omit/undefined = keep; "" = clear; value = set. Start from current CFG.
     const next = JSON.parse(JSON.stringify(CFG));
-    if (patch.bases) Object.assign(next.bases, patch.bases);
+    if (patch.bases) {
+      if (typeof patch.bases.local === "string") next.bases.local = patch.bases.local;
+      if (typeof (patch.bases.crazyrouter ?? patch.bases.crazy) === "string") next.bases.crazyrouter = patch.bases.crazyrouter ?? patch.bases.crazy;
+      if (typeof (patch.bases.wrappy ?? patch.bases.claude) === "string") next.bases.wrappy = patch.bases.wrappy ?? patch.bases.claude;
+    }
     if (patch.localMap) next.localMap = patch.localMap;
     if (patch.gatedModels) next.gatedModels = patch.gatedModels;
-    if (typeof patch.claudePrefix === "string") next.claudePrefix = patch.claudePrefix;
+    if (typeof (patch.wrappyPrefix ?? patch.claudePrefix) === "string") next.wrappyPrefix = patch.wrappyPrefix ?? patch.claudePrefix;
     if (patch.forceModel) next.forceModel = patch.forceModel;
     if (patch.modelRoutes) next.modelRoutes = patch.modelRoutes;
     if (patch.cloudPolicy) next.cloudPolicy = patch.cloudPolicy;
@@ -811,7 +854,9 @@ async function handleAdminApi(req, res, path) {
     if (typeof patch.jsonEnforce === "boolean") next.jsonEnforce = patch.jsonEnforce;
     if (patch.jsonMaxRetries !== undefined) next.jsonMaxRetries = patch.jsonMaxRetries;
     if (patch.logging && typeof patch.logging === "object") Object.assign(next.logging, patch.logging);
-    for (const k of ["crazyKey", "claudeToken", "oblitToken", "adminPassword"])
+    if (typeof (patch.crazyrouterKey ?? patch.crazyKey) === "string") next.crazyrouterKey = patch.crazyrouterKey ?? patch.crazyKey;
+    if (typeof (patch.wrappyToken ?? patch.claudeToken) === "string") next.wrappyToken = patch.wrappyToken ?? patch.claudeToken;
+    for (const k of ["oblitToken", "adminPassword"])
       if (typeof patch[k] === "string") next[k] = patch[k];
     const merged = mergeConfig(envDefaults(), next);
     if (!merged.adminPassword || merged.adminPassword.length < 3)
@@ -830,15 +875,15 @@ async function handleAdminApi(req, res, path) {
   }
 
   if (sub === "health" && req.method === "GET") {
-    const [local, claude, cloud] = await Promise.all([
-      probe(CFG.bases.local), probe(CFG.bases.claude, CFG.claudeToken), probe(CFG.bases.crazy, CFG.crazyKey),
+    const [local, wrappy, crazyrouter] = await Promise.all([
+      probe(CFG.bases.local), probe(CFG.bases.wrappy, CFG.wrappyToken), probe(CFG.bases.crazyrouter, CFG.crazyrouterKey),
     ]);
-    return sendJson(res, 200, { local, claude, cloud });
+    return sendJson(res, 200, { local, wrappy, crazyrouter });
   }
 
   if (sub === "models" && req.method === "GET") {
-    const { claude, cloud } = await upstreamCatalogs();
-    return sendJson(res, 200, { local: localModelEntries(), claude, cloud });
+    const { wrappy, crazyrouter } = await upstreamCatalogs();
+    return sendJson(res, 200, { local: localModelEntries(), wrappy, crazyrouter });
   }
 
   if (sub === "crazyrouter" && req.method === "GET") return sendJson(res, 200, await crazyCheck());
@@ -865,7 +910,7 @@ async function handleAdminApi(req, res, path) {
     return sendJson(res, 200, {
       input: p.model || "", lane: r.lane, sentModel: sent, reason: r.reason || "",
       blocked: !!r.blocked, why: r.why, gated,
-      base: r.base || (r.lane === "local" ? CFG.bases.local : r.lane === "claude" ? CFG.bases.claude : r.lane === "cloud" ? CFG.bases.crazy : ""),
+      base: r.base || (r.lane === "local" ? CFG.bases.local : r.lane === "wrappy" ? CFG.bases.wrappy : r.lane === "crazyrouter" ? CFG.bases.crazyrouter : ""),
     });
   }
 
@@ -953,7 +998,7 @@ const server = http.createServer(async (req, res) => {
   if (path.startsWith("/local/")) {
     const bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
     req.url = req.url.slice("/local".length);
-    return proxy(req, res, CFG.bases.local, { bodyBuf });
+    return proxy(req, res, CFG.bases.local, { bodyBuf, lane: "local" });
   }
   if (req.method === "GET" && (path === "/v1/models" || path === "/api/v1/models"))
     return mergedModels(res);
@@ -966,7 +1011,7 @@ const server = http.createServer(async (req, res) => {
   const lane = route.lane;
   console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
 
-  // Flow policy blocked this model (cloud off / not allowlisted / unknown with no default route).
+  // Flow policy blocked this model (crazyrouter off / not allowlisted / unknown with no default route).
   if (route.blocked) {
     console.error(`[err] 400 blocked ip=${ip} model=${model || "-"} (${route.why})`);
     // Only log real inference attempts as blocked — not scanner GETs to /openapi.json, /favicon, etc.
@@ -975,7 +1020,7 @@ const server = http.createServer(async (req, res) => {
         reqModel: model || null, lane: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
         error: `not routable: ${route.why}`, reqContent: extractRequestContent(bodyBuf) });
     res.writeHead(400, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: { message: `model '${model || ""}' is not routable: ${route.why}. Set a model override, cloud allowlist entry, or default route in /admin.`, type: "invalid_request_error", code: "model_not_routable" } }));
+    return res.end(JSON.stringify({ error: { message: `model '${model || ""}' is not routable: ${route.why}. Set a model override, crazyrouter allowlist entry, or default route in /admin.`, type: "invalid_request_error", code: "model_not_routable" } }));
   }
 
   // Bearer gate for the uncensored local model(s).
@@ -1004,4 +1049,4 @@ const server = http.createServer(async (req, res) => {
   return proxy(req, res, route.base, { ...route, bodyBuf, model, lane });
 });
 
-server.listen(PORT, () => console.log(`llm-hostbun-proxy on :${PORT} crazy=${CFG.bases.crazy} local=${CFG.bases.local} key=${CFG.crazyKey ? "set" : "MISSING"} admin=/admin`));
+server.listen(PORT, () => console.log(`llm-hostbun-proxy on :${PORT} crazyrouter=${CFG.bases.crazyrouter} wrappy=${CFG.bases.wrappy} local=${CFG.bases.local} key=${CFG.crazyrouterKey ? "set" : "MISSING"} admin=/admin`));
