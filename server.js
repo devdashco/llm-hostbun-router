@@ -410,9 +410,9 @@ function isClaudeboxNotice(content) {
   if (typeof content !== "string") return false;
   const s = content.trim();
   if (!s || s.length > 300) return false;          // real completions are longer; notices are short
-  return /you'?ve hit your (weekly |usage |rate )?limit/i.test(s) ||
+  return /you'?ve hit your (weekly |session |usage |rate )?limit/i.test(s) ||
          /\bresets?\b.*\bUTC\b/i.test(s) ||
-         /(usage|rate|weekly) limit (reached|exceeded)/i.test(s);
+         /(usage|rate|weekly|session) limit (reached|exceeded)/i.test(s);
 }
 // Build the crazyrouter route to retry a failed wrappy call on. `model` = caller's original model.
 // Returns null when fallback is disabled or no usable model. crazyrouter mirrors the claude-* ids,
