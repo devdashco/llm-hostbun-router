@@ -89,6 +89,7 @@ small.hint{color:var(--mut);font-size:12px}
       <div class="row">
         <input id="callq" placeholder="search model / ip / ua / prompt / reply…" style="flex:3" onkeydown="if(event.key==='Enter')loadCalls()"/>
         <input id="callmodel" placeholder="exact model" style="flex:1"/>
+        <input id="callproject" placeholder="project" style="flex:1" onkeydown="if(event.key==='Enter')loadCalls()"/>
         <select id="calllane" style="flex:0 0 130px"><option value="">any lane</option><option>local</option><option>crazyrouter</option><option>wrappy</option><option>blocked</option></select>
         <select id="callstatus" style="flex:0 0 110px"><option value="">any status</option><option value="ok">ok (&lt;400)</option><option value="error">error (≥400)</option></select>
         <button class="ghost sm" style="flex:0 0 auto" onclick="loadCalls()">↻ Load</button>
@@ -97,7 +98,7 @@ small.hint{color:var(--mut);font-size:12px}
     </div>
     <pre id="calldetail" class="hide"></pre>
     <div class="card" style="overflow:auto">
-      <table id="callstbl"><tr><th>time</th><th>model → sent</th><th>lane</th><th>key</th><th>status</th><th>ms</th><th>tok</th><th>ip / ua</th></tr></table>
+      <table id="callstbl"><tr><th>time</th><th>project</th><th>model → sent</th><th>lane</th><th>key</th><th>status</th><th>ms</th><th>tok</th><th>ip / ua</th></tr></table>
     </div>
     <div class="card">
       <h3>Logging settings</h3>
@@ -119,6 +120,10 @@ small.hint{color:var(--mut);font-size:12px}
     <div class="card">
       <h3>By model</h3>
       <table id="bymodeltbl"><tr><th>requested model</th><th>lane</th><th>calls</th><th>tokens</th><th>avg ms</th></tr></table>
+    </div>
+    <div class="card">
+      <h3>By project <small class="hint">— apps must send <code>X-Project</code> header; shows <code>(none)</code> until they do</small></h3>
+      <table id="byprojecttbl"><tr><th>project</th><th>calls</th><th>tokens</th><th>errors</th><th>error %</th></tr></table>
     </div>
     <div class="row">
       <div class="card" style="flex:1"><h3>By lane</h3><table id="bylanetbl"><tr><th>lane</th><th>calls</th><th>tokens</th></tr></table></div>
@@ -522,6 +527,7 @@ async function loadCalls(){
   const p=new URLSearchParams({limit:'150'});
   if($('callq').value.trim())p.set('q',$('callq').value.trim());
   if($('callmodel').value.trim())p.set('model',$('callmodel').value.trim());
+  if($('callproject').value.trim())p.set('project',$('callproject').value.trim());
   if($('calllane').value)p.set('lane',$('calllane').value);
   if($('callstatus').value)p.set('status',$('callstatus').value);
   let d; try{d=await api('calls?'+p.toString());}catch(e){return;}
@@ -531,7 +537,9 @@ async function loadCalls(){
     const tr=document.createElement('tr'); tr.style.cursor='pointer'; tr.onclick=()=>showCall(r.id);
     const st=r.status>=400?`<span class="pill down">${r.status}</span>`:`<span class="pill up">${r.status||'—'}</span>`;
     const lane=`<span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span>`;
+    const proj=r.project?`<span class="pill" style="background:#2a3a2a;color:#8bc88b">${esc(r.project)}</span>`:`<span class="mut" style="font-size:11px">(none)</span>`;
     tr.innerHTML=`<td class="mono" style="font-size:12px;white-space:nowrap">${fmtTime(r.ts)}</td>`+
+      `<td style="font-size:12px">${proj}</td>`+
       `<td class="mono" style="font-size:12px">${esc(r.req_model||'-')}${r.sent_model&&r.sent_model!==r.req_model?' <span class="mut">→ '+esc(r.sent_model)+'</span>':''}${r.stream?' <span class="mut">≈stream</span>':''}</td>`+
       `<td>${lane}</td><td class="mono" style="font-size:12px">${esc(r.key_label||'')}</td><td>${st}</td>`+
       `<td class="mono">${r.duration_ms??'—'}</td><td class="mono">${r.total_tokens??'—'}</td>`+
@@ -545,7 +553,7 @@ async function showCall(id){
     out.textContent=`#${c.id}  ${fmtTime(c.ts)}\n`+
       `lane=${c.lane}  model=${c.req_model} → ${c.sent_model}  key=${c.key_label}\n`+
       `status=${c.status}  ${c.duration_ms}ms  stream=${c.stream?'yes':'no'}  tokens: prompt=${c.prompt_tokens??'?'} completion=${c.completion_tokens??'?'} total=${c.total_tokens??'?'}\n`+
-      `ip=${c.ip}  ua=${c.ua||''}\n`+(c.error?`error: ${c.error}\n`:'')+
+      `ip=${c.ip}  ua=${c.ua||''}\n`+`project=${c.project||'(none)'}\n`+(c.error?`error: ${c.error}\n`:'')+
       `\n── PROMPT ──\n${c.req_content||'(not stored)'}\n\n── REPLY ──\n${c.resp_content||'(not stored)'}`;
     out.scrollIntoView({behavior:'smooth',block:'nearest'});
   }catch(e){ out.textContent='error: '+e.message; }
@@ -569,6 +577,11 @@ async function loadStats(){
     kv('Retain',s.retain)+kv('Oldest',s.oldest?fmtTime(s.oldest):'—');
   const fill=(tbl,rows,cells)=>{const t=$(tbl);t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());rows.forEach(r=>{const tr=document.createElement('tr');tr.innerHTML=cells(r);t.appendChild(tr);});};
   fill('bymodeltbl',s.byModel||[],r=>`<td class="mono" style="font-size:12px">${esc(r.req_model||'-')}</td><td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono">${r.avg_ms??'—'}</td>`);
+  fill('byprojecttbl',s.byProject||[],r=>{
+    const errPct=r.n>0?(r.errors/r.n*100).toFixed(1):'0.0';
+    const errCls=r.errors>0?'style="color:var(--err)"':'class="mut"';
+    return `<td class="mono" style="font-size:12px">${esc(r.project||'(none)')}</td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono" ${errCls}>${r.errors}</td><td class="mono" ${errCls}>${errPct}%</td>`;
+  });
   fill('bylanetbl',s.byLane||[],r=>`<td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td>`);
   fill('bykeytbl',s.byKey||[],r=>`<td class="mono" style="font-size:12px">${esc(r.key_label||'')}</td><td class="mono">${r.n}</td>`);
 }
