@@ -122,6 +122,10 @@ function envDefaults() {
     // JSON-output enforcement for chat completions that set response_format json_object/json_schema.
     jsonEnforce: (process.env.JSON_ENFORCE || "1") !== "0",
     jsonMaxRetries: parseInt(process.env.JSON_MAX_RETRIES || "2", 10),
+    // Project attribution. When requireProject is on, inference calls must declare a project via the
+    // X-Project header (or body project/metadata.project/user) or they're rejected 400. Off = the
+    // project is still recorded when supplied, just not mandatory.
+    requireProject: (process.env.REQUIRE_PROJECT || "0") === "1",
     // Admin password (HMAC secret + login check). Weak default per request — rotate via the UI.
     adminPassword: process.env.ADMIN_PASSWORD || "ddash",
     // Call logging → SQLite at CALLS_DB. enabled: record any call metadata at all;
@@ -172,6 +176,7 @@ function mergeConfig(base, saved) {
   if (typeof saved.jsonEnforce === "boolean") c.jsonEnforce = saved.jsonEnforce;
   if (Number.isInteger(saved.jsonMaxRetries) && saved.jsonMaxRetries >= 0 && saved.jsonMaxRetries <= 5)
     c.jsonMaxRetries = saved.jsonMaxRetries;
+  if (typeof saved.requireProject === "boolean") c.requireProject = saved.requireProject;
   // ── flow control ──
   if (saved.forceModel && typeof saved.forceModel === "object") {
     const f = saved.forceModel;
@@ -264,14 +269,17 @@ function initDb() {
       req_model TEXT, lane TEXT, sent_model TEXT, key_label TEXT,
       status INTEGER, duration_ms INTEGER, stream INTEGER,
       prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER,
-      error TEXT, req_content TEXT, resp_content TEXT
+      error TEXT, req_content TEXT, resp_content TEXT, project TEXT
     );`);
+    // Migrate older DBs that predate the project column (idempotent — throws if it already exists).
+    try { db.exec("ALTER TABLE calls ADD COLUMN project TEXT;"); } catch { /* already there */ }
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(req_model);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_lane ON calls(lane);");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_calls_project ON calls(project);");
     insertStmt = db.prepare(`INSERT INTO calls
-      (ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,req_content,resp_content)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      (ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,req_content,resp_content,project)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     pruneStmt = db.prepare("DELETE FROM calls WHERE id NOT IN (SELECT id FROM calls ORDER BY id DESC LIMIT ?)");
     console.log(`[log] call DB ready at ${CALLS_DB}`);
   } catch (e) {
@@ -301,6 +309,20 @@ function extractRequestContent(bodyBuf) {
     if (typeof j.prompt === "string") return clip(j.prompt);
     return null;
   } catch { return null; }
+}
+
+// Which project a call belongs to. Apps declare it via the `X-Project` header (preferred);
+// we also accept `X-Project-Id`, a body `project`/`metadata.project` field, or the OpenAI
+// `user` field as fallbacks. Normalised to a short lowercase slug. Returns "" if unset.
+function extractProject(req, bodyBuf) {
+  let p = req.headers["x-project"] || req.headers["x-project-id"] || "";
+  if (!p && bodyBuf && bodyBuf.length) {
+    try {
+      const j = JSON.parse(bodyBuf.toString());
+      p = j.project || (j.metadata && j.metadata.project) || j.user || "";
+    } catch { /* not json */ }
+  }
+  return String(p || "").trim().toLowerCase().slice(0, 64);
 }
 
 // Pull {content, usage} from a finished upstream body (handles SSE streams + plain JSON).
@@ -349,6 +371,7 @@ function recordCall(rec) {
       rec.error || null,
       CFG.logging.content ? (rec.reqContent || null) : null,
       CFG.logging.content ? (rec.respContent == null ? null : clip(rec.respContent)) : null,
+      rec.project || null,
     );
     if (++insertsSincePrune >= 200) { insertsSincePrune = 0; try { pruneStmt.run(CFG.logging.retain); } catch {} }
   } catch (e) { /* never let logging break a request */ }
@@ -379,6 +402,18 @@ const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.in
 // ── wrappy → crazyrouter failover ──
 // True when a wrappy upstream result should trigger fallback (transport dead or server-side fail).
 const isWrappyFailure = (status, threw) => threw || status >= 500 || status === 429 || status === 401 || status === 403;
+// claudebox quota/system-notice leak: the wrapper returns HTTP 200 but the message *content* is a
+// human notice ("You've hit your weekly limit · resets 2am (UTC)") instead of a real completion.
+// Status-based failover can't see this, so we sniff the content. Kept conservative to avoid eating
+// legit replies that merely discuss limits. Treated as a wrappy failure → fail over to crazyrouter.
+function isClaudeboxNotice(content) {
+  if (typeof content !== "string") return false;
+  const s = content.trim();
+  if (!s || s.length > 300) return false;          // real completions are longer; notices are short
+  return /you'?ve hit your (weekly |usage |rate )?limit/i.test(s) ||
+         /\bresets?\b.*\bUTC\b/i.test(s) ||
+         /(usage|rate|weekly) limit (reached|exceeded)/i.test(s);
+}
 // Build the crazyrouter route to retry a failed wrappy call on. `model` = caller's original model.
 // Returns null when fallback is disabled or no usable model. crazyrouter mirrors the claude-* ids,
 // so an empty configured model means "resend the caller's model unchanged".
@@ -423,7 +458,7 @@ function buildHeaders(req, { injectKey, authToken } = {}) {
 }
 
 async function proxy(req, res, base, opts = {}) {
-  const { bodyBuf, injectKey, authToken, rewriteModel, model, lane } = opts;
+  const { bodyBuf, injectKey, authToken, rewriteModel, model, lane, project } = opts;
   const target = base + req.url;
   const ip = opts.ip || req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const t0 = Date.now();
@@ -442,7 +477,7 @@ async function proxy(req, res, base, opts = {}) {
     ts: t0, ip, ua: req.headers["user-agent"] || "", method: req.method, path: (req.url || "").split("?")[0],
     reqModel: model || null, lane: lane || "local", sentModel: rewriteModel || model || null,
     keyLabel: keyLabel({ lane: lane || "local", target: opts.target }), stream,
-    reqContent: extractRequestContent(bodyBuf),
+    reqContent: extractRequestContent(bodyBuf), project: project || null,
   };
   let curTarget = target, curLane = lane;
   let curInit = { method: req.method, headers, redirect: "follow" };
@@ -452,25 +487,45 @@ async function proxy(req, res, base, opts = {}) {
   catch (e) { threw = true; fetchErr = e; }
 
   // wrappy → crazyrouter failover (one shot). Decided before any client bytes are sent, so it is
-  // safe even for streaming responses — nothing has been written to `res` yet.
-  if (lane === "wrappy" && isWrappyFailure(up ? up.status : 0, threw)) {
+  // safe even for streaming responses — nothing has been written to `res` yet. Re-fires the request
+  // at crazyrouter and updates up/curLane/base_rec in place. Returns true if it ran.
+  let failedOver = false;
+  async function doFailover(why) {
+    if (failedOver) return false;
     const fb = wrappyFallbackRoute(model);
-    if (fb) {
-      const why = threw ? `fetch-failed (${fetchErr.message})` : `status ${up.status}`;
-      console.warn(`[fallback] wrappy ${why} -> crazyrouter model=${fb.rewriteModel} ${target}`);
-      shipError(`wrappy fallback -> crazyrouter`, { from: "wrappy", reason: why, model: model || "-", fbModel: fb.rewriteModel, ip });
-      const fbHeaders = buildHeaders(req, { injectKey: true });
-      let fbBody = bodyBuf;
-      if (bodyBuf && bodyBuf.length) {
-        try { const j = JSON.parse(bodyBuf.toString()); j.model = fb.rewriteModel; fbBody = Buffer.from(JSON.stringify(j)); fbHeaders["content-type"] = "application/json"; } catch { /* leave body as-is */ }
-      }
-      curTarget = fb.base + req.url; curLane = "crazyrouter";
-      base_rec.lane = "crazyrouter"; base_rec.sentModel = fb.rewriteModel; base_rec.keyLabel = "crazyrouterKey";
-      curInit = { method: req.method, headers: fbHeaders, redirect: "follow" };
-      if (!["GET", "HEAD"].includes(req.method) && fbBody && fbBody.length) curInit.body = fbBody;
-      up = null; threw = false; fetchErr = null;
-      try { up = await fetch(curTarget, curInit); }
-      catch (e) { threw = true; fetchErr = e; }
+    if (!fb) return false;
+    console.warn(`[fallback] wrappy ${why} -> crazyrouter model=${fb.rewriteModel} ${target}`);
+    shipError(`wrappy fallback -> crazyrouter`, { from: "wrappy", reason: why, model: model || "-", fbModel: fb.rewriteModel, ip });
+    const fbHeaders = buildHeaders(req, { injectKey: true });
+    let fbBody = bodyBuf;
+    if (bodyBuf && bodyBuf.length) {
+      try { const j = JSON.parse(bodyBuf.toString()); j.model = fb.rewriteModel; fbBody = Buffer.from(JSON.stringify(j)); fbHeaders["content-type"] = "application/json"; } catch { /* leave body as-is */ }
+    }
+    curTarget = fb.base + req.url; curLane = "crazyrouter";
+    base_rec.lane = "crazyrouter"; base_rec.sentModel = fb.rewriteModel; base_rec.keyLabel = "crazyrouterKey";
+    curInit = { method: req.method, headers: fbHeaders, redirect: "follow" };
+    if (!["GET", "HEAD"].includes(req.method) && fbBody && fbBody.length) curInit.body = fbBody;
+    up = null; threw = false; fetchErr = null;
+    try { up = await fetch(curTarget, curInit); }
+    catch (e) { threw = true; fetchErr = e; }
+    failedOver = true;
+    return true;
+  }
+
+  if (lane === "wrappy" && isWrappyFailure(up ? up.status : 0, threw)) {
+    await doFailover(threw ? `fetch-failed (${fetchErr.message})` : `status ${up.status}`);
+  }
+
+  // claudebox quota notice leaked as a 200 (status-based failover can't see it). Sniff non-stream
+  // wrappy bodies; if it's a wrapper notice, fail over to crazyrouter. `preBuf` holds the bytes we
+  // already read so the non-quota case can still be forwarded without re-fetching.
+  let preBuf = null;
+  if (!threw && !failedOver && curLane === "wrappy" && up && up.status < 400 && up.body &&
+      !(up.headers.get("content-type") || "").includes("text/event-stream")) {
+    preBuf = Buffer.from(await up.arrayBuffer());
+    if (isClaudeboxNotice(extractResponseBody(preBuf, false).content)) {
+      preBuf = null;
+      await doFailover("quota notice (200 body)");
     }
   }
 
@@ -492,7 +547,15 @@ async function proxy(req, res, base, opts = {}) {
   // Only chat/responses/completions calls carry content worth recording; for those we tee the
   // body (capped) to pull tokens + reply. /v1/models etc. are skipped to keep the log signal high.
   const recordThis = CFG.logging.enabled && req.method === "POST" && /\/(chat\/completions|responses|completions|messages|chat)$/.test(base_rec.path);
-  if (up.body) {
+  if (preBuf) {
+    // Body already fully read during the quota sniff (non-quota wrappy reply) — forward the bytes.
+    if (recordThis) {
+      const ex = extractResponseBody(preBuf, isStream);
+      recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0, usage: ex.usage, respContent: ex.content,
+        error: up.status >= 400 ? `upstream ${up.status}` : null });
+    }
+    res.end(preBuf);
+  } else if (up.body) {
     const r = Readable.fromWeb(up.body);
     if (recordThis) {
       const chunks = []; let size = 0;
@@ -571,7 +634,7 @@ function finishJson(res, wantStream, parsed, rawText) {
 }
 
 async function jsonEnforce(req, res, route) {
-  const { base, injectKey, authToken, rewriteModel, model, lane, ip, bodyBuf } = route;
+  const { base, injectKey, authToken, rewriteModel, model, lane, ip, bodyBuf, project } = route;
   const maxRetries = CFG.jsonMaxRetries;
   const reqObj = JSON.parse(bodyBuf.toString());           // caller already verified this parses
   const wantStream = !!reqObj.stream;
@@ -580,7 +643,7 @@ async function jsonEnforce(req, res, route) {
     ts: t0, ip, ua: req.headers["user-agent"] || "", method: req.method, path: (req.url || "").split("?")[0],
     reqModel: model || null, lane, sentModel: rewriteModel || model || null,
     keyLabel: keyLabel({ lane, target: route.target }), stream: wantStream,
-    reqContent: extractRequestContent(bodyBuf),
+    reqContent: extractRequestContent(bodyBuf), project: project || null,
   };
   const logJson = (status, parsed, error) => recordCall({ ...logRec, status, ms: Date.now() - t0,
     usage: parsed && parsed.usage, error,
@@ -655,6 +718,9 @@ async function jsonEnforce(req, res, route) {
       return finishJson(res, wantStream, parsed, text);
     }
     const content = msg && typeof msg.content === "string" ? msg.content : null;
+    // claudebox quota notice leaked as a 200 → wrappy is effectively down. Fail over to crazyrouter
+    // (one shot) instead of burning JSON retries against a model that will never answer.
+    if (curLane === "wrappy" && !fellBack && isClaudeboxNotice(content) && switchWrappyToCrazy()) { attempt--; continue; }
     const v = validateJsonContent(content);
     if (v.ok) {
       if (v.repaired) { msg.content = v.value; logJson(up.status, parsed, null); return finishJson(res, wantStream, parsed, JSON.stringify(parsed)); }
@@ -664,8 +730,10 @@ async function jsonEnforce(req, res, route) {
     lastErr = v.error; lastRaw = content == null ? "" : content;
     console.error(`[err] json-invalid lane=${lane} model=${model || "-"} attempt=${attempt + 1}/${maxRetries + 1}: ${v.error}`);
     if (attempt < maxRetries) {
+      // Neutral, non-accusatory wording: claude-haiku reads "your reply failed / do it again" as a
+      // prompt-injection attempt and refuses harder. Just restate the format requirement plainly.
       messages.push({ role: "assistant", content: lastRaw });
-      messages.push({ role: "user", content: `Your previous reply was not valid JSON and failed to parse (error: ${v.error}). Respond again with ONLY a single valid JSON value — no markdown code fences, no commentary, nothing before or after the JSON.` });
+      messages.push({ role: "user", content: `Please reformat that as a single valid JSON value only — no markdown code fences and no text before or after the JSON.` });
     }
   }
   shipError(`json enforcement failed after ${maxRetries + 1} attempts`, { model: model || "-", lane, ip, error: lastErr });
@@ -828,6 +896,7 @@ function adminState() {
     defaultRoute: CFG.defaultRoute,
     jsonEnforce: CFG.jsonEnforce,
     jsonMaxRetries: CFG.jsonMaxRetries,
+    requireProject: CFG.requireProject,
     logging: CFG.logging,
     loggingDbReady: !!db,
     // secrets — never returned in clear
@@ -947,6 +1016,7 @@ async function handleAdminApi(req, res, path) {
     if (patch.defaultRoute) next.defaultRoute = patch.defaultRoute;
     if (typeof patch.jsonEnforce === "boolean") next.jsonEnforce = patch.jsonEnforce;
     if (patch.jsonMaxRetries !== undefined) next.jsonMaxRetries = patch.jsonMaxRetries;
+    if (typeof patch.requireProject === "boolean") next.requireProject = patch.requireProject;
     if (patch.logging && typeof patch.logging === "object") Object.assign(next.logging, patch.logging);
     if (typeof (patch.crazyrouterKey ?? patch.crazyKey) === "string") next.crazyrouterKey = patch.crazyrouterKey ?? patch.crazyKey;
     if (typeof (patch.wrappyToken ?? patch.claudeToken) === "string") next.wrappyToken = patch.wrappyToken ?? patch.claudeToken;
@@ -1016,6 +1086,7 @@ async function handleAdminApi(req, res, path) {
     if (q.lane) { where.push("lane = ?"); params.push(String(q.lane)); }
     if (q.model) { where.push("req_model = ?"); params.push(String(q.model)); }
     if (q.key) { where.push("key_label = ?"); params.push(String(q.key)); }
+    if (q.project) { where.push(q.project === "(none)" ? "(project IS NULL OR project = '')" : "project = ?"); if (q.project !== "(none)") params.push(String(q.project).toLowerCase()); }
     if (q.status === "error") where.push("status >= 400");
     else if (q.status === "ok") where.push("status < 400");
     else if (q.status) { where.push("status = ?"); params.push(parseInt(q.status, 10)); }
@@ -1029,7 +1100,7 @@ async function handleAdminApi(req, res, path) {
       const total = db.prepare(`SELECT COUNT(*) n FROM calls ${w}`).get(...params).n;
       // List view: omit big content blobs; send short previews instead.
       const rows = db.prepare(`SELECT id,ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,
-        prompt_tokens,completion_tokens,total_tokens,error,
+        prompt_tokens,completion_tokens,total_tokens,error,project,
         substr(req_content,1,160) AS req_preview, substr(resp_content,1,200) AS resp_preview
         FROM calls ${w} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
       return sendJson(res, 200, { rows, total, limit, offset, dbReady: true });
@@ -1056,8 +1127,11 @@ async function handleAdminApi(req, res, path) {
       const byLane = db.prepare("SELECT lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok FROM calls GROUP BY lane ORDER BY n DESC").all();
       const byKey = db.prepare("SELECT key_label, COUNT(*) n FROM calls GROUP BY key_label ORDER BY n DESC").all();
       const byModel = db.prepare("SELECT req_model, lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok, ROUND(AVG(duration_ms)) avg_ms FROM calls GROUP BY req_model ORDER BY n DESC LIMIT 30").all();
+      const byProject = db.prepare(`SELECT COALESCE(NULLIF(project,''),'(none)') project, COUNT(*) n,
+        COALESCE(SUM(total_tokens),0) tok, SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) errors
+        FROM calls GROUP BY COALESCE(NULLIF(project,''),'(none)') ORDER BY n DESC LIMIT 50`).all();
       const oldest = db.prepare("SELECT MIN(ts) t FROM calls").get().t;
-      return sendJson(res, 200, { dbReady: true, total, last24, errors24, tokens24, byLane, byKey, byModel, oldest, retain: CFG.logging.retain });
+      return sendJson(res, 200, { dbReady: true, total, last24, errors24, tokens24, byLane, byKey, byModel, byProject, oldest, retain: CFG.logging.retain });
     } catch (e) { return sendJson(res, 500, { error: e.message }); }
   }
   if (sub === "calls/clear" && req.method === "POST") {
@@ -1101,9 +1175,21 @@ const server = http.createServer(async (req, res) => {
   let model = null;
   if (bodyBuf.length) { try { model = JSON.parse(bodyBuf.toString()).model; } catch { /* not json */ } }
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
+  const project = extractProject(req, bodyBuf);
   const route = resolveRoute(model);
   const lane = route.lane;
-  console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
+  console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} project=${project || "-"} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
+
+  // Project attribution gate: when on, inference POSTs must declare a project.
+  const isInference = req.method === "POST" && bodyBuf.length && /\/(chat\/completions|responses|completions|messages|chat)$/.test(path);
+  if (CFG.requireProject && isInference && !project) {
+    console.error(`[err] 400 missing project ip=${ip} model=${model || "-"}`);
+    recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
+      reqModel: model || null, lane: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
+      error: "missing project", reqContent: extractRequestContent(bodyBuf), project: null });
+    res.writeHead(400, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: { message: "missing project attribution: send an 'X-Project' header (or a 'project' body field) identifying the calling app.", type: "invalid_request_error", code: "project_required" } }));
+  }
 
   // Flow policy blocked this model (crazyrouter off / not allowlisted / unknown with no default route).
   if (route.blocked) {
@@ -1112,7 +1198,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && bodyBuf.length)
       recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
         reqModel: model || null, lane: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
-        error: `not routable: ${route.why}`, reqContent: extractRequestContent(bodyBuf) });
+        error: `not routable: ${route.why}`, reqContent: extractRequestContent(bodyBuf), project });
     res.writeHead(400, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: `model '${model || ""}' is not routable: ${route.why}. Set a model override, crazyrouter allowlist entry, or default route in /admin.`, type: "invalid_request_error", code: "model_not_routable" } }));
   }
@@ -1123,7 +1209,7 @@ const server = http.createServer(async (req, res) => {
     const xkey = String(req.headers["x-api-key"] || "");
     if (auth !== `Bearer ${CFG.oblitToken}` && xkey !== CFG.oblitToken) {
       console.error(`[err] 401 gated model unauthorized ip=${ip} model=${route.target}`);
-      recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
+      recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path, project,
         reqModel: model || null, lane: "local", sentModel: route.target, keyLabel: "oblitToken", status: 401, ms: 0,
         error: "gate: missing/invalid token", reqContent: extractRequestContent(bodyBuf) });
       res.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
@@ -1137,10 +1223,10 @@ const server = http.createServer(async (req, res) => {
     try { reqObj = JSON.parse(bodyBuf.toString()); } catch { /* not JSON — passthrough */ }
     if (reqObj && wantsJsonFormat(reqObj)) {
       console.log(`[req] json-enforce model=${model || "-"} -> ${lane}`);
-      return jsonEnforce(req, res, { ...route, model, lane, ip, bodyBuf });
+      return jsonEnforce(req, res, { ...route, model, lane, ip, bodyBuf, project });
     }
   }
-  return proxy(req, res, route.base, { ...route, bodyBuf, model, lane });
+  return proxy(req, res, route.base, { ...route, bodyBuf, model, lane, project });
 });
 
 server.listen(PORT, () => console.log(`llm-hostbun-proxy on :${PORT} crazyrouter=${CFG.bases.crazyrouter} wrappy=${CFG.bases.wrappy} local=${CFG.bases.local} key=${CFG.crazyrouterKey ? "set" : "MISSING"} admin=/admin`));

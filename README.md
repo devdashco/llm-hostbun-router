@@ -34,5 +34,13 @@ Lane ids are `local`, `crazyrouter`, `wrappy`. Legacy ids `cloud` (=crazyrouter)
 - `LOCAL_BASE` — default `https://llm.bofrid.dev`
 - `OBLIT_TOKEN` — gate for the abliterated local model (empty = open)
 - `ADMIN_PASSWORD` — admin UI password (default `ddash`, rotate via UI)
+- `WRAPPY_FALLBACK` — wrappy → crazyrouter auto-failover on error/quota (default `1`; `0` to disable)
+- `WRAPPY_FALLBACK_MODEL` — model to use on failover (empty = resend caller's model unchanged)
+- `JSON_ENFORCE` — validate/repair JSON when `response_format` is set (default `1`)
+- `JSON_MAX_RETRIES` — re-prompt count when JSON is invalid (default `2`)
+- `REQUIRE_PROJECT` — require an `X-Project` header on inference calls, else `400 project_required` (default `0`)
+
+Apps should send an `X-Project: <slug>` header (or body `project` / `metadata.project` / `user`) so
+usage is attributed per project — recorded on every call, filterable in the admin log/stats.
 
 Full API docs: `https://docs.llm.hostbun.cc`.

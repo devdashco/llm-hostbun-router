@@ -73,6 +73,8 @@ client.chat.completions.create(model="gpt-4o",            messages=[{"role":"use
 
 <h2>Wrappy lane — claudebox <span class="lane wrappy">model: claude*</span></h2>
 <p>Any model whose id starts with <code>claude</code> is routed to <code>claude.hostbun.cc</code> — a <a href="https://claude.hostbun.cc/docs" target="_blank">claudebox</a> (Claude Code) wrapper backed by <b>real Claude</b>. The gateway injects the wrapper's token, so you don't send a key. Available: <code>claude-opus-4-8</code>, <code>claude-opus-4-7</code>, <code>claude-opus-4-6</code>, <code>claude-sonnet-4-6</code>, <code>claude-opus-4-5</code>. Supports chat completions + streaming via the OpenAI API. (The Anthropic-native <code>/v1/messages</code> shape on the wrapper is currently not working — use <code>/v1/chat/completions</code>.)</p>
+<p class="sub"><b>Automatic failover:</b> claudebox is backed by a Claude <i>subscription</i> (no API key), so it has a <b>weekly usage limit</b>. When it's exhausted (or otherwise erroring) the gateway transparently re-routes the <i>same</i> request to the <span class="lane crazyrouter">crazyrouter</span> lane with the equivalent model — you keep getting answers instead of a <code>"You've hit your weekly limit"</code> message leaking back as the reply. This includes the case where the limit notice comes back as a normal <code>200</code> body. Disable with env <code>WRAPPY_FALLBACK=0</code>.</p>
+<p class="sub">Because claudebox runs <b>Claude Code</b> (an agent identity scoped to software-engineering), non-coding tasks — especially ones that fetch a URL or judge a real person — may be refused. To make it behave like a plain model, pass the claudebox extra fields (forwarded untouched): <code>"max_turns":1</code> and <code>"disallowed_tools":["Bash","Read","Write","Edit","WebFetch"]</code>.</p>
 <pre><code>curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]}'</code></pre>
 
@@ -96,6 +98,26 @@ curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application
   -d '{"model":"local","response_format":{"type":"json_object"},
        "messages":[{"role":"user","content":"List 3 primary colors as a JSON array under key colors."}]}'
 # → guaranteed-parseable JSON, or HTTP 422 json_validation_failed if the model refuses</code></pre>
+
+<h2>Project attribution <span class="lane meta">X-Project</span></h2>
+<p>Every calling app should identify itself so usage can be attributed per project (which app spent which tokens, which app is erroring). Declare it with the <code>X-Project</code> request header:</p>
+<pre><code>curl https://llm.hostbun.cc/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Project: bofrid" \
+  -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}'</code></pre>
+<p>The gateway reads the project from the first of these it finds (normalised to a lowercase slug, max 64 chars):</p>
+<ul>
+<li><code>X-Project</code> header <i>(preferred)</i>, or <code>X-Project-Id</code></li>
+<li>a top-level <code>"project"</code> field in the JSON body</li>
+<li><code>"metadata":{"project":"…"}</code> in the body</li>
+<li>the OpenAI <code>"user"</code> field (fallback)</li>
+</ul>
+<p>It's recorded on every call and surfaces in the admin call log + usage stats (filter <code>GET /admin/api/calls?project=bofrid</code>, breakdown in <code>GET /admin/api/stats</code> → <code>byProject</code>).</p>
+<p><b>Enforcement (optional):</b> when the gateway runs with <code>REQUIRE_PROJECT=1</code> (or the admin toggle), any inference call that doesn't declare a project is rejected:</p>
+<pre><code>HTTP 400
+{"error":{"message":"missing project attribution: send an 'X-Project' header (or a 'project' body field) identifying the calling app.",
+          "type":"invalid_request_error","code":"project_required"}}</code></pre>
+<p class="sub">Default is off — the project is still recorded whenever you send it, just not mandatory.</p>
 
 <h2>Reasoning effort &amp; extra params <span class="lane meta">passthrough</span></h2>
 <p>The gateway only rewrites the <code>model</code> field (and, for JSON enforcement, <code>response_format</code>). <b>Every other field is forwarded upstream untouched</b> — so <code>reasoning_effort</code> (<code>"low"</code>/<code>"medium"</code>/<code>"high"</code>), <code>thinking</code>, <code>temperature</code>, <code>top_p</code>, <code>tools</code>, <code>tool_choice</code>, <code>stop</code>, <code>seed</code>, <code>max_tokens</code>, etc. all pass through to whichever provider serves the model. The proxy sets <b>no default effort</b>; if you don't send the field, the upstream's own default applies. Effort is honoured only where the target model supports it (crazyrouter reasoning models and Claude on wrappy); local LM Studio ignores it.</p>
