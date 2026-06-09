@@ -74,9 +74,13 @@ function envDefaults() {
       local: (process.env.LOCAL_BASE || "https://llm.bofrid.dev").replace(/\/$/, ""),
       crazyrouter: (process.env.CRAZYROUTER_BASE || process.env.CRAZY_BASE || "https://crazyrouter.com").replace(/\/$/, ""),
       wrappy: (process.env.WRAPPY_BASE || process.env.CLAUDE_BASE || "https://claude.hostbun.cc").replace(/\/$/, ""),
+      // image generation lane (SD-Turbo on the pbox GPU). Routed by path, not model name.
+      images: (process.env.IMAGE_BASE || "https://sdturbo.bofrid.dev").replace(/\/$/, ""),
     },
     crazyrouterKey: process.env.CRAZYROUTER_KEY || "",
     wrappyToken: process.env.WRAPPY_TOKEN || process.env.CLAUDE_TOKEN || "ddash",
+    // bearer injected toward the image upstream (SD-Turbo API_TOKEN). Empty = send nothing.
+    imageToken: process.env.IMAGE_TOKEN || "",
     // models starting with this prefix (lowercased) route to the wrappy lane.
     wrappyPrefix: process.env.WRAPPY_PREFIX || "claude",
     // ── wrappy → crazyrouter failover ──
@@ -845,8 +849,9 @@ async function upstreamCatalogs() {
 async function mergedModels(res) {
   const local = localModelEntries();
   const { wrappy, crazyrouter } = await upstreamCatalogs();
+  const images = [{ id: "sd-turbo", object: "model", owned_by: "pbox" }];
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-  res.end(JSON.stringify({ object: "list", data: [...local, ...wrappy, ...crazyrouter] }));
+  res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...wrappy, ...crazyrouter] }));
 }
 
 // Build a concrete route for an explicit (lane, model) — used by forceModel / modelRoutes /
@@ -1236,6 +1241,13 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "GET" && (path === "/v1/models" || path === "/api/v1/models"))
     return mergedModels(res);
+
+  // Image generation → SD-Turbo (pbox GPU). Routed by path, not model name; the upstream bearer
+  // is injected server-side. No project gate / model routing applies.
+  if (req.method === "POST" && /\/images\/(generations|edits|variations)$/.test(path)) {
+    const imgBody = await readBody(req);
+    return proxy(req, res, CFG.bases.images, { bodyBuf: imgBody, lane: "images", authToken: CFG.imageToken, project: extractProject(req, imgBody) });
+  }
 
   const bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
   let model = null;
