@@ -28,7 +28,7 @@ summary{cursor:pointer;font-weight:600}
 </style></head><body><div class="wrap">
 
 <h1>llm.hostbun.cc</h1>
-<p class="sub">One OpenAI-compatible endpoint at <code>https://llm.hostbun.cc/v1</code>. Three providers, picked by <b>model name</b>: <span class="lane local">local</span> <code>local</code> → on-prem GPU (free), <span class="lane wrappy">wrappy</span> <code>claude*</code> → real Claude via claudebox (claude.hostbun.cc), <span class="lane crazyrouter">crazyrouter</span> anything else → cloud relay (250+ models). Plus on-prem <b>image generation</b> (<code>model: sd-turbo</code>, SDXL on the pbox GPU). No API key needed; auth is handled server-side. Docs also at <a href="https://docs.llm.hostbun.cc">docs.llm.hostbun.cc</a>.</p>
+<p class="sub">One OpenAI-compatible endpoint at <code>https://llm.hostbun.cc/v1</code>. Three providers, picked by <b>model name</b>: <span class="lane local">local</span> <code>local</code> → on-prem GPU (free), <span class="lane wrappy">wrappy</span> <code>claude*</code> → real Claude via claudebox (claude.hostbun.cc), <span class="lane crazyrouter">crazyrouter</span> anything else → cloud relay (250+ models). Plus on-prem <b>image generation</b> (<code>model: imagegen</code>, SDXL on the pbox GPU). No API key needed; auth is handled server-side. Docs also at <a href="https://docs.llm.hostbun.cc">docs.llm.hostbun.cc</a>.</p>
 
 <h2>All endpoints</h2>
 <div class="card"><table>
@@ -86,8 +86,8 @@ client.chat.completions.create(model="gpt-4o",            messages=[{"role":"use
 curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","stream":true,"messages":[{"role":"user","content":"count to 5"}]}'</code></pre>
 
-<h2>Image generation <span class="lane local">model: sd-turbo</span></h2>
-<p>Text-to-image runs on the <b>pbox RTX 4090</b> (SDXL 1.0 + SDXL-Lightning, ~1.5&nbsp;s for a 1024&times;1024 image), proxied to <code>sdturbo.bofrid.dev</code> with the upstream token injected. OpenAI-compatible <code>/v1/images/generations</code> — returns <code>{"data":[{"b64_json":…}]}</code> (we don't host URLs, so always base64). Use <code>model: "sd-turbo"</code>.</p>
+<h2>Image generation <span class="lane local">model: imagegen</span></h2>
+<p>Text-to-image runs on the <b>pbox RTX 4090</b> (SDXL 1.0 + SDXL-Lightning, ~1.5&nbsp;s for a 1024&times;1024 image), proxied to <code>sdturbo.bofrid.dev</code> with the upstream token injected. OpenAI-compatible <code>/v1/images/generations</code> — returns <code>{"data":[{"b64_json":…}]}</code> (we don't host URLs, so always base64). Use <code>model: "imagegen"</code> (<code>"sd-turbo"</code> still works as a legacy alias).</p>
 <table>
 <tr><th>Field</th><th>Meaning</th></tr>
 <tr><td><code>prompt</code></td><td>Text prompt. Optional if <code>template</code> is given.</td></tr>
@@ -100,22 +100,22 @@ curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application
 <p><b>Templates</b> randomize per image and return what they picked in <code>data[i].template_vars</code> + <code>data[i].revised_prompt</code>. <b>Named LoRAs</b> currently: <code>watercolor</code> (soft watercolor — great for article header images), <code>nostalgic-cinema</code> (warm film look), <code>hair-bun</code> (top-knot hairstyle). Add more by registering them in the service.</p>
 <pre><code># plain prompt
 curl https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/json" \
-  -d '{"model":"sd-turbo","prompt":"a small red cabin by a Swedish lake","n":1}'
+  -d '{"model":"imagegen","prompt":"a small red cabin by a Swedish lake","n":1}'
 
 # article header image — watercolor LoRA by name
 curl https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/json" \
-  -d '{"model":"sd-turbo","lora":"watercolor","prompt":"a cozy reading nook by a window"}'
+  -d '{"model":"imagegen","lora":"watercolor","prompt":"a cozy reading nook by a window"}'
 
 # template with randomized hair/scene, 4 variations
 curl https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/json" \
-  -d '{"model":"sd-turbo","template":"profile-woman-back","n":4}'
+  -d '{"model":"imagegen","template":"profile-woman-back","n":4}'
 
 # discover templates + LoRAs
 curl https://llm.hostbun.cc/v1/templates
 curl https://llm.hostbun.cc/v1/loras</code></pre>
 <pre><code># save the first image (b64) to a file
 curl -s https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/json" \
-  -d '{"model":"sd-turbo","lora":"watercolor","prompt":"row of colorful Swedish houses"}' \
+  -d '{"model":"imagegen","lora":"watercolor","prompt":"row of colorful Swedish houses"}' \
   | python3 -c "import sys,json,base64;open('out.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"</code></pre>
 
 <h2>Structured / JSON output <span class="lane meta">enforced</span></h2>

@@ -849,7 +849,7 @@ async function upstreamCatalogs() {
 async function mergedModels(res) {
   const local = localModelEntries();
   const { wrappy, crazyrouter } = await upstreamCatalogs();
-  const images = [{ id: "sd-turbo", object: "model", owned_by: "pbox" }];
+  const images = [{ id: "imagegen", object: "model", owned_by: "pbox" }];
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
   res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...wrappy, ...crazyrouter] }));
 }
