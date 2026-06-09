@@ -1154,19 +1154,24 @@ async function handleAdminApi(req, res, path) {
   if (sub === "stats" && req.method === "GET") {
     if (!db) return sendJson(res, 200, { dbReady: false });
     try {
-      const day = Date.now() - 86400000;
+      const q = url.parse(req.url, true).query;
+      // time window: '15m','1h','6h','24h','7d','30d' or 'all'. Default 24h.
+      const WINDOWS = { "15m": 900000, "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000 };
+      const winKey = (q.window in WINDOWS || q.window === "all") ? q.window : "24h";
+      const since = winKey === "all" ? 0 : Date.now() - WINDOWS[winKey];
+      const W = "ts >= ?"; // window predicate, bound to `since`
       const total = db.prepare("SELECT COUNT(*) n FROM calls").get().n;
-      const last24 = db.prepare("SELECT COUNT(*) n FROM calls WHERE ts >= ?").get(day).n;
-      const errors24 = db.prepare("SELECT COUNT(*) n FROM calls WHERE ts >= ? AND status >= 400").get(day).n;
-      const tokens24 = db.prepare("SELECT COALESCE(SUM(total_tokens),0) t FROM calls WHERE ts >= ?").get(day).t;
-      const byLane = db.prepare("SELECT lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok FROM calls GROUP BY lane ORDER BY n DESC").all();
-      const byKey = db.prepare("SELECT key_label, COUNT(*) n FROM calls GROUP BY key_label ORDER BY n DESC").all();
-      const byModel = db.prepare("SELECT req_model, lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok, ROUND(AVG(duration_ms)) avg_ms FROM calls GROUP BY req_model ORDER BY n DESC LIMIT 30").all();
+      const windowCalls = db.prepare(`SELECT COUNT(*) n FROM calls WHERE ${W}`).get(since).n;
+      const windowErrors = db.prepare(`SELECT COUNT(*) n FROM calls WHERE ${W} AND status >= 400`).get(since).n;
+      const windowTokens = db.prepare(`SELECT COALESCE(SUM(total_tokens),0) t FROM calls WHERE ${W}`).get(since).t;
+      const byLane = db.prepare(`SELECT lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok FROM calls WHERE ${W} GROUP BY lane ORDER BY n DESC`).all(since);
+      const byKey = db.prepare(`SELECT key_label, COUNT(*) n FROM calls WHERE ${W} GROUP BY key_label ORDER BY n DESC`).all(since);
+      const byModel = db.prepare(`SELECT req_model, lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok, ROUND(AVG(duration_ms)) avg_ms FROM calls WHERE ${W} GROUP BY req_model ORDER BY n DESC LIMIT 30`).all(since);
       const byProject = db.prepare(`SELECT COALESCE(NULLIF(project,''),'(none)') project, COUNT(*) n,
         COALESCE(SUM(total_tokens),0) tok, SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) errors
-        FROM calls GROUP BY COALESCE(NULLIF(project,''),'(none)') ORDER BY n DESC LIMIT 50`).all();
+        FROM calls WHERE ${W} GROUP BY COALESCE(NULLIF(project,''),'(none)') ORDER BY n DESC LIMIT 50`).all(since);
       const oldest = db.prepare("SELECT MIN(ts) t FROM calls").get().t;
-      return sendJson(res, 200, { dbReady: true, total, last24, errors24, tokens24, byLane, byKey, byModel, byProject, oldest, retain: CFG.logging.retain });
+      return sendJson(res, 200, { dbReady: true, window: winKey, total, windowCalls, windowErrors, windowTokens, byLane, byKey, byModel, byProject, oldest, retain: CFG.logging.retain });
     } catch (e) { return sendJson(res, 500, { error: e.message }); }
   }
   if (sub === "calls/clear" && req.method === "POST") {

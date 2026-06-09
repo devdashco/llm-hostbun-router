@@ -116,6 +116,15 @@ small.hint{color:var(--mut);font-size:12px}
   <!-- STATS -->
   <div class="tab hide" data-tab="Stats">
     <h2>Usage stats <button class="ghost sm" style="float:right" onclick="loadStats()">↻ Refresh</button></h2>
+    <div class="tabs" id="statwin" style="margin:8px 0 14px">
+      <button data-win="15m">Last 15 min</button>
+      <button data-win="1h">Last hour</button>
+      <button data-win="6h">Last 6h</button>
+      <button data-win="24h" class="on">Last 24h</button>
+      <button data-win="7d">Last 7d</button>
+      <button data-win="30d">Last 30d</button>
+      <button data-win="all">All time</button>
+    </div>
     <div class="grid" id="statgrid"></div>
     <div class="card">
       <h3>By model</h3>
@@ -568,12 +577,21 @@ async function clearCalls(){
 }
 
 // ---- stats ----
+let statWin='24h';
+const WIN_LABEL={'15m':'Last 15 min','1h':'Last hour','6h':'Last 6h','24h':'Last 24h','7d':'Last 7d','30d':'Last 30d','all':'All time'};
+$('statwin').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-win]'); if(!b)return;
+  statWin=b.dataset.win;
+  [...$('statwin').children].forEach(x=>x.classList.toggle('on',x===b));
+  loadStats();
+});
 async function loadStats(){
-  let s; try{s=await api('stats');}catch(e){return;}
+  let s; try{s=await api('stats?window='+encodeURIComponent(statWin));}catch(e){return;}
   if(s.dbReady===false){ $('statgrid').innerHTML=kv('Status','call DB unavailable'); return; }
+  const lbl=WIN_LABEL[s.window]||s.window;
   $('statgrid').innerHTML=
-    kv('Total calls',s.total)+kv('Last 24h',s.last24)+
-    kv('Errors 24h',s.errors24)+kv('Tokens 24h',(s.tokens24||0).toLocaleString())+
+    kv('Total calls',s.total)+kv('Calls ('+lbl+')',s.windowCalls)+
+    kv('Errors ('+lbl+')',s.windowErrors)+kv('Tokens ('+lbl+')',(s.windowTokens||0).toLocaleString())+
     kv('Retain',s.retain)+kv('Oldest',s.oldest?fmtTime(s.oldest):'—');
   const fill=(tbl,rows,cells)=>{const t=$(tbl);t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());rows.forEach(r=>{const tr=document.createElement('tr');tr.innerHTML=cells(r);t.appendChild(tr);});};
   fill('bymodeltbl',s.byModel||[],r=>`<td class="mono" style="font-size:12px">${esc(r.req_model||'-')}</td><td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono">${r.avg_ms??'—'}</td>`);
