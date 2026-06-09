@@ -436,6 +436,32 @@ function wrappyCircuitReset() {
   }
 }
 
+// Half-open prober: while the circuit is OPEN, ping wrappy off the request path every 60s. A real
+// (non-quota) success closes the circuit so claude traffic returns to wrappy as soon as its quota
+// resets — instead of blindly serving the crazyrouter fallback for the full 20-min TTL. Costs one
+// tiny background call per minute and never penalizes a user request.
+const CIRCUIT_PROBE_MS = 60 * 1000;
+let wrappyProbing = false;
+async function probeWrappy() {
+  if (wrappyProbing || !wrappyCircuitOpen()) return;
+  wrappyProbing = true;
+  try {
+    const r = await fetch(CFG.bases.wrappy + "/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${CFG.wrappyToken}` },
+      body: JSON.stringify({ model: "claude-haiku-4-5", messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!r.ok) return;                                   // still erroring — stay open
+    const content = extractResponseBody(Buffer.from(await r.arrayBuffer()), false).content;
+    if (isClaudeboxNotice(content)) return;              // still quota-limited — stay open
+    console.log("[circuit] wrappy half-open probe succeeded — closing circuit");
+    wrappyCircuitReset();
+  } catch { /* probe failed — leave circuit open */ }
+  finally { wrappyProbing = false; }
+}
+setInterval(probeWrappy, CIRCUIT_PROBE_MS).unref?.();
+
 // Build the crazyrouter route to retry a failed wrappy call on. `model` = caller's original model.
 // Returns null when fallback is disabled or no usable model. crazyrouter mirrors the claude-* ids,
 // so an empty configured model means "resend the caller's model unchanged".
