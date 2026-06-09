@@ -28,13 +28,15 @@ summary{cursor:pointer;font-weight:600}
 </style></head><body><div class="wrap">
 
 <h1>llm.hostbun.cc</h1>
-<p class="sub">One OpenAI-compatible endpoint at <code>https://llm.hostbun.cc/v1</code>. Three providers, picked by <b>model name</b>: <span class="lane local">local</span> <code>local</code> → on-prem GPU (free), <span class="lane wrappy">wrappy</span> <code>claude*</code> → real Claude via claudebox (claude.hostbun.cc), <span class="lane crazyrouter">crazyrouter</span> anything else → cloud relay (250+ models). No API key needed; auth is handled server-side. Docs also at <a href="https://docs.llm.hostbun.cc">docs.llm.hostbun.cc</a>.</p>
+<p class="sub">One OpenAI-compatible endpoint at <code>https://llm.hostbun.cc/v1</code>. Three providers, picked by <b>model name</b>: <span class="lane local">local</span> <code>local</code> → on-prem GPU (free), <span class="lane wrappy">wrappy</span> <code>claude*</code> → real Claude via claudebox (claude.hostbun.cc), <span class="lane crazyrouter">crazyrouter</span> anything else → cloud relay (250+ models). Plus on-prem <b>image generation</b> (<code>model: sd-turbo</code>, SDXL on the pbox GPU). No API key needed; auth is handled server-side. Docs also at <a href="https://docs.llm.hostbun.cc">docs.llm.hostbun.cc</a>.</p>
 
 <h2>All endpoints</h2>
 <div class="card"><table>
 <tr><th>Method</th><th>Path</th><th>Lane</th><th>Purpose</th></tr>
 <tr><td class="method">POST</td><td><code>/v1/chat/completions</code></td><td><span class="lane crazyrouter">crazyrouter</span> / <span class="lane local">local</span></td><td>Chat — routed by <code>model</code>: <code>local</code> → local GPU, <code>claude*</code> → wrappy, anything else → crazyrouter (streaming, tools, structured outputs, vision, <code>reasoning_effort</code> passed through). <code>response_format</code> JSON is <b>enforced</b> — see below.</td></tr>
-<tr><td class="method">POST</td><td><code>/v1/completions</code> · <code>/v1/embeddings</code> · <code>/v1/images/generations</code> · <code>/v1/audio/*</code> · <code>/v1/rerank</code></td><td><span class="lane crazyrouter">crazyrouter</span></td><td>Full Crazyrouter OpenAI-compatible surface (key injected)</td></tr>
+<tr><td class="method">POST</td><td><code>/v1/images/generations</code></td><td><span class="lane local">image</span></td><td>Text-to-image on the <b>pbox GPU</b> (SDXL + Lightning), via <code>sdturbo.bofrid.dev</code>. Templates + LoRAs — see below. Routed by path; token injected server-side.</td></tr>
+<tr><td class="method">GET</td><td><code>/v1/templates</code> · <code>/v1/loras</code></td><td><span class="lane local">image</span></td><td>List image templates and the named-LoRA catalog</td></tr>
+<tr><td class="method">POST</td><td><code>/v1/completions</code> · <code>/v1/embeddings</code> · <code>/v1/audio/*</code> · <code>/v1/rerank</code></td><td><span class="lane crazyrouter">crazyrouter</span></td><td>Full Crazyrouter OpenAI-compatible surface (key injected)</td></tr>
 <tr><td class="method">GET</td><td><code>/v1/models</code></td><td><span class="lane crazyrouter">crazyrouter</span> + <span class="lane local">local</span></td><td>Merged list (~267) — <code>local</code> (7: e4b/gemma/obliterated + ids) + <code>claude*</code> (10, wrappy) + all crazyrouter models (~250, sourced from the price feed)</td></tr>
 <tr><td class="method">POST</td><td><code>/local/v1/chat/completions</code></td><td><span class="lane local">local</span></td><td>Legacy explicit local path (still works; or just set <code>model:"local"</code> on <code>/v1</code>)</td></tr>
 <tr><td class="method">GET</td><td><code>/local/v1/models</code></td><td><span class="lane local">local</span></td><td>List local models (legacy)</td></tr>
@@ -83,6 +85,38 @@ client.chat.completions.create(model="gpt-4o",            messages=[{"role":"use
 <pre><code># streaming
 curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","stream":true,"messages":[{"role":"user","content":"count to 5"}]}'</code></pre>
+
+<h2>Image generation <span class="lane local">model: sd-turbo</span></h2>
+<p>Text-to-image runs on the <b>pbox RTX 4090</b> (SDXL 1.0 + SDXL-Lightning, ~1.5&nbsp;s for a 1024&times;1024 image), proxied to <code>sdturbo.bofrid.dev</code> with the upstream token injected. OpenAI-compatible <code>/v1/images/generations</code> — returns <code>{"data":[{"b64_json":…}]}</code> (we don't host URLs, so always base64). Use <code>model: "sd-turbo"</code>.</p>
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>prompt</code></td><td>Text prompt. Optional if <code>template</code> is given.</td></tr>
+<tr><td><code>template</code></td><td>Named prompt template (see <code>GET /v1/templates</code>): <code>profile-woman-back</code>, <code>profile-man-back</code> — vacation profile pics that <b>randomize hair / outfit / scene / lighting</b> per image.</td></tr>
+<tr><td><code>vars</code></td><td>Pin specific template slots, e.g. <code>{"hair":"jet black"}</code>; the rest stay random.</td></tr>
+<tr><td><code>lora</code></td><td>A <b>registered LoRA name</b> (see <code>GET /v1/loras</code>), an HF repo id, or a local path. Stacked on the speed LoRA; the LoRA's trigger phrase is auto-added to the prompt.</td></tr>
+<tr><td><code>lora_scale</code></td><td>Override the LoRA strength (default per-LoRA).</td></tr>
+<tr><td><code>n</code> · <code>size</code> · <code>seed</code> · <code>steps</code></td><td>Count (1–8), <code>WxH</code> (default <code>1024x1024</code>), seed, steps (default 8).</td></tr>
+</table>
+<p><b>Templates</b> randomize per image and return what they picked in <code>data[i].template_vars</code> + <code>data[i].revised_prompt</code>. <b>Named LoRAs</b> currently: <code>watercolor</code> (soft watercolor — great for article header images), <code>nostalgic-cinema</code> (warm film look), <code>hair-bun</code> (top-knot hairstyle). Add more by registering them in the service.</p>
+<pre><code># plain prompt
+curl https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/json" \
+  -d '{"model":"sd-turbo","prompt":"a small red cabin by a Swedish lake","n":1}'
+
+# article header image — watercolor LoRA by name
+curl https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/json" \
+  -d '{"model":"sd-turbo","lora":"watercolor","prompt":"a cozy reading nook by a window"}'
+
+# template with randomized hair/scene, 4 variations
+curl https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/json" \
+  -d '{"model":"sd-turbo","template":"profile-woman-back","n":4}'
+
+# discover templates + LoRAs
+curl https://llm.hostbun.cc/v1/templates
+curl https://llm.hostbun.cc/v1/loras</code></pre>
+<pre><code># save the first image (b64) to a file
+curl -s https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/json" \
+  -d '{"model":"sd-turbo","lora":"watercolor","prompt":"row of colorful Swedish houses"}' \
+  | python3 -c "import sys,json,base64;open('out.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"</code></pre>
 
 <h2>Structured / JSON output <span class="lane meta">enforced</span></h2>
 <p>When you send <code>response_format: {"type":"json_object"}</code> (or <code>{"type":"json_schema",…}</code>) on <code>/v1/chat/completions</code>, the gateway <b>verifies the model actually returned valid JSON</b> before handing the reply back — it doesn't trust the model to honour the flag. This works the same on every lane (local, wrappy, crazyrouter), including models that don't natively support structured outputs.</p>
