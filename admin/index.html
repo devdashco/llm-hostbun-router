@@ -167,6 +167,7 @@ small.hint{color:var(--mut);font-size:12px}
       <h3>🔎 Resolve / trace <small class="hint">— see where a model goes, without calling it</small></h3>
       <div class="row">
         <input id="resolveIn" list="modellist" placeholder="model name e.g. deepseek-v3" style="flex:2"/>
+        <input id="resolveProj" list="projectlist" placeholder="project (optional)" style="flex:1"/>
         <button class="ghost" style="flex:0 0 auto" onclick="doResolve()">Trace</button>
       </div>
       <pre id="resolveOut" class="hide"></pre>
@@ -181,6 +182,25 @@ small.hint{color:var(--mut);font-size:12px}
         <input id="newrmodel" placeholder="sent model id"/>
         <button class="ghost sm" style="flex:0 0 auto" onclick="addRoute()">+ Add</button>
       </div>
+    </div>
+
+    <div class="card">
+      <h3>🎯 Per-project model <small class="hint">— steer one app (e.g. promopilot) to a lane+model. Beats everything else.</small></h3>
+      <table id="projrouttbl"><tr><th>Project</th><th>→ lane</th><th>→ sent model</th><th></th></tr></table>
+      <div class="row" style="margin-top:8px">
+        <input id="newprin" list="projectlist" placeholder="project e.g. promopilot" style="flex:1.2"/>
+        <select id="newprlane" style="flex:0 0 130px" onchange="prLaneHint()"><option>wrappy</option><option>crazyrouter</option><option>local</option></select>
+        <input id="newprmodel" list="modellist" placeholder="model id (blank = keep caller's)" style="flex:1.4"/>
+        <button class="ghost sm" style="flex:0 0 auto" onclick="addProjRoute()">+ Add</button>
+      </div>
+      <div class="row" style="margin-top:6px;gap:6px;flex-wrap:wrap">
+        <small class="hint" style="flex:0 0 auto">quick model:</small>
+        <button class="ghost sm" style="flex:0 0 auto" onclick="prModel('claude-sonnet-4-6')">claude-sonnet-4-6</button>
+        <button class="ghost sm" style="flex:0 0 auto" onclick="prModel('claude-opus-4-8')">claude-opus-4-8</button>
+        <button class="ghost sm" style="flex:0 0 auto" onclick="prModel('gemini-2.5-flash-lite')">gemini-2.5-flash-lite</button>
+        <button class="ghost sm" style="flex:0 0 auto" onclick="prModel('')">(clear)</button>
+      </div>
+      <datalist id="projectlist"></datalist>
     </div>
 
     <div class="card">
@@ -341,9 +361,9 @@ function selTab(name){
 
 // ---- render state ----
 function renderState(s){
-  S=s; if(!S.modelRoutes)S.modelRoutes={};
+  S=s; if(!S.modelRoutes)S.modelRoutes={}; if(!S.projectRoutes)S.projectRoutes={};
   // overview
-  $('ovcfgpre').textContent=JSON.stringify({forceModel:s.forceModel,modelRoutes:s.modelRoutes,cloudPolicy:s.cloudPolicy,cloudAllowlist:s.cloudAllowlist,defaultRoute:s.defaultRoute,localMap:s.localMap,gatedModels:s.gatedModels,bases:s.bases,jsonEnforce:s.jsonEnforce,configPersisted:s.configPersisted},null,2);
+  $('ovcfgpre').textContent=JSON.stringify({forceModel:s.forceModel,modelRoutes:s.modelRoutes,projectRoutes:s.projectRoutes,cloudPolicy:s.cloudPolicy,cloudAllowlist:s.cloudAllowlist,defaultRoute:s.defaultRoute,localMap:s.localMap,gatedModels:s.gatedModels,bases:s.bases,jsonEnforce:s.jsonEnforce,configPersisted:s.configPersisted},null,2);
   // routing forms
   $('b-local').value=s.bases.local; $('b-crazy').value=s.bases.crazyrouter; $('b-claude').value=s.bases.wrappy;
   $('claudePrefix').value=s.wrappyPrefix; $('jsonEnforce').checked=!!s.jsonEnforce; $('jsonMaxRetries').value=s.jsonMaxRetries;
@@ -355,7 +375,7 @@ function renderState(s){
   document.querySelectorAll('input[name=cp]').forEach(r=>r.checked=(r.value===(s.cloudPolicy||'open')));
   $('cloudAllowlist').value=(s.cloudAllowlist||[]).join(', ');
   const dr=s.defaultRoute||{}; $('drLane').value=dr.lane||'none'; $('drModel').value=dr.model||'';
-  renderMap(); renderRoutes();
+  renderMap(); renderRoutes(); renderProjRoutes(); fillProjectList();
   // secrets
   $('m-claude').textContent=s.wrappyTokenMasked||'(none)';
   $('m-oblit').textContent=s.oblitTokenSet?s.oblitTokenMasked:'(open — no gate)';
@@ -401,10 +421,34 @@ function addRoute(){
 }
 function delRoute(k){ delete S.modelRoutes[k]; renderRoutes(); toast('removed (unsaved) — click Save routing'); }
 
+function renderProjRoutes(){
+  const t=$('projrouttbl'); if(!t)return; t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
+  Object.entries(S.projectRoutes||{}).forEach(([k,v])=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td class="mono">${esc(k)}</td><td><span class="pill ${laneCls[v.lane]||''}">${esc(v.lane)}</span></td><td class="mono">${esc(v.model||'(keep caller\'s)')}</td><td style="width:34px"><span class="x" title="remove" onclick="delProjRoute('${esc(k)}')">✕</span></td>`;
+    t.appendChild(tr);
+  });
+}
+function addProjRoute(){
+  const k=$('newprin').value.trim().toLowerCase(), lane=$('newprlane').value, model=$('newprmodel').value.trim();
+  if(!k){toast('project required',true);return;}
+  S.projectRoutes[k]={lane,model}; $('newprin').value='';$('newprmodel').value=''; renderProjRoutes();
+  toast('added (unsaved) — click Save routing');
+}
+function delProjRoute(k){ delete S.projectRoutes[k]; renderProjRoutes(); toast('removed (unsaved) — click Save routing'); }
+function prModel(m){ $('newprmodel').value=m; }
+function prLaneHint(){ const l=$('newprlane').value; const f=$('newprmodel'); if(l==='wrappy'&&!f.value)f.placeholder='e.g. claude-sonnet-4-6 (blank = wrappy default)'; else if(l==='crazyrouter')f.placeholder='e.g. gemini-2.5-flash-lite (blank = keep caller\'s)'; else if(l==='local')f.placeholder='local id e.g. gemma-4-e4b-it-obliterated'; }
+// Populate the project autocomplete from stats + existing routes.
+function fillProjectList(projects){
+  const dl=$('projectlist'); if(!dl)return;
+  const set=new Set([...(projects||[]), ...Object.keys(S.projectRoutes||{})].filter(p=>p&&p!=='(none)'));
+  dl.innerHTML=[...set].sort().map(p=>`<option value="${esc(p)}">`).join('');
+}
+
 async function doResolve(){
-  const model=$('resolveIn').value.trim(); const out=$('resolveOut'); out.classList.remove('hide'); out.textContent='…';
-  try{ const r=await api('resolve',{method:'POST',body:JSON.stringify({model})});
-    out.textContent=(r.blocked?`❌ BLOCKED — ${r.why}\n`:`✅ ${r.input||'(empty)'}  →  lane=${r.lane}  model=${r.sentModel}${r.gated?'  🔒gated':''}\n`)+`reason: ${r.reason}\nupstream: ${r.base}`;
+  const model=$('resolveIn').value.trim(); const project=$('resolveProj').value.trim(); const out=$('resolveOut'); out.classList.remove('hide'); out.textContent='…';
+  try{ const r=await api('resolve',{method:'POST',body:JSON.stringify({model,project})});
+    out.textContent=(r.blocked?`❌ BLOCKED — ${r.why}\n`:`✅ ${r.input||'(empty)'}${r.project?'  [project='+r.project+']':''}  →  lane=${r.lane}  model=${r.sentModel}${r.gated?'  🔒gated':''}\n`)+`reason: ${r.reason}\nupstream: ${r.base}`;
   }catch(e){ out.textContent='error: '+e.message; }
 }
 
@@ -414,6 +458,7 @@ async function saveRouting(){
     bases:{local:$('b-local').value.trim(),crazyrouter:$('b-crazy').value.trim(),wrappy:$('b-claude').value.trim()},
     localMap:S.localMap,
     modelRoutes:S.modelRoutes,
+    projectRoutes:S.projectRoutes,
     forceModel:{enabled:$('forceEnabled').checked,lane:$('forceLane').value,model:$('forceModel').value.trim()},
     wrappyFallback:{enabled:$('wfEnabled').checked,model:$('wfModel').value.trim()},
     cloudPolicy:cp,
@@ -600,6 +645,7 @@ async function loadStats(){
     const errCls=r.errors>0?'style="color:var(--err)"':'class="mut"';
     return `<td class="mono" style="font-size:12px">${esc(r.project||'(none)')}</td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono" ${errCls}>${r.errors}</td><td class="mono" ${errCls}>${errPct}%</td>`;
   });
+  fillProjectList((s.byProject||[]).map(r=>r.project));
   fill('bylanetbl',s.byLane||[],r=>`<td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td>`);
   fill('bykeytbl',s.byKey||[],r=>`<td class="mono" style="font-size:12px">${esc(r.key_label||'')}</td><td class="mono">${r.n}</td>`);
 }

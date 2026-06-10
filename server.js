@@ -115,6 +115,11 @@ function envDefaults() {
     // modelRoutes: explicit per-incoming-model overrides to ANY lane (highest priority after
     // forceModel). key = incoming model name (lowercased). value = { lane, model }.
     modelRoutes: {},
+    // projectRoutes: per-PROJECT overrides to ANY lane (highest priority of all — beats forceModel
+    // and modelRoutes). Lets you steer a single app (e.g. promopilot) off gemini onto wrappy without
+    // touching anyone else. key = project name (lowercased). value = { lane, model } (model "" = keep
+    // the caller's model id, just switch lane).
+    projectRoutes: {},
     // cloudPolicy governs models that fall through to the crazyrouter lane:
     //   "open"      → forward anything (legacy behaviour)
     //   "allowlist" → only ids in cloudAllowlist reach crazyrouter; everything else → defaultRoute
@@ -205,6 +210,15 @@ function mergeConfig(base, saved) {
         mr[k.trim().toLowerCase()] = { lane, model: typeof v.model === "string" ? v.model.trim() : "" };
     }
     c.modelRoutes = mr;
+  }
+  if (saved.projectRoutes && typeof saved.projectRoutes === "object" && !Array.isArray(saved.projectRoutes)) {
+    const pr = {};
+    for (const [k, v] of Object.entries(saved.projectRoutes)) {
+      const lane = v && typeof v === "object" ? normLane(v.lane) : "";
+      if (typeof k === "string" && k.trim() && lane)
+        pr[k.trim().toLowerCase()] = { lane, model: typeof v.model === "string" ? v.model.trim() : "" };
+    }
+    c.projectRoutes = pr;
   }
   if (["open", "allowlist", "off"].includes(saved.cloudPolicy)) c.cloudPolicy = saved.cloudPolicy;
   if (Array.isArray(saved.cloudAllowlist))
@@ -871,11 +885,15 @@ function defaultRouteResolved(why) {
 }
 
 // Resolve a model name into a concrete upstream route. Priority:
+//   0. projectRoutes (per-project override — beats everything)
 //   1. forceModel (global override)  2. modelRoutes (per-model, any lane)  3. local alias map
 //   4. wrappy prefix  5. empty model → default route  6. cloud policy (open/allowlist/off)
-function resolveRoute(model) {
+function resolveRoute(model, project) {
   const m = model == null ? "" : String(model);
   const key = m.toLowerCase();
+  const pkey = project == null ? "" : String(project).trim().toLowerCase();
+  if (pkey && CFG.projectRoutes && CFG.projectRoutes[pkey])
+    return laneRoute(CFG.projectRoutes[pkey].lane, CFG.projectRoutes[pkey].model || m, `project override: ${pkey}`);
   if (CFG.forceModel && CFG.forceModel.enabled && CFG.forceModel.model)
     return laneRoute(CFG.forceModel.lane, CFG.forceModel.model, "forced (global)");
   if (CFG.modelRoutes && CFG.modelRoutes[key])
@@ -957,6 +975,7 @@ function adminState() {
     wrappyFallback: CFG.wrappyFallback,
     forceModel: CFG.forceModel,
     modelRoutes: CFG.modelRoutes,
+    projectRoutes: CFG.projectRoutes,
     cloudPolicy: CFG.cloudPolicy,
     cloudAllowlist: CFG.cloudAllowlist,
     defaultRoute: CFG.defaultRoute,
@@ -1077,6 +1096,7 @@ async function handleAdminApi(req, res, path) {
     if (patch.wrappyFallback && typeof patch.wrappyFallback === "object") next.wrappyFallback = patch.wrappyFallback;
     if (patch.forceModel) next.forceModel = patch.forceModel;
     if (patch.modelRoutes) next.modelRoutes = patch.modelRoutes;
+    if (patch.projectRoutes) next.projectRoutes = patch.projectRoutes;
     if (patch.cloudPolicy) next.cloudPolicy = patch.cloudPolicy;
     if (patch.cloudAllowlist) next.cloudAllowlist = patch.cloudAllowlist;
     if (patch.defaultRoute) next.defaultRoute = patch.defaultRoute;
@@ -1134,11 +1154,11 @@ async function handleAdminApi(req, res, path) {
   if (sub === "resolve" && req.method === "POST") {
     const body = await readBody(req); let p = {};
     try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "invalid JSON body" }); }
-    const r = resolveRoute(p.model);
+    const r = resolveRoute(p.model, p.project);
     const sent = r.rewriteModel || (r.lane === "local" ? r.target : p.model) || p.model || "";
     const gated = r.lane === "local" && isGated(r.target) && !!CFG.oblitToken;
     return sendJson(res, 200, {
-      input: p.model || "", lane: r.lane, sentModel: sent, reason: r.reason || "",
+      input: p.model || "", project: p.project || "", lane: r.lane, sentModel: sent, reason: r.reason || "",
       blocked: !!r.blocked, why: r.why, gated,
       base: r.base || (r.lane === "local" ? CFG.bases.local : r.lane === "wrappy" ? CFG.bases.wrappy : r.lane === "crazyrouter" ? CFG.bases.crazyrouter : ""),
     });
@@ -1258,7 +1278,7 @@ const server = http.createServer(async (req, res) => {
   if (bodyBuf.length) { try { model = JSON.parse(bodyBuf.toString()).model; } catch { /* not json */ } }
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const project = extractProject(req, bodyBuf);
-  const route = resolveRoute(model);
+  const route = resolveRoute(model, project);
   const lane = route.lane;
   console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} project=${project || "-"} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
 
