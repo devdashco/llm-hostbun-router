@@ -167,7 +167,7 @@ small.hint{color:var(--mut);font-size:12px}
       <h3>🔎 Resolve / trace <small class="hint">— see where a model goes, without calling it</small></h3>
       <div class="row">
         <input id="resolveIn" list="modellist" placeholder="model name e.g. deepseek-v3" style="flex:2"/>
-        <input id="resolveProj" list="projectlist" placeholder="project (optional)" style="flex:1"/>
+        <input id="resolveProj" placeholder="project (optional)" style="flex:1"/>
         <button class="ghost" style="flex:0 0 auto" onclick="doResolve()">Trace</button>
       </div>
       <pre id="resolveOut" class="hide"></pre>
@@ -185,22 +185,8 @@ small.hint{color:var(--mut);font-size:12px}
     </div>
 
     <div class="card">
-      <h3>🎯 Per-project model <small class="hint">— steer one app (e.g. promopilot) to a lane+model. Beats everything else.</small></h3>
-      <table id="projrouttbl"><tr><th>Project</th><th>→ lane</th><th>→ sent model</th><th></th></tr></table>
-      <div class="row" style="margin-top:8px">
-        <input id="newprin" list="projectlist" placeholder="project e.g. promopilot" style="flex:1.2"/>
-        <select id="newprlane" style="flex:0 0 130px" onchange="prLaneHint()"><option>wrappy</option><option>crazyrouter</option><option>local</option></select>
-        <input id="newprmodel" list="modellist" placeholder="model id (blank = keep caller's)" style="flex:1.4"/>
-        <button class="ghost sm" style="flex:0 0 auto" onclick="addProjRoute()">+ Add</button>
-      </div>
-      <div class="row" style="margin-top:6px;gap:6px;flex-wrap:wrap">
-        <small class="hint" style="flex:0 0 auto">quick model:</small>
-        <button class="ghost sm" style="flex:0 0 auto" onclick="prModel('claude-sonnet-4-6')">claude-sonnet-4-6</button>
-        <button class="ghost sm" style="flex:0 0 auto" onclick="prModel('claude-opus-4-8')">claude-opus-4-8</button>
-        <button class="ghost sm" style="flex:0 0 auto" onclick="prModel('gemini-2.5-flash-lite')">gemini-2.5-flash-lite</button>
-        <button class="ghost sm" style="flex:0 0 auto" onclick="prModel('')">(clear)</button>
-      </div>
-      <datalist id="projectlist"></datalist>
+      <h3>🎯 Per-project model <small class="hint">— pick a model per app. Beats everything else. <b>Auto</b> = normal routing.</small></h3>
+      <table id="projrouttbl"><tr><th>Project</th><th>Model</th></tr></table>
     </div>
 
     <div class="card">
@@ -421,28 +407,50 @@ function addRoute(){
 }
 function delRoute(k){ delete S.modelRoutes[k]; renderRoutes(); toast('removed (unsaved) — click Save routing'); }
 
+// Model choices for the per-project dropdown. value "" = auto (no override).
+// Each non-empty value is "lane|model".
+const PROJ_MODELS=[
+  {lane:'wrappy',model:'claude-sonnet-4-6'},
+  {lane:'wrappy',model:'claude-opus-4-8'},
+  {lane:'wrappy',model:'claude-haiku-4-5-20251001'},
+  {lane:'crazyrouter',model:'gemini-2.5-flash-lite'},
+  {lane:'crazyrouter',model:'gemini-2.5-flash'},
+  {lane:'crazyrouter',model:'gemini-2.5-pro'},
+  {lane:'local',model:'gemma-4-e4b-it-obliterated'},
+  {lane:'local',model:'google/gemma-4-26b-a4b'},
+];
+let KNOWN_PROJECTS=[];
+function projOpts(cur){
+  const sel=cur?`${cur.lane}|${cur.model}`:'';
+  let extra='';
+  // If the saved override isn't one of the presets, keep it as a selectable option.
+  if(cur && !PROJ_MODELS.some(p=>p.lane===cur.lane&&p.model===cur.model))
+    extra=`<option value="${esc(sel)}" selected>${esc(cur.lane)}: ${esc(cur.model||'(keep caller\'s)')}</option>`;
+  const opts=PROJ_MODELS.map(p=>{const v=`${p.lane}|${p.model}`;return `<option value="${esc(v)}"${v===sel?' selected':''}>${esc(p.lane)}: ${esc(p.model)}</option>`;}).join('');
+  return `<option value=""${sel?'':' selected'}>— auto (normal routing) —</option>${extra}${opts}`;
+}
 function renderProjRoutes(){
   const t=$('projrouttbl'); if(!t)return; t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  Object.entries(S.projectRoutes||{}).forEach(([k,v])=>{
+  const names=new Set([...KNOWN_PROJECTS, ...Object.keys(S.projectRoutes||{})].filter(p=>p&&p!=='(none)'));
+  const list=[...names].sort();
+  if(!list.length){ const tr=document.createElement('tr'); tr.innerHTML=`<td colspan="2" class="mut">no projects seen yet — they appear once apps send an X-Project header</td>`; t.appendChild(tr); return; }
+  list.forEach(k=>{
+    const cur=S.projectRoutes[k];
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="mono">${esc(k)}</td><td><span class="pill ${laneCls[v.lane]||''}">${esc(v.lane)}</span></td><td class="mono">${esc(v.model||'(keep caller\'s)')}</td><td style="width:34px"><span class="x" title="remove" onclick="delProjRoute('${esc(k)}')">✕</span></td>`;
+    tr.innerHTML=`<td class="mono">${esc(k)}</td><td><select onchange="setProjModel('${esc(k)}',this.value)" style="width:100%">${projOpts(cur)}</select></td>`;
     t.appendChild(tr);
   });
 }
-function addProjRoute(){
-  const k=$('newprin').value.trim().toLowerCase(), lane=$('newprlane').value, model=$('newprmodel').value.trim();
-  if(!k){toast('project required',true);return;}
-  S.projectRoutes[k]={lane,model}; $('newprin').value='';$('newprmodel').value=''; renderProjRoutes();
-  toast('added (unsaved) — click Save routing');
+function setProjModel(k,val){
+  if(!val) delete S.projectRoutes[k];
+  else { const [lane,...rest]=val.split('|'); S.projectRoutes[k]={lane,model:rest.join('|')}; }
+  toast('changed (unsaved) — click Save routing');
 }
-function delProjRoute(k){ delete S.projectRoutes[k]; renderProjRoutes(); toast('removed (unsaved) — click Save routing'); }
-function prModel(m){ $('newprmodel').value=m; }
-function prLaneHint(){ const l=$('newprlane').value; const f=$('newprmodel'); if(l==='wrappy'&&!f.value)f.placeholder='e.g. claude-sonnet-4-6 (blank = wrappy default)'; else if(l==='crazyrouter')f.placeholder='e.g. gemini-2.5-flash-lite (blank = keep caller\'s)'; else if(l==='local')f.placeholder='local id e.g. gemma-4-e4b-it-obliterated'; }
-// Populate the project autocomplete from stats + existing routes.
-function fillProjectList(projects){
-  const dl=$('projectlist'); if(!dl)return;
-  const set=new Set([...(projects||[]), ...Object.keys(S.projectRoutes||{})].filter(p=>p&&p!=='(none)'));
-  dl.innerHTML=[...set].sort().map(p=>`<option value="${esc(p)}">`).join('');
+// Pull the live project list from stats so the table lists every app.
+async function fillProjectList(){
+  try{ const s=await api('stats?window=all'); KNOWN_PROJECTS=(s.byProject||[]).map(r=>r.project).filter(Boolean); }
+  catch(e){ /* keep whatever we have */ }
+  renderProjRoutes();
 }
 
 async function doResolve(){
@@ -645,7 +653,7 @@ async function loadStats(){
     const errCls=r.errors>0?'style="color:var(--err)"':'class="mut"';
     return `<td class="mono" style="font-size:12px">${esc(r.project||'(none)')}</td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono" ${errCls}>${r.errors}</td><td class="mono" ${errCls}>${errPct}%</td>`;
   });
-  fillProjectList((s.byProject||[]).map(r=>r.project));
+  KNOWN_PROJECTS=(s.byProject||[]).map(r=>r.project).filter(Boolean); renderProjRoutes();
   fill('bylanetbl',s.byLane||[],r=>`<td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td>`);
   fill('bykeytbl',s.byKey||[],r=>`<td class="mono" style="font-size:12px">${esc(r.key_label||'')}</td><td class="mono">${r.n}</td>`);
 }
