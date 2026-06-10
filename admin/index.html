@@ -44,6 +44,14 @@ pre{background:#010409;border:1px solid var(--bd);border-radius:8px;padding:12px
 .login{max-width:340px;margin:14vh auto 0;text-align:center}
 .flex{display:flex;gap:8px;align-items:center}
 small.hint{color:var(--mut);font-size:12px}
+details.adv{margin:6px 0 14px}
+details.adv>summary{cursor:pointer;color:var(--mut);font-size:14px;padding:8px 0;user-select:none;list-style:none}
+details.adv>summary::-webkit-details-marker{display:none}
+details.adv>summary::before{content:'▸ ';color:var(--acc)}
+details.adv[open]>summary::before{content:'▾ '}
+details.adv>summary:hover{color:var(--fg)}
+#projrouttbl td{padding:6px 9px}
+#projrouttbl select{font-size:13px}
 </style></head>
 <body><div class="wrap">
 
@@ -144,6 +152,13 @@ small.hint{color:var(--mut);font-size:12px}
   <div class="tab hide" data-tab="Routing">
     <h2>Routing & flow control</h2>
 
+    <!-- HERO: per-project model -->
+    <div class="card" style="border-color:var(--acc)">
+      <h3 style="color:var(--fg);font-size:16px">🎯 Per-project model <small class="hint">— pick a model per app. <b>Auto</b> = normal routing. Overrides everything below.</small></h3>
+      <table id="projrouttbl"><tr><th style="width:40%">Project</th><th>Model</th></tr></table>
+    </div>
+
+    <!-- Operational toggles -->
     <div class="card" style="border-color:var(--amb)">
       <h3 style="color:var(--amb)">⏻ Force model <small class="hint">— override EVERY request, ignore what the caller asks for</small></h3>
       <div class="row">
@@ -151,7 +166,7 @@ small.hint{color:var(--mut);font-size:12px}
         <select id="forceLane" style="flex:0 0 140px"><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
         <input id="forceModel" list="modellist" placeholder="model id sent to that lane" style="flex:2"/>
       </div>
-      <small class="hint">When on, all traffic (incl. fb-bot / promopilot) is rewritten to this lane+model. Use to pin everything to e.g. <code>claude-sonnet-4-6</code> (wrappy) or <code>gemini-2.5-flash-lite</code> (crazyrouter).</small>
+      <small class="hint">When on, all traffic (incl. fb-bot / promopilot) is rewritten to this lane+model.</small>
     </div>
 
     <div class="card">
@@ -160,80 +175,81 @@ small.hint{color:var(--mut);font-size:12px}
         <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="wfEnabled" style="width:auto;margin-right:8px"/> fallback enabled</label>
         <input id="wfModel" list="modellist" placeholder="crazyrouter model (blank = resend caller's model)" style="flex:2"/>
       </div>
-      <small class="hint">Triggers on wrappy fetch-failure / HTTP ≥500 / 429 / 401 / 403. crazyrouter mirrors the <code>claude-*</code> ids, so leaving the model blank just resends the same model on the crazyrouter key. One retry per request.</small>
+      <small class="hint">Triggers on wrappy fetch-failure / HTTP ≥500 / 429 / 401 / 403. Blank model resends the same id on the crazyrouter key. One retry per request.</small>
     </div>
 
-    <div class="card">
-      <h3>🔎 Resolve / trace <small class="hint">— see where a model goes, without calling it</small></h3>
-      <div class="row">
-        <input id="resolveIn" list="modellist" placeholder="model name e.g. deepseek-v3" style="flex:2"/>
-        <input id="resolveProj" placeholder="project (optional)" style="flex:1"/>
-        <button class="ghost" style="flex:0 0 auto" onclick="doResolve()">Trace</button>
+    <div style="margin:14px 0 4px"><button onclick="saveRouting()">Save routing</button></div>
+
+    <!-- Advanced (collapsed) -->
+    <details class="adv">
+      <summary>Advanced routing &amp; config</summary>
+
+      <div class="card">
+        <h3>🔎 Resolve / trace <small class="hint">— see where a model goes, without calling it</small></h3>
+        <div class="row">
+          <input id="resolveIn" list="modellist" placeholder="model name e.g. deepseek-v3" style="flex:2"/>
+          <input id="resolveProj" placeholder="project (optional)" style="flex:1"/>
+          <button class="ghost" style="flex:0 0 auto" onclick="doResolve()">Trace</button>
+        </div>
+        <pre id="resolveOut" class="hide"></pre>
       </div>
-      <pre id="resolveOut" class="hide"></pre>
-    </div>
 
-    <div class="card">
-      <h3>↪ Model overrides <small class="hint">— force a specific incoming model to ANY lane + model</small></h3>
-      <table id="routetbl"><tr><th>Incoming model</th><th>→ lane</th><th>→ sent model</th><th></th></tr></table>
-      <div class="row" style="margin-top:8px">
-        <input id="newrin" placeholder="incoming e.g. deepseek-v3"/>
-        <select id="newrlane" style="flex:0 0 130px"><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
-        <input id="newrmodel" placeholder="sent model id"/>
-        <button class="ghost sm" style="flex:0 0 auto" onclick="addRoute()">+ Add</button>
+      <div class="card">
+        <h3>↪ Model overrides <small class="hint">— force a specific incoming model to ANY lane + model</small></h3>
+        <table id="routetbl"><tr><th>Incoming model</th><th>→ lane</th><th>→ sent model</th><th></th></tr></table>
+        <div class="row" style="margin-top:8px">
+          <input id="newrin" placeholder="incoming e.g. deepseek-v3"/>
+          <select id="newrlane" style="flex:0 0 130px"><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
+          <input id="newrmodel" placeholder="sent model id"/>
+          <button class="ghost sm" style="flex:0 0 auto" onclick="addRoute()">+ Add</button>
+        </div>
       </div>
-    </div>
 
-    <div class="card">
-      <h3>🎯 Per-project model <small class="hint">— pick a model per app. Beats everything else. <b>Auto</b> = normal routing.</small></h3>
-      <table id="projrouttbl"><tr><th>Project</th><th>Model</th></tr></table>
-    </div>
-
-    <div class="card">
-      <h3>☁ Crazyrouter policy <small class="hint">— stop unknown models silently hitting the crazyrouter cloud lane</small></h3>
-      <div class="row" style="gap:18px">
-        <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="open" style="width:auto;margin-right:6px"/> open (forward anything)</label>
-        <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="allowlist" style="width:auto;margin-right:6px"/> allowlist only</label>
-        <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="off" style="width:auto;margin-right:6px"/> off (block crazyrouter)</label>
+      <div class="card">
+        <h3>☁ Crazyrouter policy <small class="hint">— stop unknown models silently hitting the crazyrouter cloud lane</small></h3>
+        <div class="row" style="gap:18px">
+          <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="open" style="width:auto;margin-right:6px"/> open (forward anything)</label>
+          <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="allowlist" style="width:auto;margin-right:6px"/> allowlist only</label>
+          <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="off" style="width:auto;margin-right:6px"/> off (block crazyrouter)</label>
+        </div>
+        <label>crazyrouter allowlist <small class="hint">(comma-separated model ids; used when policy = allowlist)</small></label>
+        <input id="cloudAllowlist" placeholder="gemini-2.5-flash-lite, gpt-5.5, …"/>
+        <h3 style="margin-top:14px">Default route <small class="hint">— for unknown / empty / crazyrouter-blocked models. lane <code>none</code> = reject with 400.</small></h3>
+        <div class="row">
+          <select id="drLane" style="flex:0 0 140px"><option>none</option><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
+          <input id="drModel" list="modellist" placeholder="default model id (when lane ≠ none)"/>
+        </div>
       </div>
-      <label>crazyrouter allowlist <small class="hint">(comma-separated model ids; used when policy = allowlist)</small></label>
-      <input id="cloudAllowlist" placeholder="gemini-2.5-flash-lite, gpt-5.5, …"/>
-      <h3 style="margin-top:14px">Default route <small class="hint">— for unknown / empty / crazyrouter-blocked models. lane <code>none</code> = reject with 400.</small></h3>
-      <div class="row">
-        <select id="drLane" style="flex:0 0 140px"><option>none</option><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
-        <input id="drModel" list="modellist" placeholder="default model id (when lane ≠ none)"/>
+
+      <div class="card">
+        <h3>Local model aliases <small class="hint">— what a caller types as <code>model</code> → exact id sent to LM Studio (local lane)</small></h3>
+        <table id="maptbl"><tr><th>Alias (model name)</th><th>→ Upstream id</th><th>gated?</th><th></th></tr></table>
+        <div class="row" style="margin-top:8px">
+          <input id="newalias" placeholder="alias e.g. local"/>
+          <input id="newtarget" placeholder="upstream id e.g. gemma-4-e4b-it-obliterated"/>
+          <button class="ghost sm" style="flex:0 0 auto" onclick="addAlias()">+ Add</button>
+        </div>
+        <small class="hint">Known local ids: e4b <code id="kid-e4b"></code> · gemma <code id="kid-gemma"></code> · obliterated <code id="kid-obl"></code></small>
       </div>
-    </div>
 
-    <div class="card">
-      <h3>Local model aliases <small class="hint">— what a caller types as <code>model</code> → exact id sent to LM Studio (local lane)</small></h3>
-      <table id="maptbl"><tr><th>Alias (model name)</th><th>→ Upstream id</th><th>gated?</th><th></th></tr></table>
-      <div class="row" style="margin-top:8px">
-        <input id="newalias" placeholder="alias e.g. local"/>
-        <input id="newtarget" placeholder="upstream id e.g. gemma-4-e4b-it-obliterated"/>
-        <button class="ghost sm" style="flex:0 0 auto" onclick="addAlias()">+ Add</button>
+      <div class="card">
+        <h3>Lane base URLs <small class="hint">— the three providers</small></h3>
+        <label>local lane (LM Studio @ llm.bofrid.dev)</label><input id="b-local"/>
+        <label>crazyrouter lane (crazyrouter.com cloud)</label><input id="b-crazy"/>
+        <label>wrappy lane (claudebox / claude-code @ claude.hostbun.cc)</label><input id="b-claude"/>
+        <label>wrappy prefix <small class="hint">— models starting with this route to the wrappy lane (default <code>claude</code>)</small></label><input id="claudePrefix"/>
       </div>
-      <small class="hint">Known local ids: e4b <code id="kid-e4b"></code> · gemma <code id="kid-gemma"></code> · obliterated <code id="kid-obl"></code></small>
-    </div>
 
-    <div class="card">
-      <h3>Lane base URLs <small class="hint">— the three providers</small></h3>
-      <label>local lane (LM Studio @ llm.bofrid.dev)</label><input id="b-local"/>
-      <label>crazyrouter lane (crazyrouter.com cloud)</label><input id="b-crazy"/>
-      <label>wrappy lane (claudebox / claude-code @ claude.hostbun.cc)</label><input id="b-claude"/>
-      <label>wrappy prefix <small class="hint">— models starting with this route to the wrappy lane (default <code>claude</code>)</small></label><input id="claudePrefix"/>
-    </div>
-
-    <div class="card">
-      <h3>Structured / JSON output enforcement</h3>
-      <div class="row">
-        <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="jsonEnforce" style="width:auto;margin-right:8px"/> enabled</label>
-        <div style="flex:0 0 auto"><label style="margin:0">max retries</label><input id="jsonMaxRetries" type="number" min="0" max="5" style="width:90px"/></div>
+      <div class="card">
+        <h3>Structured / JSON output enforcement</h3>
+        <div class="row">
+          <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="jsonEnforce" style="width:auto;margin-right:8px"/> enabled</label>
+          <div style="flex:0 0 auto"><label style="margin:0">max retries</label><input id="jsonMaxRetries" type="number" min="0" max="5" style="width:90px"/></div>
+        </div>
       </div>
-    </div>
 
-    <button onclick="saveRouting()">Save routing</button>
-    <button class="danger" style="margin-left:8px" onclick="resetCfg()">Reset to env defaults</button>
+      <button class="danger" onclick="resetCfg()">Reset to env defaults</button>
+    </details>
   </div>
 
   <!-- MODELS -->
@@ -436,15 +452,16 @@ function renderProjRoutes(){
   if(!list.length){ const tr=document.createElement('tr'); tr.innerHTML=`<td colspan="2" class="mut">no projects seen yet — they appear once apps send an X-Project header</td>`; t.appendChild(tr); return; }
   list.forEach(k=>{
     const cur=S.projectRoutes[k];
+    const pill=cur?`<span class="pill ${laneCls[cur.lane]||''}">${esc(cur.lane)}</span>`:`<span class="pill mut" style="opacity:.5">auto</span>`;
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="mono">${esc(k)}</td><td><select onchange="setProjModel('${esc(k)}',this.value)" style="width:100%">${projOpts(cur)}</select></td>`;
+    tr.innerHTML=`<td class="mono">${esc(k)}</td><td><div class="flex"><span style="flex:0 0 86px">${pill}</span><select onchange="setProjModel('${esc(k)}',this.value)" style="flex:1">${projOpts(cur)}</select></div></td>`;
     t.appendChild(tr);
   });
 }
 function setProjModel(k,val){
   if(!val) delete S.projectRoutes[k];
   else { const [lane,...rest]=val.split('|'); S.projectRoutes[k]={lane,model:rest.join('|')}; }
-  toast('changed (unsaved) — click Save routing');
+  renderProjRoutes(); toast('changed (unsaved) — click Save routing');
 }
 // Pull the live project list from stats so the table lists every app.
 async function fillProjectList(){
