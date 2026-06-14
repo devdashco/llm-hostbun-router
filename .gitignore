@@ -1,1 +1,5 @@
 prices.json
+.headroom-venv/
+__pycache__/
+*.pyc
+headroom-svc/.venv/

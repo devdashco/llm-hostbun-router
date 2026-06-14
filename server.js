@@ -52,6 +52,16 @@ const E4B = process.env.LOCAL_MODEL_3 || "gemma-4-e4b-it-obliterated";
 const HDX_KEY = process.env.HYPERDX_INGEST_API_KEY || "";
 const HDX_URL = process.env.HYPERDX_OTLP_URL || "https://otel.hyperdx.hostbun.cc/v1/logs";
 
+// ── optional context compression via the headroom-compress sidecar. OFF unless HEADROOM_URL is
+// set. Every call fast-fails to the original body (timeout / non-200 / parse error) so the
+// compressor can never block or break inference. ──
+const HEADROOM_URL = (process.env.HEADROOM_URL || "").replace(/\/$/, "");
+const HEADROOM_TIMEOUT_MS = parseInt(process.env.HEADROOM_TIMEOUT_MS || "4000", 10);
+const HEADROOM_MIN_CHARS = parseInt(process.env.HEADROOM_MIN_CHARS || "2000", 10); // skip small bodies
+const HEADROOM_LANES = new Set(
+  (process.env.HEADROOM_LANES || "local,crazyrouter,wrappy").split(",").map((s) => s.trim()).filter(Boolean)
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Lane taxonomy. The three providers, plus legacy-id normalization.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -521,6 +531,33 @@ function buildHeaders(req, { injectKey, authToken } = {}) {
   if (injectKey) headers["authorization"] = `Bearer ${CFG.crazyrouterKey}`;
   else if (authToken) headers["authorization"] = `Bearer ${authToken}`;
   return headers;
+}
+
+// Run the request's `messages` through the headroom-compress sidecar before forwarding upstream.
+// Returns { buf, stats }. On ANY problem it returns the original bytes and stats=null, so a slow or
+// dead compressor never blocks inference. Only touches chat/messages bodies that carry a messages[].
+async function headroomCompress(bodyBuf, model, lane) {
+  if (!HEADROOM_URL || !bodyBuf || bodyBuf.length < HEADROOM_MIN_CHARS) return { buf: bodyBuf, stats: null };
+  if (HEADROOM_LANES.size && lane && !HEADROOM_LANES.has(lane)) return { buf: bodyBuf, stats: null };
+  let obj;
+  try { obj = JSON.parse(bodyBuf.toString()); } catch { return { buf: bodyBuf, stats: null }; }
+  if (!Array.isArray(obj.messages) || !obj.messages.length) return { buf: bodyBuf, stats: null };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), HEADROOM_TIMEOUT_MS);
+  try {
+    const r = await fetch(HEADROOM_URL + "/compress", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: obj.messages, model: model || obj.model || undefined }),
+      signal: ctrl.signal,
+    });
+    if (!r.ok) return { buf: bodyBuf, stats: null };
+    const j = await r.json();
+    if (!j || !Array.isArray(j.messages)) return { buf: bodyBuf, stats: null };
+    obj.messages = j.messages;
+    return { buf: Buffer.from(JSON.stringify(obj)), stats: j.stats || null };
+  } catch { return { buf: bodyBuf, stats: null }; }
+  finally { clearTimeout(timer); }
 }
 
 async function proxy(req, res, base, opts = {}) {
@@ -1273,7 +1310,7 @@ const server = http.createServer(async (req, res) => {
     return proxy(req, res, CFG.bases.images, { bodyBuf: Buffer.alloc(0), lane: "images", authToken: CFG.imageToken });
   }
 
-  const bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
+  let bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
   let model = null;
   if (bodyBuf.length) { try { model = JSON.parse(bodyBuf.toString()).model; } catch { /* not json */ } }
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
@@ -1317,6 +1354,16 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
       return res.end(JSON.stringify({ error: { message: `model '${route.target}' requires Authorization: Bearer <token>`, type: "invalid_request_error", code: "unauthorized" } }));
     }
+  }
+
+  // Optional context compression (headroom sidecar). Off unless HEADROOM_URL is set; fast-fails to
+  // the original body so it can never block or break inference. Runs before json-enforce/proxy so
+  // both forward the compressed bytes.
+  if (HEADROOM_URL && isInference) {
+    const hc = await headroomCompress(bodyBuf, model, lane);
+    bodyBuf = hc.buf;
+    if (hc.stats && hc.stats.tokens_saved > 0)
+      console.log(`[headroom] ${path} model=${model || "-"} lane=${lane} ${hc.stats.tokens_before}->${hc.stats.tokens_after} saved=${hc.stats.tokens_saved} (${Math.round(100 * hc.stats.tokens_saved / Math.max(1, hc.stats.tokens_before))}%)`);
   }
 
   // JSON-output enforcement: only for chat completions that request a JSON response_format.
