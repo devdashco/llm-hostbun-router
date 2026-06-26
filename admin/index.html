@@ -97,6 +97,26 @@ details.adv>summary:hover{color:var(--fg)}
   <div class="tab" data-tab="Overview">
     <h2>Overview <button class="ghost sm" style="float:right" onclick="loadHealth()">↻ Refresh</button></h2>
     <div id="issues"></div>
+
+    <!-- ACTIVITY (when), recent-first -->
+    <div class="card">
+      <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0">Activity <small class="hint" id="ovcharthint">— when, by lane</small></h3>
+        <div class="flex" style="gap:6px;flex-wrap:wrap">
+          <div class="seg" id="ovmetricSeg"><button data-m="n" class="on">Calls</button><button data-m="tok">Tokens</button><button data-m="err">Errors</button></div>
+          <div class="seg" id="ovwinSeg"><button data-w="15m">15m</button><button data-w="1h">1h</button><button data-w="6h" class="on">6h</button><button data-w="24h">24h</button></div>
+        </div>
+      </div>
+      <div id="ovchart" style="margin-top:12px;overflow-x:auto"></div>
+      <div id="ovchartleg" class="flex" style="gap:12px;flex-wrap:wrap;margin-top:8px;font-size:12px"></div>
+    </div>
+
+    <!-- RECENT CALLS feed -->
+    <div class="card" style="overflow:auto">
+      <h3>Recent calls <small class="hint">— newest first · click to open</small> <button class="ghost sm" style="float:right" onclick="loadRecent()">↻</button></h3>
+      <table id="recenttbl"><tr><th>when</th><th>project</th><th>model</th><th>lane</th><th>status</th><th>lat · tok</th></tr></table>
+    </div>
+
     <div class="grid" id="ovgrid"></div>
     <div class="card">
       <h3>Lane health <small class="hint">— live probe + last-hour traffic</small></h3>
@@ -658,6 +678,8 @@ async function loadHealth(){
   });
   renderOvCards(h);
   renderIssues(h,st);
+  loadOvActivity();
+  loadRecent();
 }
 function renderOvCards(h){
   const up=[h.local,h.wrappy,h.crazyrouter].filter(x=>x&&x.up).length;
@@ -898,44 +920,67 @@ $('metricSeg').addEventListener('click',e=>{const b=e.target.closest('button[dat
 $('bySeg').addEventListener('click',e=>{const b=e.target.closest('button[data-by]');if(!b)return;chartBy=b.dataset.by;[...$('bySeg').children].forEach(x=>x.classList.toggle('on',x===b));loadSeries();});
 async function loadSeries(){
   let d; try{d=await api('series?window='+encodeURIComponent(statWin)+'&by='+chartBy);}catch(e){return;}
-  renderChart(d);
+  drawChart(d,chartMetric,{wrap:$('chartwrap'),legend:$('chartlegend'),hint:$('charthint'),by:chartBy,H:240});
 }
-function renderChart(d){
-  const wrap=$('chartwrap'), leg=$('chartlegend');
+// Reusable stacked-bar time chart. els={wrap,legend,hint?,by,H?}. metric ∈ tok|n|err.
+function drawChart(d,metric,els){
+  const wrap=els.wrap, leg=els.legend;
   const pts=d.points||[], series=d.series||[];
   const bm=d.bucketMs, bl=bm>=86400000?(bm/86400000+'d'):bm>=3600000?(bm/3600000+'h'):(bm/60000+'min');
-  $('charthint').textContent=`— ${METRIC_LABEL[chartMetric]} per ${bl} bucket, ${chartBy}`;
-  if(!pts.length){ wrap.innerHTML='<span class="mut">no data in window</span>'; leg.innerHTML=''; return; }
-  const W=Math.max(640,pts.length*16+60), H=240, padL=52, padB=22, padT=10, plotH=H-padB-padT, plotW=W-padL-10;
-  const field=chartMetric==='tok'?'tok':chartMetric==='err'?null:'n';
-  // per-bucket stacked totals
-  const stackVal=(p,name)=>chartMetric==='err'?(name==='__err'?p.totalErr:0):(p[field][name]||0);
-  const useSeries=chartMetric==='err'?['__err']:series;
+  if(els.hint)els.hint.textContent=`— ${METRIC_LABEL[metric]} per ${bl} bucket${els.by?', '+els.by:''}`;
+  if(!pts.length){ wrap.innerHTML='<span class="mut">no data in window</span>'; if(leg)leg.innerHTML=''; return; }
+  const H=els.H||240, W=Math.max(560,pts.length*16+60), padL=52, padB=22, padT=10, plotH=H-padB-padT, plotW=W-padL-10;
+  const field=metric==='tok'?'tok':'n';
+  const stackVal=(p,name)=>metric==='err'?(name==='__err'?p.totalErr:0):(p[field][name]||0);
+  const useSeries=metric==='err'?['__err']:series;
   const totals=pts.map(p=>useSeries.reduce((a,nm)=>a+stackVal(p,nm),0));
   const maxV=Math.max(1,...totals);
   const bw=Math.max(4,Math.min(26,(plotW/pts.length)-3));
   const x=i=>padL+i*(plotW/pts.length)+(plotW/pts.length-bw)/2;
-  const y=v=>padT+plotH-(v/maxV*plotH);
-  // gridlines (4)
   let g=''; for(let i=0;i<=4;i++){const yy=padT+plotH-(i/4*plotH);const vv=maxV*i/4;g+=`<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W-10}" y2="${yy.toFixed(1)}" stroke="#21262d"/><text x="${padL-6}" y="${(yy+3).toFixed(1)}" fill="#9aa4b2" font-size="10" text-anchor="end">${nfmt(vv)}</text>`;}
-  // bars
   let bars='';
   pts.forEach((p,i)=>{
     let yacc=padT+plotH;
-    useSeries.forEach((nm,si)=>{
+    useSeries.forEach((nm)=>{
       const v=stackVal(p,nm); if(v<=0)return;
       const h=v/maxV*plotH; yacc-=h;
-      const c=chartMetric==='err'?'#f85149':seriesColor(nm,series.indexOf(nm));
+      const c=metric==='err'?'#f85149':seriesColor(nm,series.indexOf(nm));
       bars+=`<rect x="${x(i).toFixed(1)}" y="${yacc.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${c}"><title>${fmtTime(p.t)}\n${esc(nm==='__err'?'errors':nm)}: ${v.toLocaleString()}</title></rect>`;
     });
   });
-  // x labels (~6)
   let xl=''; const step=Math.max(1,Math.ceil(pts.length/6));
-  pts.forEach((p,i)=>{ if(i%step)return; const t=new Date(p.t); const lab=d.bucketMs<3600000?t.toISOString().slice(11,16):t.toISOString().slice(5,16).replace('T',' '); xl+=`<text x="${(x(i)+bw/2).toFixed(1)}" y="${H-6}" fill="#9aa4b2" font-size="10" text-anchor="middle">${lab}</text>`; });
+  pts.forEach((p,i)=>{ if(i%step)return; const t=new Date(p.t); const lab=bm<3600000?t.toISOString().slice(11,16):t.toISOString().slice(5,16).replace('T',' '); xl+=`<text x="${(x(i)+bw/2).toFixed(1)}" y="${H-6}" fill="#9aa4b2" font-size="10" text-anchor="middle">${lab}</text>`; });
   wrap.innerHTML=`<svg width="${W}" height="${H}" style="max-width:none">${g}${bars}${xl}</svg>`;
-  leg.innerHTML=chartMetric==='err'?'<span><span class="swatch" style="background:#f85149"></span>errors</span>'
+  if(leg)leg.innerHTML=metric==='err'?'<span><span class="swatch" style="background:#f85149"></span>errors</span>'
     :series.map((nm,i)=>`<span><span class="swatch" style="background:${seriesColor(nm,i)}"></span>${esc(nm)}</span>`).join('');
 }
+
+// ---- Overview: recent activity (the "when") + live recent-calls feed ----
+let ovWin='6h', ovMetric='n';
+async function loadOvActivity(){
+  let d; try{d=await api('series?window='+ovWin+'&by=lane');}catch(e){return;}
+  drawChart(d,ovMetric,{wrap:$('ovchart'),legend:$('ovchartleg'),hint:$('ovcharthint'),by:'lane',H:200});
+}
+async function loadRecent(){
+  let d; try{d=await api('calls?limit=18');}catch(e){return;}
+  const t=$('recenttbl'); t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
+  if(!d.rows||!d.rows.length){ const tr=document.createElement('tr'); tr.innerHTML='<td colspan="6" class="mut">no calls logged yet</td>'; t.appendChild(tr); return; }
+  d.rows.forEach(r=>{
+    const tr=document.createElement('tr'); tr.style.cursor='pointer'; tr.onclick=()=>{ selTab('Calls'); showCall(r.id); };
+    const refusal=r.status>=400 && /^json_validation_failed/.test(r.error||'');
+    const st=refusal?`<span class="pill warnp">🙅 ${r.status}</span>`:r.status>=400?`<span class="pill down">${r.status}</span>`:`<span class="pill up">${r.status||'—'}</span>`;
+    const proj=r.project?`<span class="chip" style="color:#8bc88b">${esc(r.project)}</span>`:'<span class="mut" style="font-size:11px">(none)</span>';
+    tr.innerHTML=`<td class="mono mut" style="font-size:12px;white-space:nowrap" title="${fmtTime(r.ts)}">${ago(r.ts)} ago</td>`+
+      `<td style="font-size:12px">${proj}</td>`+
+      `<td class="mono" style="font-size:12px">${esc(r.req_model||'-')}</td>`+
+      `<td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td>`+
+      `<td>${st}</td>`+
+      `<td class="mono" style="font-size:12px">${fmtMs(r.duration_ms)} · ${r.total_tokens??'—'}t</td>`;
+    t.appendChild(tr);
+  });
+}
+$('ovwinSeg').addEventListener('click',e=>{const b=e.target.closest('button[data-w]');if(!b)return;ovWin=b.dataset.w;[...$('ovwinSeg').children].forEach(x=>x.classList.toggle('on',x===b));loadOvActivity();});
+$('ovmetricSeg').addEventListener('click',e=>{const b=e.target.closest('button[data-m]');if(!b)return;ovMetric=b.dataset.m;[...$('ovmetricSeg').children].forEach(x=>x.classList.toggle('on',x===b));loadOvActivity();});
 
 // ---- boot ----
 async function refreshAll(){
