@@ -52,6 +52,20 @@ details.adv[open]>summary::before{content:'▾ '}
 details.adv>summary:hover{color:var(--fg)}
 #projrouttbl td{padding:6px 9px}
 #projrouttbl select{font-size:13px}
+.seg{display:inline-flex;border:1px solid var(--bd);border-radius:7px;overflow:hidden}
+.seg button{background:#21262d;color:var(--mut);border:0;border-radius:0;padding:5px 11px;font:600 12px -apple-system,sans-serif}
+.seg button.on{background:var(--acc);color:#04101f}
+.bar{height:9px;border-radius:5px;background:#21262d;overflow:hidden;display:flex}
+.bar>i{display:block;height:100%}
+.lblrow{display:flex;align-items:center;gap:10px;margin:8px 0}
+.lblrow .nm{flex:0 0 150px;font:13px ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lblrow .bar{flex:1}
+.lblrow .vv{flex:0 0 auto;font:12px ui-monospace,monospace;color:var(--mut);min-width:160px;text-align:right}
+.swatch{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px;vertical-align:middle}
+#byprojecttbl th[data-sort],#chartwrap rect{cursor:pointer}
+#byprojecttbl tr[data-proj]{cursor:pointer}
+#byprojecttbl tr[data-proj]:hover td{background:#1a212b}
+.chip{font:11px ui-monospace,monospace;padding:1px 6px;border-radius:10px;border:1px solid var(--bd);color:var(--mut)}
 </style></head>
 <body><div class="wrap">
 
@@ -135,16 +149,44 @@ details.adv>summary:hover{color:var(--fg)}
       <button data-win="all">All time</button>
     </div>
     <div class="grid" id="statgrid"></div>
+
+    <!-- HISTORY CHART -->
     <div class="card">
-      <h3>By model</h3>
-      <table id="bymodeltbl"><tr><th>requested model</th><th>lane</th><th>calls</th><th>tokens</th><th>avg ms</th></tr></table>
+      <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0">History <small class="hint" id="charthint"></small></h3>
+        <div class="flex" style="gap:6px;flex-wrap:wrap">
+          <div class="seg" id="metricSeg"><button data-metric="tok" class="on">Tokens</button><button data-metric="n">Calls</button><button data-metric="err">Errors</button></div>
+          <div class="seg" id="bySeg"><button data-by="lane" class="on">by lane</button><button data-by="project">by project</button><button data-by="model">by model</button></div>
+        </div>
+      </div>
+      <div id="chartwrap" style="margin-top:12px;overflow-x:auto"></div>
+      <div id="chartlegend" class="flex" style="gap:12px;flex-wrap:wrap;margin-top:10px;font-size:12px"></div>
     </div>
+
+    <!-- ROUTING SHARE -->
     <div class="card">
-      <h3>By project <small class="hint">— apps must send <code>X-Project</code> header; shows <code>(none)</code> until they do</small></h3>
-      <table id="byprojecttbl"><tr><th>project</th><th>calls</th><th>tokens</th><th>errors</th><th>error %</th></tr></table>
+      <h3>Routing — where traffic & tokens go <small class="hint">— share by lane</small></h3>
+      <div id="laneshare"></div>
     </div>
+
+    <!-- BY PROJECT -->
+    <div class="card" style="overflow:auto">
+      <h3>By project <small class="hint">— who's spending tokens. Click a row to see its calls. <code>(none)</code> = no <code>X-Project</code> header.</small></h3>
+      <table id="byprojecttbl"><tr>
+        <th data-sort="project">project</th><th data-sort="n">calls</th><th data-sort="tok">tokens</th>
+        <th data-sort="io">in → out</th><th data-sort="usd">est $</th><th data-sort="avg_ms">avg</th>
+        <th data-sort="errors">err%</th><th>lanes</th><th data-sort="last">last seen</th><th style="width:26%">share</th>
+      </tr></table>
+    </div>
+
+    <!-- BY MODEL -->
+    <div class="card" style="overflow:auto">
+      <h3>By model <small class="hint">— requested model id → lane</small></h3>
+      <table id="bymodeltbl"><tr><th>requested model</th><th>lane</th><th>calls</th><th>tokens</th><th>in → out</th><th>est $</th><th>avg</th></tr></table>
+    </div>
+
     <div class="row">
-      <div class="card" style="flex:1"><h3>By lane</h3><table id="bylanetbl"><tr><th>lane</th><th>calls</th><th>tokens</th></tr></table></div>
+      <div class="card" style="flex:1"><h3>By lane</h3><table id="bylanetbl"><tr><th>lane</th><th>calls</th><th>tokens</th><th>avg</th><th>err</th></tr></table></div>
       <div class="card" style="flex:1"><h3>By key</h3><table id="bykeytbl"><tr><th>key</th><th>calls</th></tr></table></div>
     </div>
   </div>
@@ -763,24 +805,136 @@ $('statwin').addEventListener('click',e=>{
   [...$('statwin').children].forEach(x=>x.classList.toggle('on',x===b));
   loadStats();
 });
+// shared formatters + color palette for charts/share bars
+function nfmt(n){ n=+n||0; if(n>=1e9)return (n/1e9).toFixed(2)+'B'; if(n>=1e6)return (n/1e6).toFixed(2)+'M'; if(n>=1e3)return (n/1e3).toFixed(1)+'k'; return ''+Math.round(n); }
+function usd(n){ n=+n||0; if(n===0)return '$0'; if(n<0.01)return '<$0.01'; return '$'+n.toFixed(n<10?2:0); }
+function ago(ts){ if(!ts)return '—'; const s=(Date.now()-ts)/1000; if(s<60)return Math.round(s)+'s'; if(s<3600)return Math.round(s/60)+'m'; if(s<86400)return Math.round(s/3600)+'h'; return Math.round(s/86400)+'d'; }
+const PALETTE=['#58a6ff','#3fb950','#d08770','#d29922','#bc8cff','#f85149','#56d4dd','#e3b341','#8bc88b','#ff7b72'];
+const LANE_COLOR={local:'#3fb950',crazyrouter:'#58a6ff',wrappy:'#d08770',blocked:'#f85149',images:'#bc8cff'};
+function seriesColor(name,i){ return LANE_COLOR[name]||PALETTE[i%PALETTE.length]; }
+
+let STAT=null, chartMetric='tok', chartBy='lane', projSort={key:'tok',dir:-1};
+const METRIC_LABEL={tok:'tokens',n:'calls',err:'errors'};
+
 async function loadStats(){
   let s; try{s=await api('stats?window='+encodeURIComponent(statWin));}catch(e){return;}
   if(s.dbReady===false){ $('statgrid').innerHTML=kv('Status','call DB unavailable'); return; }
-  const lbl=WIN_LABEL[s.window]||s.window;
+  STAT=s; const lbl=WIN_LABEL[s.window]||s.window;
+  const inT=s.windowPromptTokens||0, outT=s.windowCompletionTokens||0, tot=s.windowTokens||0;
+  const avgTok=s.windowCalls>0?Math.round(tot/s.windowCalls):0;
   $('statgrid').innerHTML=
-    kv('Total calls',s.total)+kv('Calls ('+lbl+')',s.windowCalls)+
-    kv('Errors ('+lbl+')',s.windowErrors)+kv('Tokens ('+lbl+')',(s.windowTokens||0).toLocaleString())+
-    kv('Retain',s.retain)+kv('Oldest',s.oldest?fmtTime(s.oldest):'—');
+    kv('Tokens ('+lbl+')',(tot).toLocaleString())+
+    kv('In → Out',`${nfmt(inT)} <span class="mut">→</span> ${nfmt(outT)}`)+
+    kv('Avg / call',avgTok.toLocaleString())+
+    kv('Est. cost',`${usd(s.windowCost)} <small class="hint">crazyrouter</small>`)+
+    kv('Calls',s.windowCalls.toLocaleString())+
+    kv('Errors',(s.windowErrors||0)+(s.windowJsonFails?` <small class="hint">(${s.windowJsonFails} refusal)</small>`:''))+
+    kv('Total ever',s.total.toLocaleString())+
+    kv('Oldest',s.oldest?fmtTime(s.oldest):'—');
+  renderLaneShare(s);
+  renderProjects();
   const fill=(tbl,rows,cells)=>{const t=$(tbl);t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());rows.forEach(r=>{const tr=document.createElement('tr');tr.innerHTML=cells(r);t.appendChild(tr);});};
-  fill('bymodeltbl',s.byModel||[],r=>`<td class="mono" style="font-size:12px">${esc(r.req_model||'-')}</td><td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono">${r.avg_ms??'—'}</td>`);
-  fill('byprojecttbl',s.byProject||[],r=>{
-    const errPct=r.n>0?(r.errors/r.n*100).toFixed(1):'0.0';
-    const errCls=r.errors>0?'style="color:var(--red);font-weight:700"':'class="mut"';
-    return `<td class="mono" style="font-size:12px">${esc(r.project||'(none)')}</td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono" ${errCls}>${r.errors}</td><td class="mono" ${errCls}>${errPct}%</td>`;
-  });
+  fill('bymodeltbl',s.byModel||[],r=>`<td class="mono" style="font-size:12px">${esc(r.req_model||'-')}</td><td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td><td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td>`);
   KNOWN_PROJECTS=(s.byProject||[]).map(r=>r.project).filter(Boolean); renderProjRoutes();
-  fill('bylanetbl',s.byLane||[],r=>`<td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td>`);
+  fill('bylanetbl',s.byLane||[],r=>`<td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono">${fmtMs(r.avg_ms)}</td><td class="mono"${r.errors>0?' style="color:var(--red)"':''}>${r.errors??'—'}</td>`);
   fill('bykeytbl',s.byKey||[],r=>`<td class="mono" style="font-size:12px">${esc(r.key_label||'')}</td><td class="mono">${r.n}</td>`);
+  loadSeries();
+}
+
+// ---- routing share bars (by lane) ----
+function renderLaneShare(s){
+  const box=$('laneshare'); const lanes=s.byLane||[];
+  const totN=lanes.reduce((a,r)=>a+r.n,0)||1, totT=lanes.reduce((a,r)=>a+r.tok,0)||1;
+  box.innerHTML=lanes.map((r,i)=>{
+    const c=seriesColor(r.lane,i), cp=(r.n/totN*100), tp=(r.tok/totT*100);
+    return `<div class="lblrow"><span class="nm"><span class="swatch" style="background:${c}"></span>${esc(r.lane)}</span>`+
+      `<span class="bar"><i style="width:${cp.toFixed(1)}%;background:${c}"></i></span>`+
+      `<span class="vv">${r.n} calls (${cp.toFixed(0)}%) · ${nfmt(r.tok)} tok (${tp.toFixed(0)}%)</span></div>`;
+  }).join('')||'<span class="mut">no traffic in window</span>';
+}
+
+// ---- by-project table (sortable + click to drill into call log) ----
+function renderProjects(){
+  if(!STAT)return; const t=$('byprojecttbl');
+  t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
+  const rows=[...(STAT.byProject||[])];
+  const maxT=Math.max(1,...rows.map(r=>r.tok||0));
+  const k=projSort.key, d=projSort.dir;
+  rows.sort((a,b)=>{ let x,y;
+    if(k==='project'){x=a.project||'';y=b.project||'';return d*String(x).localeCompare(String(y));}
+    if(k==='io'){x=a.ptok||0;y=b.ptok||0;} else if(k==='errors'){x=a.n?a.errors/a.n:0;y=b.n?b.errors/b.n:0;}
+    else {x=a[k]||0;y=b[k]||0;}
+    return d*((x>y?1:x<y?-1:0));
+  });
+  // header arrows
+  [...t.querySelectorAll('th[data-sort]')].forEach(th=>{const own=th.dataset.sort===k; th.style.color=own?'var(--acc)':''; th.dataset.arr=own?(d<0?' ▾':' ▴'):''; if(!th.dataset.base)th.dataset.base=th.textContent.replace(/[ ▾▴]+$/,''); th.textContent=th.dataset.base+(own?(d<0?' ▾':' ▴'):'');});
+  rows.forEach(r=>{
+    const errPct=r.n>0?(r.errors/r.n*100):0;
+    const errCls=r.errors>0?'style="color:var(--red);font-weight:700"':'class="mut"';
+    const share=(r.tok/maxT*100);
+    const tr=document.createElement('tr'); tr.dataset.proj=r.project||'';
+    tr.onclick=()=>{ selTab('Calls'); $('callproject').value=(r.project&&r.project!=='(none)')?r.project:''; loadCalls(); };
+    tr.innerHTML=`<td class="mono" style="font-size:12px">${esc(r.project||'(none)')}</td>`+
+      `<td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td>`+
+      `<td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td>`+
+      `<td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td>`+
+      `<td class="mono" ${errCls}>${errPct.toFixed(errPct&&errPct<10?1:0)}%</td>`+
+      `<td style="font-size:11px">${esc(String(r.lanes||'').split(',').join(' '))}</td>`+
+      `<td class="mono mut" style="font-size:11px">${ago(r.last)}</td>`+
+      `<td><span class="bar"><i style="width:${share.toFixed(1)}%;background:var(--acc)"></i></span></td>`;
+    t.appendChild(tr);
+  });
+}
+// header click → sort
+$('byprojecttbl').addEventListener('click',e=>{
+  const th=e.target.closest('th[data-sort]'); if(!th)return;
+  const key=th.dataset.sort;
+  projSort = projSort.key===key ? {key,dir:-projSort.dir} : {key,dir:(key==='project'?1:-1)};
+  renderProjects();
+});
+
+// ---- history chart (inline SVG, stacked bars) ----
+$('metricSeg').addEventListener('click',e=>{const b=e.target.closest('button[data-metric]');if(!b)return;chartMetric=b.dataset.metric;[...$('metricSeg').children].forEach(x=>x.classList.toggle('on',x===b));loadSeries();});
+$('bySeg').addEventListener('click',e=>{const b=e.target.closest('button[data-by]');if(!b)return;chartBy=b.dataset.by;[...$('bySeg').children].forEach(x=>x.classList.toggle('on',x===b));loadSeries();});
+async function loadSeries(){
+  let d; try{d=await api('series?window='+encodeURIComponent(statWin)+'&by='+chartBy);}catch(e){return;}
+  renderChart(d);
+}
+function renderChart(d){
+  const wrap=$('chartwrap'), leg=$('chartlegend');
+  const pts=d.points||[], series=d.series||[];
+  const bm=d.bucketMs, bl=bm>=86400000?(bm/86400000+'d'):bm>=3600000?(bm/3600000+'h'):(bm/60000+'min');
+  $('charthint').textContent=`— ${METRIC_LABEL[chartMetric]} per ${bl} bucket, ${chartBy}`;
+  if(!pts.length){ wrap.innerHTML='<span class="mut">no data in window</span>'; leg.innerHTML=''; return; }
+  const W=Math.max(640,pts.length*16+60), H=240, padL=52, padB=22, padT=10, plotH=H-padB-padT, plotW=W-padL-10;
+  const field=chartMetric==='tok'?'tok':chartMetric==='err'?null:'n';
+  // per-bucket stacked totals
+  const stackVal=(p,name)=>chartMetric==='err'?(name==='__err'?p.totalErr:0):(p[field][name]||0);
+  const useSeries=chartMetric==='err'?['__err']:series;
+  const totals=pts.map(p=>useSeries.reduce((a,nm)=>a+stackVal(p,nm),0));
+  const maxV=Math.max(1,...totals);
+  const bw=Math.max(4,Math.min(26,(plotW/pts.length)-3));
+  const x=i=>padL+i*(plotW/pts.length)+(plotW/pts.length-bw)/2;
+  const y=v=>padT+plotH-(v/maxV*plotH);
+  // gridlines (4)
+  let g=''; for(let i=0;i<=4;i++){const yy=padT+plotH-(i/4*plotH);const vv=maxV*i/4;g+=`<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W-10}" y2="${yy.toFixed(1)}" stroke="#21262d"/><text x="${padL-6}" y="${(yy+3).toFixed(1)}" fill="#9aa4b2" font-size="10" text-anchor="end">${nfmt(vv)}</text>`;}
+  // bars
+  let bars='';
+  pts.forEach((p,i)=>{
+    let yacc=padT+plotH;
+    useSeries.forEach((nm,si)=>{
+      const v=stackVal(p,nm); if(v<=0)return;
+      const h=v/maxV*plotH; yacc-=h;
+      const c=chartMetric==='err'?'#f85149':seriesColor(nm,series.indexOf(nm));
+      bars+=`<rect x="${x(i).toFixed(1)}" y="${yacc.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${c}"><title>${fmtTime(p.t)}\n${esc(nm==='__err'?'errors':nm)}: ${v.toLocaleString()}</title></rect>`;
+    });
+  });
+  // x labels (~6)
+  let xl=''; const step=Math.max(1,Math.ceil(pts.length/6));
+  pts.forEach((p,i)=>{ if(i%step)return; const t=new Date(p.t); const lab=d.bucketMs<3600000?t.toISOString().slice(11,16):t.toISOString().slice(5,16).replace('T',' '); xl+=`<text x="${(x(i)+bw/2).toFixed(1)}" y="${H-6}" fill="#9aa4b2" font-size="10" text-anchor="middle">${lab}</text>`; });
+  wrap.innerHTML=`<svg width="${W}" height="${H}" style="max-width:none">${g}${bars}${xl}</svg>`;
+  leg.innerHTML=chartMetric==='err'?'<span><span class="swatch" style="background:#f85149"></span>errors</span>'
+    :series.map((nm,i)=>`<span><span class="swatch" style="background:${seriesColor(nm,i)}"></span>${esc(nm)}</span>`).join('');
 }
 
 // ---- boot ----

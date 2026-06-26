@@ -319,6 +319,32 @@ function persistConfig() {
 
 loadConfig();
 
+// ── pricing (for usage cost estimates in the admin stats view) ──────────────
+// PRICES_FILE is the crazyrouter pricing snapshot ({models:[{model,input_per_1m,
+// output_per_1m}]}). Cached + mtime-invalidated. Returns { id -> {in,out} } in
+// USD per 1M tokens. Only crazyrouter ids are priced; wrappy (claudebox, flat
+// subscription) and local lanes have no metered cost → treated as $0.
+let _priceCache = { mtime: 0, map: {} };
+function priceMap() {
+  try {
+    const st = fs.statSync(PRICES_FILE);
+    if (st.mtimeMs !== _priceCache.mtime) {
+      const j = JSON.parse(fs.readFileSync(PRICES_FILE, "utf8"));
+      const map = {};
+      for (const m of (j.models || [])) if (m && m.model && m.type === "token")
+        map[m.model] = { in: +m.input_per_1m || 0, out: +m.output_per_1m || 0 };
+      _priceCache = { mtime: st.mtimeMs, map };
+    }
+  } catch { /* no prices file → empty map, everything reads as $0 */ }
+  return _priceCache.map;
+}
+// Cost in USD for one (sentModel, lane, ptok, ctok) aggregate. wrappy/local = flat → 0.
+function costUsd(prices, sentModel, lane, ptok, ctok) {
+  if (lane === "wrappy" || lane === "local") return 0;
+  const p = prices[sentModel]; if (!p) return 0;
+  return (ptok || 0) / 1e6 * p.in + (ctok || 0) / 1e6 * p.out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Call log → SQLite (node:sqlite, built in). One row per request that reaches a
 // lane (incl. blocked/gated/error). Lives on the /data persistent volume so it
@@ -1353,18 +1379,79 @@ async function handleAdminApi(req, res, path) {
       // json-enforce failures are almost always model refusals (caller asked for JSON, model replied in prose);
       // surfaced here so the dashboard can flag them as "not a proxy bug" rather than burying them in error count.
       const windowJsonFails = db.prepare(`SELECT COUNT(*) n FROM calls WHERE ${W} AND error LIKE 'json_validation_failed%'`).get(since).n;
+      const windowPromptTokens = db.prepare(`SELECT COALESCE(SUM(prompt_tokens),0) t FROM calls WHERE ${W}`).get(since).t;
+      const windowCompletionTokens = db.prepare(`SELECT COALESCE(SUM(completion_tokens),0) t FROM calls WHERE ${W}`).get(since).t;
       const byLane = db.prepare(`SELECT lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok,
         ROUND(AVG(duration_ms)) avg_ms, SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) errors
         FROM calls WHERE ${W} GROUP BY lane ORDER BY n DESC`).all(since);
       const byKey = db.prepare(`SELECT key_label, COUNT(*) n FROM calls WHERE ${W} GROUP BY key_label ORDER BY n DESC`).all(since);
-      const byModel = db.prepare(`SELECT req_model, lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok, ROUND(AVG(duration_ms)) avg_ms FROM calls WHERE ${W} GROUP BY req_model ORDER BY n DESC LIMIT 30`).all(since);
+      const byModel = db.prepare(`SELECT req_model, lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok,
+        COALESCE(SUM(prompt_tokens),0) ptok, COALESCE(SUM(completion_tokens),0) ctok, ROUND(AVG(duration_ms)) avg_ms
+        FROM calls WHERE ${W} GROUP BY req_model ORDER BY tok DESC LIMIT 40`).all(since);
       const byProject = db.prepare(`SELECT COALESCE(NULLIF(project,''),'(none)') project, COUNT(*) n,
-        COALESCE(SUM(total_tokens),0) tok, SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) errors
-        FROM calls WHERE ${W} GROUP BY COALESCE(NULLIF(project,''),'(none)') ORDER BY n DESC LIMIT 50`).all(since);
+        COALESCE(SUM(total_tokens),0) tok, COALESCE(SUM(prompt_tokens),0) ptok, COALESCE(SUM(completion_tokens),0) ctok,
+        ROUND(AVG(duration_ms)) avg_ms, SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) errors,
+        MAX(ts) last, COUNT(DISTINCT req_model) models, GROUP_CONCAT(DISTINCT lane) lanes
+        FROM calls WHERE ${W} GROUP BY COALESCE(NULLIF(project,''),'(none)') ORDER BY tok DESC LIMIT 60`).all(since);
+      // Cost estimate: group by (project, sent_model, lane) to price each cohort, then fold into project/model.
+      const prices = priceMap();
+      const costRows = db.prepare(`SELECT COALESCE(NULLIF(project,''),'(none)') project, req_model, sent_model, lane,
+        COALESCE(SUM(prompt_tokens),0) ptok, COALESCE(SUM(completion_tokens),0) ctok
+        FROM calls WHERE ${W} GROUP BY COALESCE(NULLIF(project,''),'(none)'), sent_model, req_model, lane`).all(since);
+      let windowCost = 0; const costByProject = {}, costByModel = {};
+      for (const r of costRows) {
+        const c = costUsd(prices, r.sent_model, r.lane, r.ptok, r.ctok);
+        windowCost += c;
+        costByProject[r.project] = (costByProject[r.project] || 0) + c;
+        costByModel[r.req_model] = (costByModel[r.req_model] || 0) + c;
+      }
+      byProject.forEach((r) => { r.usd = +(costByProject[r.project] || 0).toFixed(4); });
+      byModel.forEach((r) => { r.usd = +(costByModel[r.req_model] || 0).toFixed(4); });
       const oldest = db.prepare("SELECT MIN(ts) t FROM calls").get().t;
-      return sendJson(res, 200, { dbReady: true, window: winKey, total, windowCalls, windowErrors, windowTokens, windowJsonFails, byLane, byKey, byModel, byProject, oldest, retain: CFG.logging.retain });
+      return sendJson(res, 200, { dbReady: true, window: winKey, total, windowCalls, windowErrors, windowTokens,
+        windowPromptTokens, windowCompletionTokens, windowJsonFails, windowCost: +windowCost.toFixed(4),
+        pricedLanes: ["crazyrouter"], byLane, byKey, byModel, byProject, oldest, retain: CFG.logging.retain });
     } catch (e) { return sendJson(res, 500, { error: e.message }); }
   }
+
+  // ── time-series history (tokens / calls / errors over time, grouped) ──
+  // ?window=…&by=lane|project|model. Buckets auto-sized to ~60 points across the
+  // window. Returns top series by total tokens (rest folded into "other").
+  if (sub === "series" && req.method === "GET") {
+    if (!db) return sendJson(res, 200, { dbReady: false });
+    try {
+      const q = url.parse(req.url, true).query;
+      const WINDOWS = { "15m": 900000, "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000 };
+      const winKey = (q.window in WINDOWS || q.window === "all") ? q.window : "24h";
+      const by = ["lane", "project", "model"].includes(q.by) ? q.by : "lane";
+      const groupCol = by === "lane" ? "lane" : by === "model" ? "req_model" : "COALESCE(NULLIF(project,''),'(none)')";
+      const oldest = db.prepare("SELECT MIN(ts) t FROM calls").get().t || Date.now();
+      const span = winKey === "all" ? Math.max(60000, Date.now() - oldest) : WINDOWS[winKey];
+      const since = winKey === "all" ? oldest : Date.now() - span;
+      // bucket width: aim for ~60 buckets, snapped to a sane floor of 1 minute.
+      const bucketMs = Math.max(60000, Math.round(span / 60 / 60000) * 60000);
+      const rows = db.prepare(`SELECT (ts/${bucketMs}) b, ${groupCol} g,
+        COUNT(*) n, COALESCE(SUM(total_tokens),0) tok, SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) err
+        FROM calls WHERE ts >= ? GROUP BY b, g`).all(since);
+      // top-8 series by total tokens; everything else → "other".
+      const totals = {}; for (const r of rows) totals[r.g] = (totals[r.g] || 0) + r.tok;
+      const top = Object.entries(totals).sort((a, b2) => b2[1] - a[1]).slice(0, 8).map(([k]) => k);
+      const topSet = new Set(top); const hasOther = Object.keys(totals).length > top.length;
+      const series = hasOther ? [...top, "other"] : top;
+      const points = new Map(); // bucketStart -> {t, tok:{}, n:{}, totalTok, totalN, totalErr}
+      for (const r of rows) {
+        const t = r.b * bucketMs;
+        let p = points.get(t);
+        if (!p) { p = { t, tok: {}, n: {}, totalTok: 0, totalN: 0, totalErr: 0 }; points.set(t, p); }
+        const key = topSet.has(r.g) ? r.g : "other";
+        p.tok[key] = (p.tok[key] || 0) + r.tok; p.n[key] = (p.n[key] || 0) + r.n;
+        p.totalTok += r.tok; p.totalN += r.n; p.totalErr += r.err;
+      }
+      const out = [...points.values()].sort((a, b2) => a.t - b2.t);
+      return sendJson(res, 200, { dbReady: true, window: winKey, by, bucketMs, since, series, points: out });
+    } catch (e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
   if (sub === "calls/clear" && req.method === "POST") {
     if (!db) return sendJson(res, 200, { ok: true, dbReady: false });
     try { db.exec("DELETE FROM calls;"); console.log(`[admin] call log cleared ip=${ip}`); return sendJson(res, 200, { ok: true }); }
