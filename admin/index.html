@@ -232,6 +232,24 @@ details.adv>summary:hover{color:var(--fg)}
       </div>
     </div>
 
+    <!-- Usage limits -->
+    <div class="card" style="border-color:var(--amb)">
+      <h3 style="color:var(--fg);font-size:16px">📊 Usage limits <small class="hint">— cap tokens/calls per project over a rolling window. As usage climbs: <b style="color:var(--amb)">warn</b> (header) → <b style="color:var(--amb)">slow</b> (throttle) → <b style="color:var(--red)">block</b> (429). 0 = no cap. An exact project row beats its group; group beats the default.</small></h3>
+      <div style="overflow:auto"><table id="limittbl"><tr>
+        <th style="min-width:150px">Project</th><th>Window</th><th>Token cap</th><th>Call cap</th>
+        <th title="warn at this % of cap">Warn%</th><th title="throttle at this % of cap">Slow%</th>
+        <th title="ms delay added while throttling">Slow ms</th><th title="what happens at 100%">At 100%</th>
+        <th>Usage now</th><th style="width:40px"></th>
+      </tr></table></div>
+      <div class="row" style="margin-top:8px;align-items:center">
+        <input id="newlimproj" placeholder="project slug (exact, e.g. fb-bot)" list="projlist" style="flex:1"/>
+        <button onclick="addLimitRow()" style="flex:0 0 auto">+ add project limit</button>
+        <span style="flex:1"></span>
+        <button class="primary" onclick="saveLimits()" style="flex:0 0 auto">Save usage limits</button>
+      </div>
+      <div id="limitmsg" class="hint" style="margin-top:6px"></div>
+    </div>
+
     <!-- Operational toggles -->
     <div class="card" style="border-color:var(--amb)">
       <h3 style="color:var(--amb)">⏻ Force model <small class="hint">— override EVERY request, ignore what the caller asks for</small></h3>
@@ -451,7 +469,8 @@ function renderState(s){
   document.querySelectorAll('input[name=cp]').forEach(r=>r.checked=(r.value===(s.cloudPolicy||'open')));
   $('cloudAllowlist').value=(s.cloudAllowlist||[]).join(', ');
   const dr=s.defaultRoute||{}; $('drLane').value=dr.lane||'none'; $('drModel').value=dr.model||'';
-  renderMap(); renderRoutes(); renderProjGroups(); renderProjRoutes(); fillProjectList();
+  if(!S.projectLimits)S.projectLimits={};
+  renderMap(); renderRoutes(); renderProjGroups(); renderProjRoutes(); renderLimits(); fillProjectList();
   // secrets
   $('m-claude').textContent=s.wrappyTokenMasked||'(none)';
   $('m-oblit').textContent=s.oblitTokenSet?s.oblitTokenMasked:'(open — no gate)';
@@ -562,6 +581,58 @@ function setProjModel(k,val){
 }
 
 // ---- project groups ----
+// ---- usage limits editor ----
+const LIM_WINDOWS=['1h','6h','24h','7d','30d'];
+const LIM_HARD=[['block','🚫 block 429'],['slow','🐢 slow only'],['warn','⚠ warn only']];
+function limOpts(arr,val){return arr.map(o=>{const v=Array.isArray(o)?o[0]:o,l=Array.isArray(o)?o[1]:o;return `<option value="${v}"${v===val?' selected':''}>${esc(l)}</option>`;}).join('');}
+function limUsageCell(name,isDef){
+  if(isDef)return '<span class="mut">—</span>';
+  const r=(STAT&&STAT.byProject||[]).find(p=>(p.project||'').toLowerCase()===String(name).toLowerCase());
+  if(r&&r.limitPct!=null){const sp=(r.limit&&r.limit.slowPct)||95;const c=r.limitPct>=100?'var(--red)':r.limitPct>=sp?'var(--amb)':'var(--grn)';return `<span class="mono" style="color:${c};font-weight:700">${r.limitPct}%</span>`;}
+  return '<span class="mut" style="font-size:11px">—</span>';
+}
+function limRowHtml(kind,name,l){
+  const isDef=kind==='default';
+  const projCell=isDef?`<td><b>★ default</b><div class="hint">all attributed projects</div></td>`
+    :`<td class="mono"><input value="${esc(name)}" data-f="name" style="width:140px"/></td>`;
+  return projCell
+    +`<td><select data-f="window">${limOpts(LIM_WINDOWS,l.window||'24h')}</select></td>`
+    +`<td><input type="number" min="0" data-f="tokens" value="${l.tokens||0}" style="width:100px"/></td>`
+    +`<td><input type="number" min="0" data-f="calls" value="${l.calls||0}" style="width:78px"/></td>`
+    +`<td><input type="number" min="0" max="100" data-f="warnPct" value="${l.warnPct??80}" style="width:50px"/></td>`
+    +`<td><input type="number" min="0" max="100" data-f="slowPct" value="${l.slowPct??95}" style="width:50px"/></td>`
+    +`<td><input type="number" min="0" data-f="slowMs" value="${l.slowMs??1500}" style="width:62px"/></td>`
+    +`<td><select data-f="hard">${limOpts(LIM_HARD,l.hard||'block')}</select></td>`
+    +`<td>${limUsageCell(name,isDef)}</td>`
+    +`<td>${isDef?'':`<button class="ghost" title="remove" onclick="this.closest('tr').remove()">✕</button>`}</td>`;
+}
+function renderLimits(){
+  const t=$('limittbl'); if(!t)return; t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
+  const def=S.projectLimitDefault||{window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'};
+  const dtr=document.createElement('tr'); dtr.dataset.kind='default'; dtr.innerHTML=limRowHtml('default','',def); t.appendChild(dtr);
+  const pl=S.projectLimits||{};
+  Object.keys(pl).sort().forEach(k=>{ const tr=document.createElement('tr'); tr.dataset.kind='project'; tr.innerHTML=limRowHtml('project',k,pl[k]); t.appendChild(tr); });
+}
+function addLimitRow(){
+  const name=($('newlimproj').value||'').trim().toLowerCase(); if(!name){toast('enter a project slug',true);return;}
+  const t=$('limittbl');
+  if([...t.querySelectorAll('tr[data-kind="project"] input[data-f="name"]')].some(i=>i.value.trim().toLowerCase()===name)){toast('that project already has a row',true);return;}
+  const tr=document.createElement('tr'); tr.dataset.kind='project'; tr.innerHTML=limRowHtml('project',name,{window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'});
+  t.appendChild(tr); $('newlimproj').value='';
+}
+function readLimRow(tr){ const g=f=>tr.querySelector(`[data-f="${f}"]`);
+  return {window:g('window').value,tokens:+g('tokens').value||0,calls:+g('calls').value||0,warnPct:+g('warnPct').value||0,slowPct:+g('slowPct').value||0,slowMs:+g('slowMs').value||0,hard:g('hard').value}; }
+async function saveLimits(){
+  const t=$('limittbl'); const projectLimits={}; let projectLimitDefault=null;
+  t.querySelectorAll('tr[data-kind]').forEach(tr=>{
+    if(tr.dataset.kind==='default'){ projectLimitDefault=readLimRow(tr); return; }
+    const ni=tr.querySelector('[data-f="name"]'); const nm=(ni&&ni.value||'').trim().toLowerCase(); if(!nm)return;
+    projectLimits[nm]=readLimRow(tr);
+  });
+  try{ const r=await api('config',{method:'POST',body:JSON.stringify({projectLimits,projectLimitDefault})}); renderState(r.state); toast('usage limits saved'+(r.persisted?' & persisted':' (NOT persisted!)'),!r.persisted); $('limitmsg').textContent=`${Object.keys(projectLimits).length} project limit(s) active`; }
+  catch(e){ toast(e.message,true); }
+}
+
 function renderProjGroups(){
   const t=$('projgrptbl'); if(!t)return; t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
   const groups=S.projectGroups||[];
@@ -896,7 +967,11 @@ function renderProjects(){
     const share=(r.tok/maxT*100);
     const tr=document.createElement('tr'); tr.dataset.proj=r.project||'';
     tr.onclick=()=>{ selTab('Calls'); $('callproject').value=(r.project&&r.project!=='(none)')?r.project:''; loadCalls(); };
-    tr.innerHTML=`<td class="mono" style="font-size:12px">${esc(r.project||'(none)')}</td>`+
+    let badge='';
+    if(r.limit&&r.limitPct!=null){ const sp=r.limit.slowPct||95; const col=r.limitPct>=100?'var(--red)':r.limitPct>=sp?'var(--amb)':'#3fb950';
+      const cap=r.limit.tokens>0?nfmt(r.limit.tokens)+' tok':r.limit.calls>0?r.limit.calls+' calls':'';
+      badge=` <span class="chip" title="${r.limitPct}% of ${cap}/${r.limit.window} · at 100%: ${r.limit.hard}" style="color:${col};border-color:${col}">${r.limitPct}% ${r.limit.hard==='block'?'🚫':r.limit.hard==='slow'?'🐢':'⚠'}</span>`; }
+    tr.innerHTML=`<td class="mono" style="font-size:12px">${esc(r.project||'(none)')}${badge}</td>`+
       `<td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td>`+
       `<td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td>`+
       `<td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td>`+

@@ -89,6 +89,24 @@ function normLane(l) {
   return LANE_SET.has(c) ? c : "";
 }
 
+const LIMIT_WINDOWS = ["1h", "6h", "24h", "7d", "30d"];
+const WINDOW_MS = { "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000 };
+// Sanitize a usage-limit object from untrusted config. Returns a normalized limit or null.
+function sanitizeLimit(v) {
+  if (!v || typeof v !== "object") return null;
+  const num = (x, d) => { const n = Number(x); return Number.isFinite(n) && n >= 0 ? n : d; };
+  const clampPct = (x, d) => Math.max(0, Math.min(100, num(x, d)));
+  return {
+    window: LIMIT_WINDOWS.includes(v.window) ? v.window : "24h",
+    tokens: Math.round(num(v.tokens, 0)),
+    calls: Math.round(num(v.calls, 0)),
+    warnPct: clampPct(v.warnPct, 80),
+    slowPct: clampPct(v.slowPct, 95),
+    slowMs: Math.min(60000, Math.round(num(v.slowMs, 1500))),
+    hard: ["block", "slow", "warn"].includes(v.hard) ? v.hard : "block",
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Live config: env defaults, then /data/config.json overlay.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -153,6 +171,19 @@ function envDefaults() {
     // rejects all matching calls (zero tokens); otherwise lane/model reroute them. An exact
     // projectRoutes entry always wins over a group (lets you exempt one project from a group block).
     projectGroups: [],
+    // ── per-project usage limits (rolling-window quotas) ──
+    // projectLimits[<project>] = { window, tokens, calls, warnPct, slowPct, slowMs, hard }
+    //   window  rolling count window: 1h|6h|24h|7d|30d (default 24h)
+    //   tokens  token cap in window (0 = no token cap)   calls  call cap (0 = none)
+    //   warnPct ≥this% of cap → warn (X-Usage-Warning header + log)   default 80
+    //   slowPct ≥this% → throttle: sleep slowMs before forwarding      default 95
+    //   slowMs  delay added per request while throttling (ms)          default 1500
+    //   hard    at ≥100%: "block" (429) | "slow" (keep throttling) | "warn" (never block)
+    // An exact projectLimits entry is authoritative (even all-zero = exempt). Else a matching
+    // group's .limit, else projectLimitDefault (applied to every attributed project when its
+    // tokens/calls > 0). Usage is summed from the call log over the window; nothing persisted.
+    projectLimits: {},
+    projectLimitDefault: { window: "24h", tokens: 0, calls: 0, warnPct: 80, slowPct: 95, slowMs: 1500, hard: "block" },
     // cloudPolicy governs models that fall through to the crazyrouter lane:
     //   "open"      → forward anything (legacy behaviour)
     //   "allowlist" → only ids in cloudAllowlist reach crazyrouter; everything else → defaultRoute
@@ -266,11 +297,25 @@ function mergeConfig(base, saved) {
       const nkey = name.toLowerCase();
       if (!name || !prefixes.length || seen.has(nkey)) continue;
       seen.add(nkey);
-      if (g.block) { pg.push({ name, prefixes, block: true }); continue; }
+      const limit = sanitizeLimit(g.limit);
+      if (g.block) { pg.push({ name, prefixes, block: true, ...(limit ? { limit } : {}) }); continue; }
       const lane = normLane(g.lane);
-      if (lane) pg.push({ name, prefixes, lane, model: typeof g.model === "string" ? g.model.trim() : "" });
+      if (lane || limit) pg.push({ name, prefixes, ...(lane ? { lane, model: typeof g.model === "string" ? g.model.trim() : "" } : {}), ...(limit ? { limit } : {}) });
     }
     c.projectGroups = pg;
+  }
+  if (saved.projectLimits && typeof saved.projectLimits === "object" && !Array.isArray(saved.projectLimits)) {
+    const pl = {};
+    for (const [k, v] of Object.entries(saved.projectLimits)) {
+      if (typeof k !== "string" || !k.trim()) continue;
+      const lim = sanitizeLimit(v);
+      if (lim) pl[k.trim().toLowerCase()] = lim;
+    }
+    c.projectLimits = pl;
+  }
+  if (saved.projectLimitDefault && typeof saved.projectLimitDefault === "object") {
+    const d = sanitizeLimit(saved.projectLimitDefault);
+    if (d) c.projectLimitDefault = d;
   }
   if (["open", "allowlist", "off"].includes(saved.cloudPolicy)) c.cloudPolicy = saved.cloudPolicy;
   if (Array.isArray(saved.cloudAllowlist))
@@ -373,6 +418,7 @@ function initDb() {
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(req_model);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_lane ON calls(lane);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_project ON calls(project);");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_calls_project_ts ON calls(project, ts);"); // per-project usage windows
     insertStmt = db.prepare(`INSERT INTO calls
       (ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,req_content,resp_content,project)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
@@ -1038,6 +1084,54 @@ function matchProjectGroup(pkey) {
   return null;
 }
 
+// ── per-project usage limits ────────────────────────────────────────────────
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Resolve the effective limit for a project: exact entry (authoritative) → matching
+// group's .limit → projectLimitDefault (only when it actually caps something). null = no limit.
+function limitFor(project) {
+  if (!project) return null;
+  const k = String(project).trim().toLowerCase();
+  const pl = CFG.projectLimits || {};
+  if (Object.prototype.hasOwnProperty.call(pl, k)) {
+    const e = pl[k];
+    return (e && (e.tokens > 0 || e.calls > 0)) ? e : null; // explicit all-zero entry = exempt
+  }
+  const g = matchProjectGroup(k);
+  if (g && g.limit && (g.limit.tokens > 0 || g.limit.calls > 0)) return g.limit;
+  const d = CFG.projectLimitDefault;
+  if (d && (d.tokens > 0 || d.calls > 0)) return d;
+  return null;
+}
+// Rolling-window usage for a project from the call log, cached ~5s to avoid per-request SUMs.
+const _usageCache = new Map();
+function projectUsage(project, windowMs) {
+  if (!db || !project) return { tokens: 0, calls: 0 };
+  const key = project + "|" + windowMs, now = Date.now(), c = _usageCache.get(key);
+  if (c && now - c.at < 5000) return c.val;
+  let val = { tokens: 0, calls: 0 };
+  try {
+    const r = db.prepare("SELECT COUNT(*) calls, COALESCE(SUM(total_tokens),0) tokens FROM calls WHERE project=? AND ts>=?").get(project, now - windowMs);
+    val = { tokens: r.tokens || 0, calls: r.calls || 0 };
+  } catch { /* db hiccup → treat as no usage, never block on a query error */ }
+  _usageCache.set(key, { at: now, val });
+  return val;
+}
+// Decide what to do for this project right now. null = no limit configured.
+// action ∈ ok | warn | slow | block. pct = max(token%, call%) of the cap.
+function usageVerdict(project) {
+  const lim = limitFor(project);
+  if (!lim) return null;
+  const u = projectUsage(project, WINDOW_MS[lim.window] || WINDOW_MS["24h"]);
+  const pt = lim.tokens > 0 ? u.tokens / lim.tokens : 0;
+  const pc = lim.calls > 0 ? u.calls / lim.calls : 0;
+  const pct = Math.max(pt, pc);
+  let action = "ok";
+  if (pct >= 1) action = lim.hard === "warn" ? "warn" : lim.hard === "slow" ? "slow" : "block";
+  else if (pct >= lim.slowPct / 100) action = "slow";
+  else if (pct >= lim.warnPct / 100) action = "warn";
+  return { lim, usage: u, pct, action };
+}
+
 // Resolve a model name into a concrete upstream route. Priority:
 //   0a. projectRoutes (exact per-project override — beats everything, incl. group rules)
 //   0b. projectGroups (prefix-matched group override)
@@ -1136,6 +1230,8 @@ function adminState() {
     modelRoutes: CFG.modelRoutes,
     projectRoutes: CFG.projectRoutes,
     projectGroups: CFG.projectGroups,
+    projectLimits: CFG.projectLimits,
+    projectLimitDefault: CFG.projectLimitDefault,
     cloudPolicy: CFG.cloudPolicy,
     cloudAllowlist: CFG.cloudAllowlist,
     defaultRoute: CFG.defaultRoute,
@@ -1258,6 +1354,8 @@ async function handleAdminApi(req, res, path) {
     if (patch.modelRoutes) next.modelRoutes = patch.modelRoutes;
     if (patch.projectRoutes) next.projectRoutes = patch.projectRoutes;
     if (patch.projectGroups) next.projectGroups = patch.projectGroups;
+    if (patch.projectLimits) next.projectLimits = patch.projectLimits;
+    if (patch.projectLimitDefault) next.projectLimitDefault = patch.projectLimitDefault;
     if (patch.cloudPolicy) next.cloudPolicy = patch.cloudPolicy;
     if (patch.cloudAllowlist) next.cloudAllowlist = patch.cloudAllowlist;
     if (patch.defaultRoute) next.defaultRoute = patch.defaultRoute;
@@ -1405,7 +1503,18 @@ async function handleAdminApi(req, res, path) {
         costByProject[r.project] = (costByProject[r.project] || 0) + c;
         costByModel[r.req_model] = (costByModel[r.req_model] || 0) + c;
       }
-      byProject.forEach((r) => { r.usd = +(costByProject[r.project] || 0).toFixed(4); });
+      byProject.forEach((r) => {
+        r.usd = +(costByProject[r.project] || 0).toFixed(4);
+        // attach the effective limit + live usage% over the limit's own window (not the stats window)
+        const lim = r.project && r.project !== "(none)" ? limitFor(r.project) : null;
+        if (lim) {
+          const u = projectUsage(r.project, WINDOW_MS[lim.window] || WINDOW_MS["24h"]);
+          const pt = lim.tokens > 0 ? u.tokens / lim.tokens : 0, pc = lim.calls > 0 ? u.calls / lim.calls : 0;
+          r.limit = { window: lim.window, tokens: lim.tokens, calls: lim.calls, hard: lim.hard, warnPct: lim.warnPct, slowPct: lim.slowPct };
+          r.limitUsed = { tokens: u.tokens, calls: u.calls };
+          r.limitPct = +(Math.max(pt, pc) * 100).toFixed(1);
+        }
+      });
       byModel.forEach((r) => { r.usd = +(costByModel[r.req_model] || 0).toFixed(4); });
       const oldest = db.prepare("SELECT MIN(ts) t FROM calls").get().t;
       return sendJson(res, 200, { dbReady: true, window: winKey, total, windowCalls, windowErrors, windowTokens,
@@ -1530,6 +1639,36 @@ const server = http.createServer(async (req, res) => {
         error: `not routable: ${route.why}`, reqContent: extractRequestContent(bodyBuf), project });
     res.writeHead(400, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: `model '${model || ""}' is not routable: ${route.why}. Set a model override, crazyrouter allowlist entry, or default route in /admin.`, type: "invalid_request_error", code: "model_not_routable" } }));
+  }
+
+  // Per-project usage limits (rolling-window quota): warn → slow (throttle) → block (429).
+  // Headers set here survive proxy/jsonEnforce writeHead (Node merges setHeader values).
+  if (isInference && project) {
+    const v = usageVerdict(project);
+    if (v) {
+      const pctI = Math.round(v.pct * 100), capStr = v.lim.tokens > 0 ? `${v.lim.tokens.toLocaleString()} tok` : `${v.lim.calls.toLocaleString()} calls`;
+      res.setHeader("x-usage-percent", String(pctI));
+      res.setHeader("x-usage-window", v.lim.window);
+      res.setHeader("x-usage-limit", capStr);
+      if (v.action === "block") {
+        console.warn(`[usage] BLOCK ${project} ${pctI}% of ${v.lim.window} cap (${capStr})`);
+        shipError("usage limit block", { from: "usage", project, pct: pctI, window: v.lim.window, ip });
+        recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path, project,
+          reqModel: model || null, lane: "blocked", sentModel: null, keyLabel: "—", status: 429, ms: 0,
+          error: `usage_limit: ${pctI}% of ${v.lim.window} cap`, reqContent: extractRequestContent(bodyBuf) });
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "60",
+          "x-usage-percent": String(pctI), "x-usage-window": v.lim.window, "x-usage-limit": capStr });
+        return res.end(JSON.stringify({ error: { message: `project '${project}' has hit its ${v.lim.window} usage limit (${pctI}% of ${capStr}). Requests are blocked until usage rolls off the window, or raise the limit in /admin.`, type: "rate_limit_error", code: "usage_limit_exceeded" } }));
+      }
+      if (v.action === "warn" || v.action === "slow") res.setHeader("x-usage-warning", `${pctI}% of ${v.lim.window} limit`);
+      if (v.action === "slow") {
+        res.setHeader("x-usage-throttled-ms", String(v.lim.slowMs));
+        console.warn(`[usage] SLOW ${project} ${pctI}% → +${v.lim.slowMs}ms`);
+        await sleep(v.lim.slowMs);
+      } else if (v.action === "warn") {
+        console.warn(`[usage] WARN ${project} ${pctI}% of ${v.lim.window} cap`);
+      }
+    }
   }
 
   // Bearer gate for the uncensored local model(s).
