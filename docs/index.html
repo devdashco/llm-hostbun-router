@@ -37,7 +37,7 @@ summary{cursor:pointer;font-weight:600}
 <tr><td class="method">POST</td><td><code>/v1/images/generations</code></td><td><span class="lane local">image</span></td><td>Text-to-image on the <b>pbox GPU</b> (SDXL + Lightning), via <code>sdturbo.bofrid.dev</code>. Templates + LoRAs — see below. Routed by path; token injected server-side.</td></tr>
 <tr><td class="method">GET</td><td><code>/v1/templates</code> · <code>/v1/loras</code></td><td><span class="lane local">image</span></td><td>List image templates and the named-LoRA catalog</td></tr>
 <tr><td class="method">POST</td><td><code>/v1/completions</code> · <code>/v1/embeddings</code> · <code>/v1/audio/*</code> · <code>/v1/rerank</code></td><td><span class="lane crazyrouter">crazyrouter</span></td><td>Full Crazyrouter OpenAI-compatible surface (key injected)</td></tr>
-<tr><td class="method">GET</td><td><code>/v1/models</code></td><td><span class="lane crazyrouter">crazyrouter</span> + <span class="lane local">local</span></td><td>Merged list (~267) — <code>local</code> (7: e4b/gemma/obliterated + ids) + <code>claude*</code> (10, wrappy) + all crazyrouter models (~250, sourced from the price feed)</td></tr>
+<tr><td class="method">GET</td><td><code>/v1/models</code></td><td><span class="lane crazyrouter">crazyrouter</span> + <span class="lane local">local</span></td><td>Merged list (~180) — <code>local</code> (3 ids: <code>local</code>/<code>qwen</code>/<code>qwen3.5-9b</code>, all Qwen3.5-9B) + <code>claude*</code> (10, wrappy) + all crazyrouter models (~165, sourced from the price feed)</td></tr>
 <tr><td class="method">POST</td><td><code>/local/v1/chat/completions</code></td><td><span class="lane local">local</span></td><td>Legacy explicit local path (still works; or just set <code>model:"local"</code> on <code>/v1</code>)</td></tr>
 <tr><td class="method">GET</td><td><code>/local/v1/models</code></td><td><span class="lane local">local</span></td><td>List local models (legacy)</td></tr>
 <tr><td class="method">GET</td><td><code>/prices.json</code> · <code>/prices</code></td><td><span class="lane meta">meta</span></td><td>Computed actual prices (discount applied); refreshes every 6h</td></tr>
@@ -52,9 +52,7 @@ summary{cursor:pointer;font-weight:600}
 <p>One base URL <code>https://llm.hostbun.cc/v1</code> for everything. The <b>model name</b> picks the provider: <code>local</code> → the local GPU (default model); <code>claude*</code> → wrappy / real Claude (claude.hostbun.cc); any other id → crazyrouter. Same OpenAI API either way.</p>
 <table>
 <tr><th>Lane</th><th>Select with <code>model</code></th><th>Models</th></tr>
-<tr><td><span class="lane local">local</span></td><td><code>"local"</code> <b>(default)</b></td><td><code>gemma-4-e4b-it-obliterated</code> — Gemma 4 E4B abliterated, ~8 GB, <b>multimodal (vision)</b> + tools (free, on-prem)</td></tr>
-<tr><td><span class="lane local">local</span></td><td><code>"gemma"</code></td><td><code>google/gemma-4-26b-a4b</code> — 26B-A4B MoE (free, on-prem, vision + tools)</td></tr>
-<tr><td><span class="lane local">local</span></td><td><code>"obliterated"</code> 🔒</td><td><code>qwen3.6-27b-obliterated</code> — 27B abliterated/uncensored, text-only (free, on-prem). <b>Requires <code>Authorization: Bearer &lt;token&gt;</code></b> (the only gated model — local/gemma + cloud are open).</td></tr>
+<tr><td><span class="lane local">local</span></td><td><code>"local"</code> / <code>"qwen"</code> / <code>"qwen3.5-9b"</code></td><td><code>Qwen3.5-9B</code> — Q4_K_M, ~5.6 GB, 16K ctx, <b>reasoning</b> model, text-only + tools (free, on-prem). No auth.</td></tr>
 <tr><td><span class="lane wrappy">wrappy</span></td><td><code>"claude-*"</code>, e.g. <code>"claude-sonnet-4-6"</code></td><td>Real Claude via <code>claude.hostbun.cc</code> (Claude Code wrapper): <code>claude-opus-4-8/4-7/4-6</code>, <code>claude-sonnet-4-6</code>, <code>claude-opus-4-5</code>. Chat + streaming.</td></tr>
 <tr><td><span class="lane crazyrouter">crazyrouter</span></td><td>any other id, e.g. <code>"gemini-2.5-pro"</code></td><td>250+ (GPT, Gemini, DeepSeek, Qwen, Doubao, Grok…)</td></tr>
 </table>
@@ -81,7 +79,7 @@ client.chat.completions.create(model="gpt-4o",            messages=[{"role":"use
   -d '{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]}'</code></pre>
 
 <h2>Crazyrouter lane — cloud relay <span class="lane crazyrouter">/v1</span></h2>
-<p>OpenAI-compatible aggregator (upstream <code>api.crazyrouter.com/v1</code>). Every request whose <code>model</code> isn't a local id (<code>local</code> / <code>gemma</code> / <code>obliterated</code>) and isn't a <code>claude*</code> model is proxied here with the key injected. Capabilities: chat, streaming (<code>"stream":true</code>), tool/function calling, structured outputs, vision, image/video/audio generation, embeddings, rerank. Full upstream reference: <a href="https://crazyrouter.com/docs" target="_blank">crazyrouter.com/docs</a>.</p>
+<p>OpenAI-compatible aggregator (upstream <code>api.crazyrouter.com/v1</code>). Every request whose <code>model</code> isn't a local id (<code>local</code> / <code>qwen</code> / <code>qwen3.5-9b</code>) and isn't a <code>claude*</code> model is proxied here with the key injected. Capabilities: chat, streaming (<code>"stream":true</code>), tool/function calling, structured outputs, vision, image/video/audio generation, embeddings, rerank. Full upstream reference: <a href="https://crazyrouter.com/docs" target="_blank">crazyrouter.com/docs</a>.</p>
 <pre><code># streaming
 curl -N https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","stream":true,"messages":[{"role":"user","content":"count to 5"}]}'</code></pre>
@@ -126,7 +124,7 @@ curl -s https://llm.hostbun.cc/v1/images/generations -H "Content-Type: applicati
 <li>If it still isn't valid JSON → the gateway re-prompts the <i>same</i> model with the parse error (<i>"your reply was not valid JSON, remake it"</i>) and retries (default 2 retries).</li>
 <li>If the model never complies → you get <code>HTTP 422</code> with <code>{"error":{"code":"json_validation_failed",…}}</code> and the last raw content, instead of a malformed body that breaks your <code>JSON.parse</code>.</li>
 </ul>
-<p>This even works for backends that <b>don't natively support</b> <code>response_format</code>. The <span class="lane wrappy">wrappy</span> wrapper returns an empty <code>{}</code> if you pass it <code>response_format</code>, and LM Studio (local) rejects <code>json_object</code>. For those the gateway <b>strips <code>response_format</code> and instructs the model in-prompt instead</b> (including your JSON Schema, when given), then validates the reply the same way — so <code>model:"claude-…"</code> with <code>json_schema</code> returns exactly the shape you asked for. The crazyrouter lane and local <code>json_schema</code> keep native constrained decoding.</p>
+<p>This even works for backends that <b>don't natively support</b> <code>response_format</code>. The <span class="lane wrappy">wrappy</span> wrapper returns an empty <code>{}</code> if you pass it <code>response_format</code>. For that the gateway <b>strips <code>response_format</code> and instructs the model in-prompt instead</b> (including your JSON Schema, when given), then validates the reply the same way — so <code>model:"claude-…"</code> with <code>json_schema</code> returns exactly the shape you asked for. The crazyrouter and local (llama.cpp) lanes keep native constrained decoding / grammars.</p>
 <p class="sub">Note: because the whole reply must be buffered to validate it, <code>stream:true</code> + a JSON <code>response_format</code> returns the content in a single reconstructed SSE chunk rather than token-by-token. Validation is structural JSON (not full JSON-Schema). Tune with env <code>JSON_MAX_RETRIES</code> (default 2); disable entirely with <code>JSON_ENFORCE=0</code>.</p>
 <pre><code>curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"local","response_format":{"type":"json_object"},
@@ -154,35 +152,33 @@ curl -s https://llm.hostbun.cc/v1/images/generations -H "Content-Type: applicati
 <p class="sub">Default is off — the project is still recorded whenever you send it, just not mandatory.</p>
 
 <h2>Reasoning effort &amp; extra params <span class="lane meta">passthrough</span></h2>
-<p>The gateway only rewrites the <code>model</code> field (and, for JSON enforcement, <code>response_format</code>). <b>Every other field is forwarded upstream untouched</b> — so <code>reasoning_effort</code> (<code>"low"</code>/<code>"medium"</code>/<code>"high"</code>), <code>thinking</code>, <code>temperature</code>, <code>top_p</code>, <code>tools</code>, <code>tool_choice</code>, <code>stop</code>, <code>seed</code>, <code>max_tokens</code>, etc. all pass through to whichever provider serves the model. The proxy sets <b>no default effort</b>; if you don't send the field, the upstream's own default applies. Effort is honoured only where the target model supports it (crazyrouter reasoning models and Claude on wrappy); local LM Studio ignores it.</p>
+<p>The gateway only rewrites the <code>model</code> field (and, for JSON enforcement, <code>response_format</code>). <b>Every other field is forwarded upstream untouched</b> — so <code>reasoning_effort</code> (<code>"low"</code>/<code>"medium"</code>/<code>"high"</code>), <code>thinking</code>, <code>temperature</code>, <code>top_p</code>, <code>tools</code>, <code>tool_choice</code>, <code>stop</code>, <code>seed</code>, <code>max_tokens</code>, etc. all pass through to whichever provider serves the model. The proxy sets <b>no default effort</b>; if you don't send the field, the upstream's own default applies. Effort is honoured only where the target model supports it (crazyrouter reasoning models and Claude on wrappy); the local qwen3.5-9b is a reasoning model that always emits a thinking chain, but the <code>reasoning_effort</code> flag itself isn't honoured.</p>
 <pre><code>curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"claude-opus-4-8","reasoning_effort":"high",
        "messages":[{"role":"user","content":"prove sqrt(2) is irrational"}]}'</code></pre>
 
-<h2>Local models — select <span class="lane local">model: local</span> or <span class="lane local">obliterated</span></h2>
-<p>Local requests route to llama.cpp on the <b>pbox</b> box (RTX 4090) via <code>pbox.llm.hostbun.cc</code>. Private (data stays on-prem), free. Local model:</p>
+<h2>Local models — select <span class="lane local">model: local</span></h2>
+<p>Local requests route to a <b>llama.cpp</b> server (<code>server-cuda</code>) on the <b>pbox</b> box (RTX 4090) at <code>pbox.llm.hostbun.cc</code>. Private (data stays on-prem), free, OpenAI-compatible. <b>One model</b> is loaded, resident on the GPU (no swap, no cold start):</p>
 <ul>
-<li><code>local</code> <b>(default)</b> → <code>gemma-4-e4b-it-obliterated</code> — Gemma 4 E4B abliterated/uncensored, ~8 GB, <b>multimodal (vision)</b> + tool calling, 32K ctx. The default-loaded model; vision works (send <code>image_url</code> parts incl. base64).</li>
-<li><code>gemma</code> → <code>google/gemma-4-26b-a4b</code> — 26B-A4B <b>MoE</b>, vision + tool calling, ~8K ctx.</li>
-<li><code>obliterated</code> → <code>qwen3.6-27b-obliterated</code> — 27B abliterated/uncensored, <b>text-only reasoning</b> model. Use a generous <code>max_tokens</code> (e.g. ≥1024) — it spends tokens on a reasoning chain before the answer. 🔒 <b>Gated</b>: send <code>Authorization: Bearer &lt;token&gt;</code> or it returns 401.</li>
+<li><code>local</code> / <code>qwen</code> / <code>qwen3.5-9b</code> (all aliases for the same model) → <b>Qwen3.5-9B</b> — Q4_K_M GGUF, ~5.6&nbsp;GB, 16K context, ~130 tok/s on the 4090. A <b>reasoning</b> model: it emits a thinking chain in <code>reasoning_content</code> before the final <code>content</code>, so give it a generous <code>max_tokens</code> (≥256, ideally ≥512). Text-only; tools supported; no auth required.</li>
 </ul>
-<p>Drop it into any OpenAI-compatible client (opencode, Cline, Continue, the OpenAI SDK) as a custom provider — base URL <code>https://llm.hostbun.cc/v1</code>, API key = the obliterated token, model <code>obliterated</code>. <code>/v1/models</code> is open so the model list populates without a key; only obliterated <i>completions</i> need the token.</p>
+<p>Drop it into any OpenAI-compatible client (opencode, Cline, Continue, the OpenAI SDK) as a custom provider — base URL <code>https://llm.hostbun.cc/v1</code>, any placeholder API key (the gateway needs no key for local), model <code>local</code>. The legacy explicit path <code>/local/v1/*</code> still works and also points at pbox.</p>
+<p class="sub">Legacy ids <code>gemma</code> / <code>obliterated</code> are kept for back-compat but now <b>redirect to Claude</b> (<code>claude-sonnet-4-6</code> on the wrappy lane) — they are <i>not</i> local models any more. The old LM Studio backend (<code>llm.bofrid.dev</code>: Gemma-4-E4B / Gemma-26B / Qwen3.6-27B-obliterated, with vision + a gated token) is <b>retired</b>.</p>
 <pre><code># opencode — opencode.json (or ~/.config/opencode/opencode.json)
 {
   "provider": {
-    "bofrid": {
+    "hostbun-local": {
       "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "https://llm.hostbun.cc/v1", "apiKey": "&lt;token&gt;" },
-      "models": { "obliterated": { "name": "Qwen3.6-27B Obliterated" } }
+      "options": { "baseURL": "https://llm.hostbun.cc/v1", "apiKey": "x" },
+      "models": { "local": { "name": "Qwen3.5-9B (local)" } }
     }
   }
 }</code></pre>
-<p>The local models <b>can't all fit in the 24 GB GPU</b> (gemma and obliterated are ~19 GB each), so LM Studio JIT-swaps: the first request for a model loads it and unloads the previous one. The default <code>local</code> (E4B, ~8 GB) is cheap to swap back in (~5 s); switching to/from a 19 GB model is a ~20–40 s cold start. The legacy explicit path <code>/local/v1/*</code> (and Anthropic <code>/local/v1/messages</code>, native <code>/local/api/v1/chat</code>) still works too.</p>
-<pre><code># either of these reaches the local GPU:
+<pre><code># either of these reaches the local GPU (qwen3.5-9b):
 curl https://llm.hostbun.cc/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"local","messages":[{"role":"user","content":"describe"}]}'
+  -d '{"model":"local","messages":[{"role":"user","content":"describe Stockholm"}],"max_tokens":512}'
 curl https://llm.hostbun.cc/local/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"google/gemma-4-26b-a4b","messages":[{"role":"user","content":"describe"}]}'</code></pre>
+  -d '{"model":"qwen3.5-9b","messages":[{"role":"user","content":"describe Stockholm"}],"max_tokens":512}'</code></pre>
 
 <h2>Pricing <span class="lane meta">/prices.json</span></h2>
 <p><b>Actual</b> prices (per-model discount applied, default group). Fetch programmatically:</p>
@@ -190,7 +186,7 @@ curl https://llm.hostbun.cc/local/v1/chat/completions -H "Content-Type: applicat
 # { "generated_at":"…","group_ratio":1,"count":247,
 #   "models":[{"model":"claude-sonnet-4-6","type":"token",
 #              "input_per_1m":1.65,"output_per_1m":8.25,"discount":0.55}, …] }</code></pre>
-<p class="sub">Token models: USD per 1M tokens (in/out). Image/video/audio: USD per call. Local lane (<code>local</code> / <code>gemma</code> / <code>obliterated</code>) = <b>$0</b>. Self-refreshes every 6h — last update: <span id="pgen">…</span>.</p>
+<p class="sub">Token models: USD per 1M tokens (in/out). Image/video/audio: USD per call. Local lane (<code>local</code> / <code>qwen</code> / <code>qwen3.5-9b</code>) = <b>$0</b>. Self-refreshes every 6h — last update: <span id="pgen">…</span>.</p>
 <input id="pfilter" placeholder="filter models…  e.g. claude, gpt-5, gemini, embed"/>
 <div id="pwrap"><table>
 <thead><tr><th>Model (<span id="pcount">…</span>)</th><th>Type</th><th class="num">Input $/1M</th><th class="num">Output $/1M</th><th class="num">Disc</th></tr></thead>
