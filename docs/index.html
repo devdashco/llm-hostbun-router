@@ -160,7 +160,7 @@ curl -s https://llm.hostbun.cc/v1/images/generations -H "Content-Type: applicati
        "messages":[{"role":"user","content":"prove sqrt(2) is irrational"}]}'</code></pre>
 
 <h2>Local models — select <span class="lane local">model: local</span> or <span class="lane local">obliterated</span></h2>
-<p>Local requests route to LM Studio on the <b>pbox</b> box (RTX 4090) via <code>llm.bofrid.dev</code>. Private (data stays on-prem), free. Three local models:</p>
+<p>Local requests route to llama.cpp on the <b>pbox</b> box (RTX 4090) via <code>pbox.llm.hostbun.cc</code>. Private (data stays on-prem), free. Local model:</p>
 <ul>
 <li><code>local</code> <b>(default)</b> → <code>gemma-4-e4b-it-obliterated</code> — Gemma 4 E4B abliterated/uncensored, ~8 GB, <b>multimodal (vision)</b> + tool calling, 32K ctx. The default-loaded model; vision works (send <code>image_url</code> parts incl. base64).</li>
 <li><code>gemma</code> → <code>google/gemma-4-26b-a4b</code> — 26B-A4B <b>MoE</b>, vision + tool calling, ~8K ctx.</li>

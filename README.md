@@ -8,7 +8,7 @@ the provider by **model name**.
 
 | Lane | Select with `model` | Upstream |
 |------|---------------------|----------|
-| **local** | `local` / `gemma` / `obliterated` | LM Studio @ `llm.bofrid.dev` (no key; `obliterated` optionally Bearer-gated) |
+| **local** | `local` / `qwen` / `qwen3.5-9b` | llama.cpp on pbox GPU @ `pbox.llm.hostbun.cc` (no key) |
 | **crazyrouter** | any other id (e.g. `gemini-2.5-pro`) | `crazyrouter.com` cloud relay (`CRAZYROUTER_KEY` injected server-side) |
 | **wrappy** | `claude*` (e.g. `claude-sonnet-4-6`) | claudebox / claude-code shim @ `claude.hostbun.cc` (`wrappyToken` injected) |
 
@@ -31,7 +31,7 @@ Lane ids are `local`, `crazyrouter`, `wrappy`. Legacy ids `cloud` (=crazyrouter)
 - `WRAPPY_TOKEN` (or legacy `CLAUDE_TOKEN`) — wrappy/claudebox bearer (default `ddash`)
 - `WRAPPY_BASE` (or `CLAUDE_BASE`) — default `https://claude.hostbun.cc`
 - `CRAZYROUTER_BASE` (or `CRAZY_BASE`) — default `https://crazyrouter.com`
-- `LOCAL_BASE` — default `https://llm.bofrid.dev`
+- `LOCAL_BASE` — default `https://pbox.llm.hostbun.cc` (was `llm.bofrid.dev` / LM Studio, retired)
 - `OBLIT_TOKEN` — gate for the abliterated local model (empty = open)
 - `ADMIN_PASSWORD` — admin UI password (default `ddash`, rotate via UI)
 - `WRAPPY_FALLBACK` — wrappy → crazyrouter auto-failover on error/quota (default `1`; `0` to disable)
