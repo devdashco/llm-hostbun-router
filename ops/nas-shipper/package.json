@@ -1,0 +1,11 @@
+{
+  "name": "nas-shipper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Archive the llm.hostbun.cc router call log (full chat) into NAS Postgres",
+  "main": "ship.mjs",
+  "scripts": { "start": "node ship.mjs" },
+  "engines": { "node": ">=20" },
+  "dependencies": { "pg": "^8.13.0" }
+}

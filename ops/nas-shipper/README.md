@@ -1,38 +1,43 @@
 # nas-shipper — full call+chat archive → NAS Postgres
 
-Ships every router call (metadata + **full req/resp content**) from the router's
-SQLite (`/data/calls.db`, pruned to ~50k rows ≈ 1 day) into the NAS Postgres
-table `claudebox.calls` (unpruned, permanent). Idempotent, cursor-based.
+Ships every router call (metadata + **full req/resp content**) into the NAS
+Postgres table `claudebox.calls` (unpruned, permanent). The router keeps full
+content in `/data/calls.db` but prunes to `logging.retain` rows (~50k ≈ 1 day),
+so without this, older calls are lost.
 
-## NAS schema
-Applied as migration `0001_claudebox_calls_archive` on the NAS `app` db:
-- `claudebox.calls` — mirror of the router schema + `account` + full `req_content`/`resp_content`
-- `claudebox.ship_state` — high-water bookkeeping
+- **Source:** `GET https://llm.hostbun.cc/admin/api/export?after=<id>&limit=<n>`
+  (cookie-gated by the admin password) — full `req_content`/`resp_content`.
+- **Target:** NAS Postgres `claudebox.calls` (migration `0001_claudebox_calls_archive`).
+- **Cursor:** `max(src_id)` in NAS. Pages ascending, idempotent (`ON CONFLICT`).
 
-## Run
+Because it pulls over HTTPS, it needs **no** SQLite mount — it only needs to
+reach the NAS Postgres, which is LAN-only. So deploy it on the LAN.
+
+## Deploy (Coolify on pbox — the LAN box that reaches the NAS)
+Build from `ops/nas-shipper/Dockerfile`. Env:
 ```
-CALLS_DB=/data/calls.db \
+ROUTER_URL=https://llm.hostbun.cc
+ADMIN_PASSWORD=<router admin pw>
+PGHOST=192.168.0.156  PGPORT=5432  PGUSER=postgres  PGPASSWORD=ddash  PGDATABASE=app
+LOOP=1  INTERVAL=60  BATCH=500
+```
+No exposed port — it's a background loop.
+
+## Run locally (backfill / test, from any LAN machine)
+```
+ROUTER_URL=https://llm.hostbun.cc ADMIN_PASSWORD=ddash \
 PGHOST=192.168.0.156 PGPORT=5432 PGUSER=postgres PGPASSWORD=ddash PGDATABASE=app \
-LOOP=1 INTERVAL=60 BATCH=500 \
-node ops/nas-shipper/ship.mjs
+node ship.mjs            # one-shot; add LOOP=1 to keep running
 ```
-`node:sqlite` is built in (Node 22+); `npm i pg` for the Postgres client.
 
-## Where to run — IMPORTANT
-Needs to read the SQLite **and** reach the NAS Postgres.
+## Account attribution (follow-up, separate change)
+`account` ships as NULL until claudebox tags each response with
+`X-CB-Account: <name>` (it already knows the account via `_LB_ATTRIBUTE`; 100%
+of traffic is non-streaming so a response header suffices). Then the router
+stores it in `calls.account`, the export carries it, and per-account × per-model
+× per-project is a single query on `claudebox.calls`.
 
-- The **OVH box** (where the router runs) can read the file but the NAS is NOT
-  reachable from it: `nas-db.blpk.cc` fronts a different Postgres that rejects
-  the documented password, and direct `192.168.0.156` is off-LAN.
-- So run this on the **LAN** (e.g. pbox, or the nas-db MCP host). Get the SQLite
-  either by mounting the router's Coolify volume over a share, or add a
-  `/admin/api/export?after=<id>&limit=<n>` full-row endpoint to the router and
-  pull over HTTPS (cookie-gated) — then swap the `DatabaseSync` source for a
-  fetch. (Endpoint stub not yet added.)
-
-## Account attribution (TODO, separate change)
-`account` ships as NULL until claudebox tags each response. Plan: claudebox sets
-`X-CB-Account: <name>` (it already has `_LB_ATTRIBUTE`; 100% of traffic is
-non-streaming so a header is enough), the router stores it in `calls.account`,
-and the shipper carries it. Then per-account × per-model × per-project becomes a
-single query on `claudebox.calls`.
+## Why not run on the OVH box?
+The router's box can read the SQLite but cannot reach the NAS: `nas-db.blpk.cc`
+fronts a different Postgres that rejects the documented password, and
+`192.168.0.156` is off-LAN. Hence the HTTPS pull + LAN runner.

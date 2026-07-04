@@ -1464,6 +1464,23 @@ async function handleAdminApi(req, res, path) {
       return row ? sendJson(res, 200, row) : sendJson(res, 404, { error: "not found" });
     } catch (e) { return sendJson(res, 500, { error: e.message }); }
   }
+  // Full-content export for the NAS archiver (ops/nas-shipper). Cursor by id,
+  // ascending, so a shipper can page id>after until fewer than `limit` return.
+  // Returns FULL req_content/resp_content (unlike `calls`, which previews).
+  if (sub === "export" && req.method === "GET") {
+    if (!db) return sendJson(res, 404, { error: "no db" });
+    const q = url.parse(req.url, true).query;
+    const after = parseInt(q.after, 10) || 0;
+    const limit = Math.min(parseInt(q.limit, 10) || 500, 2000);
+    try {
+      const rows = db.prepare(`SELECT id,ts,ip,ua,method,path,req_model,lane,sent_model,key_label,
+        status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,project,
+        req_content,resp_content
+        FROM calls WHERE id > ? ORDER BY id ASC LIMIT ?`).all(after, limit);
+      const maxId = rows.length ? rows[rows.length - 1].id : after;
+      return sendJson(res, 200, { rows, count: rows.length, after, maxId, limit });
+    } catch (e) { return sendJson(res, 500, { error: e.message }); }
+  }
   if (sub === "stats" && req.method === "GET") {
     if (!db) return sendJson(res, 200, { dbReady: false });
     try {
