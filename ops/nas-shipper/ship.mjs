@@ -93,12 +93,13 @@ async function round(pool) {
   for (;;) {
     const { rows } = await fetchExport(after);
     if (!rows.length) break;
-    ins += await insert(pool, rows);
+    const pageIns = await insert(pool, rows);   // rows actually inserted this page
+    ins += pageIns;
     after = Number(rows[rows.length - 1].id);
     total += rows.length;
     await pool.query(
       "UPDATE claudebox.ship_state SET last_src_id=$1, last_run_at=now(), rows_shipped=rows_shipped+$2 WHERE id=1",
-      [after, ins]);
+      [after, pageIns]);
     if (rows.length < BATCH) break;
   }
   return { total, ins };
