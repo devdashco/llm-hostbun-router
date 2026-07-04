@@ -618,6 +618,41 @@ function wrappyFallbackRoute(model) {
   return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: fbModel, reason: "wrappy fallback -> crazyrouter" };
 }
 
+// ── wrappy admission control (concurrency gate) ──
+// claudebox spawns a heavyweight `claude` CLI subprocess per request; there is NO
+// concurrency cap on its side, so a burst (PromoPilot fires 6 L1 + 6 L2 + crowd
+// jobs at once) stampedes the container (4 cpu / 12g / pids-limit=128) → every
+// call slows → they hit the 300s timeout or come back empty. Fix: cap concurrent
+// in-flight wrappy requests to a size claudebox can actually serve, and QUEUE the
+// rest (bounded FIFO). On queue overflow/timeout, shed to the crazyrouter
+// fallback instead of piling on. Tunables (live-safe env, no redeploy needed if
+// you'd rather add them to CFG later):
+//   WRAPPY_MAX_CONCURRENCY  simultaneous wrappy calls        (default 3)
+//   WRAPPY_QUEUE_MAX        max waiters before shedding       (default 60)
+//   WRAPPY_QUEUE_TIMEOUT_MS max wait in queue before shedding (default 120000)
+const WRAPPY_MAX = Math.max(1, parseInt(process.env.WRAPPY_MAX_CONCURRENCY || "3", 10));
+const WRAPPY_QUEUE_MAX = Math.max(0, parseInt(process.env.WRAPPY_QUEUE_MAX || "60", 10));
+const WRAPPY_QUEUE_TIMEOUT_MS = Math.max(1000, parseInt(process.env.WRAPPY_QUEUE_TIMEOUT_MS || "120000", 10));
+const wrappyGate = { active: 0, queue: [], peakQueue: 0, shed: 0 };
+function wrappyAcquire() {
+  return new Promise((resolve, reject) => {
+    if (wrappyGate.active < WRAPPY_MAX) { wrappyGate.active++; return resolve(); }
+    if (wrappyGate.queue.length >= WRAPPY_QUEUE_MAX) { wrappyGate.shed++; return reject(new Error("queue full")); }
+    const item = { resolve, reject, timer: null };
+    item.timer = setTimeout(() => {
+      const i = wrappyGate.queue.indexOf(item);
+      if (i >= 0) { wrappyGate.queue.splice(i, 1); wrappyGate.shed++; reject(new Error("queue timeout")); }
+    }, WRAPPY_QUEUE_TIMEOUT_MS);
+    wrappyGate.queue.push(item);
+    if (wrappyGate.queue.length > wrappyGate.peakQueue) wrappyGate.peakQueue = wrappyGate.queue.length;
+  });
+}
+function wrappyRelease() {
+  const next = wrappyGate.queue.shift();
+  if (next) { clearTimeout(next.timer); next.resolve(); }   // hand the slot straight to the next waiter
+  else wrappyGate.active = Math.max(0, wrappyGate.active - 1);
+}
+
 const HOP_REQ = new Set(["host", "connection", "content-length", "accept-encoding",
   "keep-alive", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
 const HOP_RES = new Set(["connection", "content-length", "content-encoding",
@@ -1243,6 +1278,13 @@ function adminState() {
     requireProject: CFG.requireProject,
     logging: CFG.logging,
     loggingDbReady: !!db,
+    // wrappy concurrency gate — live health of the admission control
+    wrappyGate: {
+      max: WRAPPY_MAX, queueMax: WRAPPY_QUEUE_MAX, queueTimeoutMs: WRAPPY_QUEUE_TIMEOUT_MS,
+      active: wrappyGate.active, queued: wrappyGate.queue.length,
+      peakQueue: wrappyGate.peakQueue, shed: wrappyGate.shed,
+      circuitOpen: wrappyCircuitOpen(),
+    },
     // secrets — never returned in clear
     crazyrouterKeySet: !!CFG.crazyrouterKey, crazyrouterKeyMasked: mask(CFG.crazyrouterKey),
     wrappyTokenSet: !!CFG.wrappyToken, wrappyTokenMasked: mask(CFG.wrappyToken),
@@ -1715,16 +1757,41 @@ const server = http.createServer(async (req, res) => {
       console.log(`[headroom] ${path} model=${model || "-"} lane=${lane} ${hc.stats.tokens_before}->${hc.stats.tokens_after} saved=${hc.stats.tokens_saved} (${Math.round(100 * hc.stats.tokens_saved / Math.max(1, hc.stats.tokens_before))}%)`);
   }
 
-  // JSON-output enforcement: only for chat completions that request a JSON response_format.
-  if (CFG.jsonEnforce && req.method === "POST" && path.endsWith("/chat/completions") && bodyBuf.length) {
-    let reqObj = null;
-    try { reqObj = JSON.parse(bodyBuf.toString()); } catch { /* not JSON — passthrough */ }
-    if (reqObj && wantsJsonFormat(reqObj)) {
-      console.log(`[req] json-enforce model=${model || "-"} -> ${lane}`);
-      return jsonEnforce(req, res, { ...route, model, lane, ip, bodyBuf, project });
+  // Terminal dispatch: json-enforce path (JSON response_format) or plain proxy.
+  const dispatch = () => {
+    if (CFG.jsonEnforce && req.method === "POST" && path.endsWith("/chat/completions") && bodyBuf.length) {
+      let reqObj = null;
+      try { reqObj = JSON.parse(bodyBuf.toString()); } catch { /* not JSON — passthrough */ }
+      if (reqObj && wantsJsonFormat(reqObj)) {
+        console.log(`[req] json-enforce model=${model || "-"} -> ${lane}`);
+        return jsonEnforce(req, res, { ...route, model, lane, ip, bodyBuf, project });
+      }
     }
+    return proxy(req, res, route.base, { ...route, bodyBuf, model, lane, project });
+  };
+
+  // Wrappy lane: pass through the concurrency gate so we never stampede claudebox.
+  // (For non-streaming wrappy — ~100% of traffic — proxy()/jsonEnforce() await the
+  // full upstream body, so the slot is held for claudebox's real work duration.)
+  if (lane === "wrappy") {
+    try {
+      await wrappyAcquire();
+    } catch (e) {
+      // Queue full/timeout — shed to the crazyrouter fallback rather than pile on.
+      const fb = wrappyFallbackRoute(model);
+      if (fb) {
+        console.warn(`[gate] wrappy shed (${e.message}, active=${wrappyGate.active} q=${wrappyGate.queue.length}) -> crazyrouter`);
+        shipError(`wrappy shed -> crazyrouter`, { reason: e.message, model: model || "-", ip });
+        return proxy(req, res, fb.base, { ...route, base: fb.base, injectKey: true, rewriteModel: fb.rewriteModel, bodyBuf, model, lane: "crazyrouter", project });
+      }
+      console.warn(`[gate] wrappy shed (${e.message}) — no fallback, 503`);
+      res.writeHead(503, { "content-type": "application/json", "retry-after": "5" });
+      return res.end(JSON.stringify({ error: { message: "wrappy lane saturated, retry shortly", type: "overloaded" } }));
+    }
+    try { return await dispatch(); }
+    finally { wrappyRelease(); }
   }
-  return proxy(req, res, route.base, { ...route, bodyBuf, model, lane, project });
+  return dispatch();
 });
 
 server.listen(PORT, () => console.log(`llm-hostbun-proxy on :${PORT} crazyrouter=${CFG.bases.crazyrouter} wrappy=${CFG.bases.wrappy} local=${CFG.bases.local} key=${CFG.crazyrouterKey ? "set" : "MISSING"} admin=/admin`));
