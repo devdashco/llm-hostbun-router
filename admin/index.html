@@ -4,81 +4,22 @@
 <meta name="robots" content="noindex"/>
 <title>llm.hostbun.cc — admin</title>
 <style>
-:root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#9aa4b2;--acc:#58a6ff;--grn:#3fb950;--red:#f85149;--amb:#d29922;--clr:#d08770}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,Segoe UI,Roboto,sans-serif}
-.wrap{max-width:1000px;margin:0 auto;padding:24px 18px 80px}
-h1{font-size:24px;margin:0} h2{font-size:18px;margin:0 0 14px;border-bottom:1px solid var(--bd);padding-bottom:6px}
-h3{margin:18px 0 8px;font-size:15px;color:var(--mut)}
-a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
-code{background:#1f2630;border:1px solid var(--bd);border-radius:5px;padding:1px 6px;font:13px ui-monospace,Menlo,monospace}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px 18px;margin:14px 0}
-input,select,textarea{background:#010409;border:1px solid var(--bd);border-radius:7px;color:var(--fg);padding:8px 10px;font:14px ui-monospace,Menlo,monospace;width:100%}
-input:focus,textarea:focus,select:focus{outline:none;border-color:var(--acc)}
-label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
-button{background:var(--acc);color:#04101f;border:0;border-radius:7px;padding:8px 14px;font:600 14px -apple-system,sans-serif;cursor:pointer}
-button:hover{filter:brightness(1.1)} button.ghost{background:#21262d;color:var(--fg);border:1px solid var(--bd)}
-button.danger{background:#3d1417;color:var(--red);border:1px solid #6e2329}
-button.sm{padding:5px 10px;font-size:13px}
-table{border-collapse:collapse;width:100%;margin:8px 0}
-th,td{border:1px solid var(--bd);padding:7px 9px;text-align:left;vertical-align:middle;font-size:14px}
-th{background:#1f2630}
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.row>*{flex:1}
-.pill{display:inline-block;font:12px ui-monospace,monospace;padding:2px 9px;border-radius:20px;border:1px solid var(--bd)}
-.up{color:var(--grn);border-color:var(--grn)} .down{color:var(--red);border-color:var(--red)} .warnp{color:var(--amb);border-color:var(--amb)}
-.cloud,.crazyrouter{color:var(--acc);border-color:var(--acc)} .local{color:var(--grn);border-color:var(--grn)} .claude,.wrappy{color:var(--clr);border-color:var(--clr)}
-.mut{color:var(--mut)} .mono{font:13px ui-monospace,monospace}
-.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0}
-.tabs button{background:#21262d;color:var(--mut);border:1px solid var(--bd)}
-.tabs button.on{background:var(--acc);color:#04101f;border-color:var(--acc)}
-.hide{display:none}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
-.kv{background:#010409;border:1px solid var(--bd);border-radius:8px;padding:12px}
-.kv .n{font-size:12px;color:var(--mut)} .kv .v{font:600 19px ui-monospace,monospace;margin-top:3px}
-#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#161b22;border:1px solid var(--bd);border-radius:8px;padding:11px 18px;opacity:0;transition:opacity .2s;z-index:99;max-width:90vw}
-#toast.show{opacity:1}
-.warn{background:#2d2212;border:1px solid #9e6a03;border-radius:8px;padding:10px 14px;font-size:13px}
-.x{color:var(--red);cursor:pointer;font-weight:700;padding:0 6px}
-pre{background:#010409;border:1px solid var(--bd);border-radius:8px;padding:12px;overflow:auto;font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-word;max-height:340px}
-.login{max-width:340px;margin:14vh auto 0;text-align:center}
-.flex{display:flex;gap:8px;align-items:center}
-small.hint{color:var(--mut);font-size:12px}
-details.adv{margin:6px 0 14px}
-details.adv>summary{cursor:pointer;color:var(--mut);font-size:14px;padding:8px 0;user-select:none;list-style:none}
-details.adv>summary::-webkit-details-marker{display:none}
-details.adv>summary::before{content:'▸ ';color:var(--acc)}
-details.adv[open]>summary::before{content:'▾ '}
-details.adv>summary:hover{color:var(--fg)}
-#projrouttbl td{padding:6px 9px}
-#projrouttbl select{font-size:13px}
-.seg{display:inline-flex;border:1px solid var(--bd);border-radius:7px;overflow:hidden}
-.seg button{background:#21262d;color:var(--mut);border:0;border-radius:0;padding:5px 11px;font:600 12px -apple-system,sans-serif}
-.seg button.on{background:var(--acc);color:#04101f}
-.bar{height:9px;border-radius:5px;background:#21262d;overflow:hidden;display:flex}
-.bar>i{display:block;height:100%}
-.lblrow{display:flex;align-items:center;gap:10px;margin:8px 0}
-.lblrow .nm{flex:0 0 150px;font:13px ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.lblrow .bar{flex:1}
-.lblrow .vv{flex:0 0 auto;font:12px ui-monospace,monospace;color:var(--mut);min-width:160px;text-align:right}
-.swatch{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px;vertical-align:middle}
-#byprojecttbl th[data-sort],#chartwrap rect{cursor:pointer}
-#byprojecttbl tr[data-proj]{cursor:pointer}
-#byprojecttbl tr[data-proj]:hover td{background:#1a212b}
-.chip{font:11px ui-monospace,monospace;padding:1px 6px;border-radius:10px;border:1px solid var(--bd);color:var(--mut)}
-</style>
-<style id="shadcn">
-/* shadcn-flavoured dark theme (zinc) — overrides the base sheet above */
 :root{
   --bg:#09090b;--card:#0c0c0f;--card2:#141417;--bd:#26262b;--fg:#fafafa;--mut:#a1a1aa;
   --acc:#3b82f6;--grn:#22c55e;--red:#ef4444;--amb:#f59e0b;--clr:#f97316;
   --ring:rgba(59,130,246,.35);--pri:#fafafa;--prifg:#18181b;--hover:#18181b;
 }
-.hide{display:none!important}
+*{box-sizing:border-box}
 html,body{background:var(--bg)}
-body{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--fg)}
-.wrap{max-width:none;margin:0;padding:0}
-/* ── layout: sidebar + main ── */
+body{margin:0;color:var(--fg);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+.hide{display:none!important}
+.mut{color:var(--mut)} .mono{font:13px ui-monospace,Menlo,monospace}
+h1{font-size:24px;margin:0} h2{font-size:16px;font-weight:600;margin:0 0 4px}
+h3{margin:0 0 8px;font-size:15px;font-weight:600}
+small.hint{color:var(--mut);font-size:12px;font-weight:400}
+code{background:#1c1c20;border:1px solid var(--bd);border-radius:5px;padding:1px 6px;font:13px ui-monospace,Menlo,monospace}
+/* ── layout ── */
 .shell{display:grid;grid-template-columns:252px minmax(0,1fr);min-height:100vh}
 .sidebar{position:sticky;top:0;align-self:start;height:100vh;background:var(--card);border-right:1px solid var(--bd);display:flex;flex-direction:column;padding:14px 12px;overflow-y:auto}
 .sb-brand{display:flex;align-items:center;gap:10px;padding:6px 6px 14px;border-bottom:1px solid var(--bd);margin-bottom:6px}
@@ -87,16 +28,17 @@ body{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-seri
 .sb-brand .s{font-size:11px;color:var(--mut)}
 .nav{display:flex;flex-direction:column;gap:2px;flex:1}
 .nav-sec{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);padding:14px 10px 5px;font-weight:600}
-.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);cursor:pointer;font-size:13.5px;font-weight:500;text-decoration:none;border:1px solid transparent}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);cursor:pointer;font-size:13.5px;font-weight:500;border:1px solid transparent}
 .nav-item:hover{background:var(--hover);color:var(--fg);text-decoration:none}
 .nav-item.on{background:#1c1c20;color:var(--fg);border-color:var(--bd)}
 .nav-item svg{width:17px;height:17px;flex:0 0 auto}
+.nav-item .badge{margin-left:auto;font:11px ui-monospace,monospace;padding:1px 7px;border-radius:8px;border:1px solid var(--bd);color:var(--mut)}
 .sb-foot{border-top:1px solid var(--bd);padding-top:10px;margin-top:6px}
 .main{min-width:0;display:flex;flex-direction:column}
 .topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px;padding:12px 22px}
-.topbar h2{margin:0;border:0;padding:0;font-size:16px;font-weight:600}
+.topbar h2{margin:0}
 .topbar .crumb{color:var(--mut);font-size:13px}
-.content{padding:22px 22px 90px;max-width:1140px;width:100%}
+.content{padding:22px 22px 90px;max-width:1180px;width:100%}
 .hamb{display:none}
 @media(max-width:860px){
   .shell{grid-template-columns:1fr}
@@ -105,413 +47,121 @@ body{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-seri
   .hamb{display:inline-flex}
   .content{padding:18px 14px 80px}
 }
-/* ── components ── */
+/* ── primitives ── */
 .card{background:var(--card2);border:1px solid var(--bd);border-radius:14px;padding:18px;margin:14px 0}
-h2{border-bottom:1px solid var(--bd);padding-bottom:8px}
-h3{color:var(--fg);font-weight:600}
-input,select,textarea{background:var(--bg);border:1px solid var(--bd);border-radius:8px;color:var(--fg)}
+.card.acc{border-color:var(--acc)} .card.amb{border-color:var(--amb)}
+input,select,textarea{background:var(--bg);border:1px solid var(--bd);border-radius:8px;color:var(--fg);padding:8px 10px;font:14px ui-monospace,Menlo,monospace;width:100%}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px var(--ring)}
+label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
 button{background:var(--pri);color:var(--prifg);border:0;border-radius:8px;padding:8px 14px;font:600 13px -apple-system,sans-serif;cursor:pointer}
-button:hover{filter:none;background:#e4e4e7}
+button:hover{background:#e4e4e7}
 button.ghost{background:transparent;color:var(--fg);border:1px solid var(--bd)}
 button.ghost:hover{background:var(--hover)}
 button.danger{background:transparent;color:var(--red);border:1px solid #7f1d1d}
 button.danger:hover{background:#2a1112}
 button.sm{padding:6px 10px;font-size:12px}
-table{border-collapse:collapse}
-th,td{border:0;border-bottom:1px solid var(--bd);padding:9px 10px}
-th{background:transparent;color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em;font-weight:600}
+table{border-collapse:collapse;width:100%;margin:8px 0}
+th,td{border:0;border-bottom:1px solid var(--bd);padding:9px 10px;text-align:left;vertical-align:middle;font-size:14px}
+th{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em;font-weight:600;cursor:default}
+th.sortable{cursor:pointer} th.sortable.on{color:var(--acc)}
+tr.click{cursor:pointer} tr.click:hover td{background:#1a212b}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.flex{display:flex;gap:8px;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
 .kv{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px}
-pre{background:#0b0b0e;border:1px solid var(--bd);border-radius:10px}
-code{background:#1c1c20;border:1px solid var(--bd)}
-.bar{background:#26262b}
-#toast{background:var(--card2);border:1px solid var(--bd);border-radius:10px}
-.pill{border-radius:8px;font-weight:600}
-.warn{background:#241a06;border:1px solid #7c5306;border-radius:10px}
-.login{max-width:360px;margin:12vh auto 0}
-.login .card{padding:20px}
+.kv .n{font-size:12px;color:var(--mut)} .kv .v{font:600 19px ui-monospace,monospace;margin-top:3px}
+.pill{display:inline-block;font:12px ui-monospace,monospace;padding:2px 9px;border-radius:8px;border:1px solid var(--bd);font-weight:600}
+.up{color:var(--grn);border-color:var(--grn)} .down{color:var(--red);border-color:var(--red)} .warnp{color:var(--amb);border-color:var(--amb)}
+.crazyrouter,.cloud{color:var(--acc);border-color:var(--acc)} .local{color:var(--grn);border-color:var(--grn)} .wrappy,.claude{color:var(--clr);border-color:var(--clr)} .blocked{color:var(--red);border-color:var(--red)}
+.chip{font:11px ui-monospace,monospace;padding:1px 6px;border-radius:10px;border:1px solid var(--bd);color:var(--mut)}
+.seg{display:inline-flex;border:1px solid var(--bd);border-radius:8px;overflow:hidden}
+.seg button{background:transparent;color:var(--mut);border:0;border-radius:0;padding:5px 11px;font:600 12px -apple-system,sans-serif}
+.seg button.on{background:var(--acc);color:#04101f}
+.wintabs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 14px}
+.wintabs button{background:#1c1c20;color:var(--mut);border:1px solid var(--bd)}
+.wintabs button.on{background:var(--acc);color:#04101f;border-color:var(--acc)}
+.bar{height:9px;border-radius:5px;background:#26262b;overflow:hidden;display:flex}
+.bar>i{display:block;height:100%}
+.lblrow{display:flex;align-items:center;gap:10px;margin:8px 0}
+.lblrow .nm{flex:0 0 150px;font:13px ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lblrow .bar{flex:1}
+.lblrow .vv{flex:0 0 auto;font:12px ui-monospace,monospace;color:var(--mut);min-width:170px;text-align:right}
+.swatch{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px;vertical-align:middle}
+pre{background:#0b0b0e;border:1px solid var(--bd);border-radius:10px;padding:12px;overflow:auto;font:13px ui-monospace,monospace;white-space:pre-wrap;word-break:break-word;max-height:340px;margin:8px 0}
+.warn{background:#241a06;border:1px solid #7c5306;border-radius:10px;padding:10px 14px;font-size:13px}
+.banner{border-radius:12px;padding:12px 16px;margin:0 0 14px}
+.banner.ok{border:1px solid var(--grn);background:#0f1f14}
+.banner.bad{border:1px solid var(--amb);background:#1f1a0e}
+.x{color:var(--red);cursor:pointer;font-weight:700;padding:0 6px}
+details.adv>summary{cursor:pointer;color:var(--mut);font-size:14px;padding:8px 0;user-select:none;list-style:none}
+details.adv>summary::-webkit-details-marker{display:none}
+details.adv>summary::before{content:'▸ ';color:var(--acc)}
+details.adv[open]>summary::before{content:'▾ '}
+details.adv>summary:hover{color:var(--fg)}
+/* ── login ── */
+.login{max-width:360px;margin:12vh auto 0;text-align:center}
+.login .card{padding:22px}
+/* ── toast ── */
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--card2);border:1px solid var(--bd);border-radius:10px;padding:11px 18px;opacity:0;transition:opacity .2s;z-index:99;max-width:90vw;pointer-events:none}
+#toast.show{opacity:1}
+/* ── drawer ── */
+.dov{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .2s;z-index:60}
+.dov.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;height:100vh;width:min(720px,96vw);background:var(--card);border-left:1px solid var(--bd);transform:translateX(101%);transition:transform .24s cubic-bezier(.4,0,.2,1);z-index:61;display:flex;flex-direction:column;box-shadow:-18px 0 54px rgba(0,0,0,.5)}
+.drawer.open{transform:none}
+.drawer-hd{display:flex;align-items:center;gap:10px;padding:15px 18px;border-bottom:1px solid var(--bd)}
+.drawer-bd{padding:16px 18px;overflow-y:auto;flex:1}
+.dsec{margin:0 0 16px}
+.dlbl{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--mut);font-weight:600;margin:0 0 6px}
+.dmeta{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.dmeta .kv{padding:9px 11px} .dmeta .kv .n{font-size:10.5px} .dmeta .kv .v{font-size:14px;margin-top:2px}
+.msgbox{background:#0b0b0e;border:1px solid var(--bd);border-radius:10px;padding:12px;font:13px ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;max-height:42vh;overflow:auto}
 </style></head>
 <body>
-
-<!-- LOGIN -->
-<div id="login" class="login hide">
-  <div class="sb-brand" style="justify-content:center;border:0;margin:0 0 8px;padding:0"><div class="logo">hb</div></div>
-  <h1 style="font-size:20px;text-align:center">llm.hostbun.cc</h1>
-  <p class="mut" style="text-align:center">admin panel</p>
-  <div class="card">
-    <input id="pw" type="password" placeholder="password" autofocus onkeydown="if(event.key==='Enter')doLogin()"/>
-    <div style="height:10px"></div>
-    <button style="width:100%" onclick="doLogin()">Sign in</button>
-    <p id="loginerr" class="down hide" style="margin:10px 0 0;font-size:13px"></p>
-  </div>
-</div>
-
-<!-- APP -->
-<div id="app" class="shell hide">
-  <aside class="sidebar" id="sidebar">
-    <div class="sb-brand"><div class="logo">hb</div><div><div class="t">hostbun</div><div class="s">llm proxy · admin</div></div></div>
-    <nav class="nav" id="nav"></nav>
-    <div class="sb-foot"><button class="ghost sm" style="width:100%" onclick="doLogout()">Sign out</button></div>
-  </aside>
-  <div class="main">
-    <header class="topbar">
-      <button class="ghost sm hamb" onclick="$('sidebar').classList.toggle('open')">☰</button>
-      <span class="crumb">Admin<span style="opacity:.5"> / </span></span><h2 id="crumb">Overview</h2>
-      <span style="flex:1"></span>
-      <button class="ghost sm" onclick="refreshAll()">↻ Refresh</button>
-    </header>
-    <div class="content">
-
-  <!-- OVERVIEW -->
-  <div class="tab" data-tab="Overview">
-    <h2>Overview <button class="ghost sm" style="float:right" onclick="loadHealth()">↻ Refresh</button></h2>
-    <div id="issues"></div>
-
-    <!-- ACTIVITY (when), recent-first -->
-    <div class="card">
-      <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
-        <h3 style="margin:0">Activity <small class="hint" id="ovcharthint">— when, by lane</small></h3>
-        <div class="flex" style="gap:6px;flex-wrap:wrap">
-          <div class="seg" id="ovmetricSeg"><button data-m="n" class="on">Calls</button><button data-m="tok">Tokens</button><button data-m="err">Errors</button></div>
-          <div class="seg" id="ovwinSeg"><button data-w="15m">15m</button><button data-w="1h">1h</button><button data-w="6h" class="on">6h</button><button data-w="24h">24h</button></div>
-        </div>
-      </div>
-      <div id="ovchart" style="margin-top:12px;overflow-x:auto"></div>
-      <div id="ovchartleg" class="flex" style="gap:12px;flex-wrap:wrap;margin-top:8px;font-size:12px"></div>
-    </div>
-
-    <!-- RECENT CALLS feed -->
-    <div class="card" style="overflow:auto">
-      <h3>Recent calls <small class="hint">— newest first · click to open</small> <button class="ghost sm" style="float:right" onclick="loadRecent()">↻</button></h3>
-      <table id="recenttbl"><tr><th>when</th><th>project</th><th>model</th><th>lane</th><th>status</th><th>lat · tok</th></tr></table>
-    </div>
-
-    <div class="grid" id="ovgrid"></div>
-    <div class="card">
-      <h3>Lane health <small class="hint">— live probe + last-hour traffic</small></h3>
-      <table id="healthtbl"><tr><th>Lane</th><th>Target</th><th>Probe</th><th>RTT</th><th>Models</th><th>Calls 1h</th><th>Avg</th><th>Err</th></tr></table>
-    </div>
-    <details class="adv"><summary>Effective config (raw JSON)</summary><pre id="ovcfgpre">loading…</pre></details>
-  </div>
-
-  <!-- CALLS -->
-  <div class="tab hide" data-tab="Calls">
-    <h2>Call log</h2>
-    <div class="card">
-      <div class="row">
-        <input id="callq" placeholder="search model / ip / ua / prompt / reply…" style="flex:3" onkeydown="if(event.key==='Enter')loadCalls()"/>
-        <input id="callmodel" placeholder="exact model" style="flex:1"/>
-        <input id="callproject" placeholder="project" style="flex:1" onkeydown="if(event.key==='Enter')loadCalls()"/>
-        <select id="calllane" style="flex:0 0 130px"><option value="">any lane</option><option>local</option><option>crazyrouter</option><option>wrappy</option><option>blocked</option></select>
-        <select id="callstatus" style="flex:0 0 110px"><option value="">any status</option><option value="ok">ok (&lt;400)</option><option value="error">error (≥400)</option></select>
-        <button class="ghost sm" style="flex:0 0 auto" onclick="loadCalls()">↻ Load</button>
-      </div>
-      <small class="hint" id="callmeta"></small>
-    </div>
-    <pre id="calldetail" class="hide"></pre>
-    <div class="card" style="overflow:auto">
-      <table id="callstbl"><tr><th>time</th><th>project</th><th>model → sent</th><th>lane</th><th>key</th><th>status</th><th>ms</th><th>tok</th><th>ip / ua</th></tr></table>
-    </div>
-    <div class="card">
-      <h3>Logging settings</h3>
-      <div class="row">
-        <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="logEnabled" style="width:auto;margin-right:8px"/> log calls</label>
-        <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="logContent" style="width:auto;margin-right:8px"/> store prompt + reply content</label>
-        <div style="flex:0 0 auto"><label style="margin:0">retain rows</label><input id="logRetain" type="number" min="100" step="1000" style="width:130px"/></div>
-      </div>
-      <small class="hint" id="logdbstate"></small>
-      <div style="margin-top:10px"><button onclick="saveLogging()">Save logging settings</button>
-      <button class="danger" style="margin-left:8px" onclick="clearCalls()">Clear log</button></div>
-    </div>
-  </div>
-
-  <!-- STATS -->
-  <div class="tab hide" data-tab="Stats">
-    <h2>Usage stats <button class="ghost sm" style="float:right" onclick="loadStats()">↻ Refresh</button></h2>
-    <div class="tabs" id="statwin" style="margin:8px 0 14px">
-      <button data-win="15m">Last 15 min</button>
-      <button data-win="1h">Last hour</button>
-      <button data-win="6h">Last 6h</button>
-      <button data-win="24h" class="on">Last 24h</button>
-      <button data-win="7d">Last 7d</button>
-      <button data-win="30d">Last 30d</button>
-      <button data-win="all">All time</button>
-    </div>
-    <div class="grid" id="statgrid"></div>
-
-    <!-- HISTORY CHART -->
-    <div class="card">
-      <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
-        <h3 style="margin:0">History <small class="hint" id="charthint"></small></h3>
-        <div class="flex" style="gap:6px;flex-wrap:wrap">
-          <div class="seg" id="metricSeg"><button data-metric="tok" class="on">Tokens</button><button data-metric="n">Calls</button><button data-metric="err">Errors</button></div>
-          <div class="seg" id="bySeg"><button data-by="lane" class="on">by lane</button><button data-by="project">by project</button><button data-by="model">by model</button></div>
-        </div>
-      </div>
-      <div id="chartwrap" style="margin-top:12px;overflow-x:auto"></div>
-      <div id="chartlegend" class="flex" style="gap:12px;flex-wrap:wrap;margin-top:10px;font-size:12px"></div>
-    </div>
-
-    <!-- ROUTING SHARE -->
-    <div class="card">
-      <h3>Routing — where traffic & tokens go <small class="hint">— share by lane</small></h3>
-      <div id="laneshare"></div>
-    </div>
-
-    <!-- BY PROJECT -->
-    <div class="card" style="overflow:auto">
-      <h3>By project <small class="hint">— who's spending tokens. Click a row to see its calls. <code>(none)</code> = no <code>X-Project</code> header.</small></h3>
-      <table id="byprojecttbl"><tr>
-        <th data-sort="project">project</th><th data-sort="n">calls</th><th data-sort="tok">tokens</th>
-        <th data-sort="io">in → out</th><th data-sort="usd">est $</th><th data-sort="avg_ms">avg</th>
-        <th data-sort="errors">err%</th><th>lanes</th><th data-sort="last">last seen</th><th style="width:26%">share</th>
-      </tr></table>
-    </div>
-
-    <!-- BY MODEL -->
-    <div class="card" style="overflow:auto">
-      <h3>By model <small class="hint">— requested model id → lane</small></h3>
-      <table id="bymodeltbl"><tr><th>requested model</th><th>lane</th><th>calls</th><th>tokens</th><th>in → out</th><th>est $</th><th>avg</th></tr></table>
-    </div>
-
-    <div class="row">
-      <div class="card" style="flex:1"><h3>By lane</h3><table id="bylanetbl"><tr><th>lane</th><th>calls</th><th>tokens</th><th>avg</th><th>err</th></tr></table></div>
-      <div class="card" style="flex:1"><h3>By key</h3><table id="bykeytbl"><tr><th>key</th><th>calls</th></tr></table></div>
-    </div>
-  </div>
-
-  <!-- ROUTING -->
-  <div class="tab hide" data-tab="Routing">
-    <h2>Routing & flow control</h2>
-
-    <!-- HERO: per-project model -->
-    <div class="card" style="border-color:var(--acc)">
-      <h3 style="color:var(--fg);font-size:16px">🎯 Per-project model <small class="hint">— pick a model per app. <b>Auto</b> = normal routing. <b>🚫 Block</b> = reject (0 tokens). Beats groups + everything below.</small></h3>
-      <table id="projrouttbl"><tr><th style="width:40%">Project</th><th>Model</th></tr></table>
-    </div>
-
-    <!-- Project groups -->
-    <div class="card" style="border-color:var(--acc)">
-      <h3 style="color:var(--fg);font-size:16px">👥 Project groups <small class="hint">— bundle many projects by name prefix (e.g. <code>seoul:</code> catches every <code>seoul:*</code> lane) and route or <b>🚫 block</b> them together. A per-project model above overrides its group.</small></h3>
-      <table id="projgrptbl"><tr><th style="width:22%">Group</th><th style="width:34%">Prefixes</th><th>Model / action</th><th style="width:40px"></th></tr></table>
-      <div class="row" style="margin-top:8px">
-        <input id="newgrpname" placeholder="group name (e.g. seoul)" style="flex:1"/>
-        <input id="newgrpprefix" placeholder="prefixes, comma-sep (e.g. seoul:)" style="flex:2"/>
-        <button onclick="addGroup()" style="flex:0 0 auto">+ add group</button>
-      </div>
-    </div>
-
-    <!-- Usage limits -->
-    <div class="card" style="border-color:var(--amb)">
-      <h3 style="color:var(--fg);font-size:16px">📊 Usage limits <small class="hint">— cap tokens/calls per project over a rolling window. As usage climbs: <b style="color:var(--amb)">warn</b> (header) → <b style="color:var(--amb)">slow</b> (throttle) → <b style="color:var(--red)">block</b> (429). 0 = no cap. An exact project row beats its group; group beats the default.</small></h3>
-      <div style="overflow:auto"><table id="limittbl"><tr>
-        <th style="min-width:150px">Project</th><th>Window</th><th>Token cap</th><th>Call cap</th>
-        <th title="warn at this % of cap">Warn%</th><th title="throttle at this % of cap">Slow%</th>
-        <th title="ms delay added while throttling">Slow ms</th><th title="what happens at 100%">At 100%</th>
-        <th>Usage now</th><th style="width:40px"></th>
-      </tr></table></div>
-      <div class="row" style="margin-top:8px;align-items:center">
-        <input id="newlimproj" placeholder="project slug (exact, e.g. fb-bot)" list="projlist" style="flex:1"/>
-        <button onclick="addLimitRow()" style="flex:0 0 auto">+ add project limit</button>
-        <span style="flex:1"></span>
-        <button class="primary" onclick="saveLimits()" style="flex:0 0 auto">Save usage limits</button>
-      </div>
-      <div id="limitmsg" class="hint" style="margin-top:6px"></div>
-    </div>
-
-    <!-- Operational toggles -->
-    <div class="card" style="border-color:var(--amb)">
-      <h3 style="color:var(--amb)">⏻ Force model <small class="hint">— override EVERY request, ignore what the caller asks for</small></h3>
-      <div class="row">
-        <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="forceEnabled" style="width:auto;margin-right:8px"/> force enabled</label>
-        <select id="forceLane" style="flex:0 0 140px"><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
-        <input id="forceModel" list="modellist" placeholder="model id sent to that lane" style="flex:2"/>
-      </div>
-      <small class="hint">When on, all traffic (incl. fb-bot / promopilot) is rewritten to this lane+model.</small>
-    </div>
-
-    <div class="card">
-      <h3>🛟 Wrappy failover <small class="hint">— if claudebox (wrappy) dies, auto-retry on crazyrouter</small></h3>
-      <div class="row">
-        <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="wfEnabled" style="width:auto;margin-right:8px"/> fallback enabled</label>
-        <input id="wfModel" list="modellist" placeholder="crazyrouter model (blank = resend caller's model)" style="flex:2"/>
-      </div>
-      <small class="hint">Triggers on wrappy fetch-failure / HTTP ≥500 / 429 / 401 / 403. Blank model resends the same id on the crazyrouter key. One retry per request.</small>
-    </div>
-
-    <div style="margin:14px 0 4px"><button onclick="saveRouting()">Save routing</button></div>
-
-    <!-- Advanced (collapsed) -->
-    <details class="adv">
-      <summary>Advanced routing &amp; config</summary>
-
-      <div class="card">
-        <h3>🔎 Resolve / trace <small class="hint">— see where a model goes, without calling it</small></h3>
-        <div class="row">
-          <input id="resolveIn" list="modellist" placeholder="model name e.g. deepseek-v3" style="flex:2"/>
-          <input id="resolveProj" placeholder="project (optional)" style="flex:1"/>
-          <button class="ghost" style="flex:0 0 auto" onclick="doResolve()">Trace</button>
-        </div>
-        <pre id="resolveOut" class="hide"></pre>
-      </div>
-
-      <div class="card">
-        <h3>↪ Model overrides <small class="hint">— force a specific incoming model to ANY lane + model</small></h3>
-        <table id="routetbl"><tr><th>Incoming model</th><th>→ lane</th><th>→ sent model</th><th></th></tr></table>
-        <div class="row" style="margin-top:8px">
-          <input id="newrin" placeholder="incoming e.g. deepseek-v3"/>
-          <select id="newrlane" style="flex:0 0 130px"><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
-          <input id="newrmodel" placeholder="sent model id"/>
-          <button class="ghost sm" style="flex:0 0 auto" onclick="addRoute()">+ Add</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>☁ Crazyrouter policy <small class="hint">— stop unknown models silently hitting the crazyrouter cloud lane</small></h3>
-        <div class="row" style="gap:18px">
-          <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="open" style="width:auto;margin-right:6px"/> open (forward anything)</label>
-          <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="allowlist" style="width:auto;margin-right:6px"/> allowlist only</label>
-          <label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" value="off" style="width:auto;margin-right:6px"/> off (block crazyrouter)</label>
-        </div>
-        <label>crazyrouter allowlist <small class="hint">(comma-separated model ids; used when policy = allowlist)</small></label>
-        <input id="cloudAllowlist" placeholder="gemini-2.5-flash-lite, gpt-5.5, …"/>
-        <h3 style="margin-top:14px">Default route <small class="hint">— for unknown / empty / crazyrouter-blocked models. lane <code>none</code> = reject with 400.</small></h3>
-        <div class="row">
-          <select id="drLane" style="flex:0 0 140px"><option>none</option><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
-          <input id="drModel" list="modellist" placeholder="default model id (when lane ≠ none)"/>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Local model aliases <small class="hint">— what a caller types as <code>model</code> → exact id sent to LM Studio (local lane)</small></h3>
-        <table id="maptbl"><tr><th>Alias (model name)</th><th>→ Upstream id</th><th>gated?</th><th></th></tr></table>
-        <div class="row" style="margin-top:8px">
-          <input id="newalias" placeholder="alias e.g. local"/>
-          <input id="newtarget" placeholder="upstream id e.g. gemma-4-e4b-it-obliterated"/>
-          <button class="ghost sm" style="flex:0 0 auto" onclick="addAlias()">+ Add</button>
-        </div>
-        <small class="hint">Known local ids: e4b <code id="kid-e4b"></code> · gemma <code id="kid-gemma"></code> · obliterated <code id="kid-obl"></code></small>
-      </div>
-
-      <div class="card">
-        <h3>Lane base URLs <small class="hint">— the three providers</small></h3>
-        <label>local lane (llama.cpp @ pbox GPU)</label><input id="b-local"/>
-        <label>crazyrouter lane (crazyrouter.com cloud)</label><input id="b-crazy"/>
-        <label>wrappy lane (claudebox / claude-code @ claude.hostbun.cc)</label><input id="b-claude"/>
-        <label>wrappy prefix <small class="hint">— models starting with this route to the wrappy lane (default <code>claude</code>)</small></label><input id="claudePrefix"/>
-      </div>
-
-      <div class="card">
-        <h3>Structured / JSON output enforcement</h3>
-        <div class="row">
-          <label class="flex" style="flex:0 0 auto"><input type="checkbox" id="jsonEnforce" style="width:auto;margin-right:8px"/> enabled</label>
-          <div style="flex:0 0 auto"><label style="margin:0">max retries</label><input id="jsonMaxRetries" type="number" min="0" max="5" style="width:90px"/></div>
-        </div>
-      </div>
-
-      <button class="danger" onclick="resetCfg()">Reset to env defaults</button>
-    </details>
-  </div>
-
-  <!-- MODELS -->
-  <div class="tab hide" data-tab="Models & test">
-    <h2>Models & test</h2>
-    <div class="card">
-      <h3>Test a model <small class="hint">— runs a real chat completion through current routing</small></h3>
-      <div class="row">
-        <input id="testmodel" list="modellist" placeholder="model e.g. local / claude-sonnet-4-6 / gemini-2.5-pro" style="flex:2"/>
-        <button style="flex:0 0 auto" onclick="runTest()">Run</button>
-      </div>
-      <datalist id="modellist"></datalist>
-      <input id="testprompt" placeholder="prompt" value="In one short sentence, what model are you?" style="margin-top:8px"/>
-      <pre id="testout" class="hide"></pre>
-    </div>
-    <div class="card">
-      <h3>Available models <span class="mut" id="modelcounts"></span></h3>
-      <input id="modelfilter" placeholder="filter…" oninput="renderModels()" style="margin-bottom:8px"/>
-      <div id="modelwrap" class="mono" style="max-height:420px;overflow:auto"></div>
-    </div>
-  </div>
-
-  <!-- CRAZYROUTER -->
-  <div class="tab hide" data-tab="Crazyrouter">
-    <h2>Crazyrouter (cloud lane)</h2>
-    <div class="card">
-      <div class="flex" style="justify-content:space-between">
-        <h3 style="margin:0">Key status</h3>
-        <button class="ghost sm" onclick="loadCrazy()">↻ Re-check</button>
-      </div>
-      <div class="grid" id="crazygrid" style="margin-top:12px"></div>
-      <p id="crazymsg" class="warn hide" style="margin-top:12px"></p>
-    </div>
-    <div class="card">
-      <h3>Update key <small class="hint">— paste a new <code>sk-</code> key; test it before saving</small></h3>
-      <input id="newkey" placeholder="sk-…"/>
-      <div class="flex" style="margin-top:10px">
-        <button class="ghost" onclick="testKey()">Test key</button>
-        <button onclick="saveKey()">Save key (live, no redeploy)</button>
-      </div>
-      <pre id="keytest" class="hide"></pre>
-    </div>
-  </div>
-
-  <!-- SECRETS -->
-  <div class="tab hide" data-tab="Secrets">
-    <h2>Secrets & gate</h2>
-    <div class="warn">These are live, file-backed overrides (<code id="cfgfile"></code>). Leaving a field blank keeps the current value.</div>
-    <div class="card">
-      <h3>Wrappy lane token <small class="hint">(claudebox @ claude.hostbun.cc)</small> <span class="mut">(current: <span id="m-claude"></span>)</span></h3>
-      <div class="flex"><input id="s-claudeToken" type="password" placeholder="new wrappy token"/><button class="sm" style="flex:0 0 auto" onclick="setSecret('wrappyToken','s-claudeToken')">Update</button></div>
-    </div>
-    <div class="card">
-      <h3>Obliterated / uncensored gate <span class="mut">(token: <span id="m-oblit"></span>)</span></h3>
-      <p class="mut" style="font-size:13px;margin:0 0 8px">When set, requests routed to a <b>gated model</b> require <code>Authorization: Bearer &lt;token&gt;</code>. Empty = open.</p>
-      <div class="flex"><input id="s-oblitToken" type="password" placeholder="new gate token"/><button class="sm" style="flex:0 0 auto" onclick="setSecret('oblitToken','s-oblitToken')">Update</button><button class="danger sm" style="flex:0 0 auto" onclick="disableGate()">Disable gate</button></div>
-      <h3 style="margin-top:14px">Gated upstream model ids</h3>
-      <input id="gatedModels" placeholder="comma-separated upstream ids"/>
-      <small class="hint">these exact upstream ids require the gate token. Saved with “Save routing” too.</small>
-    </div>
-    <div class="card">
-      <h3>Admin password <span class="mut">(current: <span id="m-admin"></span>)</span></h3>
-      <div class="flex"><input id="s-adminPassword" type="password" placeholder="new admin password (≥3 chars)"/><button class="sm danger" style="flex:0 0 auto" onclick="changePw()">Change</button></div>
-      <small class="hint">changing this signs you out of other sessions.</small>
-    </div>
-  </div>
-    </div><!-- /.content -->
-  </div><!-- /.main -->
-</div><!-- /#app.shell -->
-
+<div id="root"></div>
 <div id="toast"></div>
 
-<script>
-let S = null;           // last admin state
-let MODELS = null;      // {local,claude,cloud}
-const $ = (id)=>document.getElementById(id);
-function toast(m,bad){const t=$('toast');t.textContent=m;t.style.borderColor=bad?'var(--red)':'var(--grn)';t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600);}
+<script type="module">
+import { h, render, createContext } from 'https://esm.sh/preact@10.23.2';
+import { useState, useEffect, useContext, useRef, useMemo, useCallback } from 'https://esm.sh/preact@10.23.2/hooks';
+import htm from 'https://esm.sh/htm@3.1.1';
+const html = htm.bind(h);
 
+/* ───────── helpers ───────── */
+let onUnauth = () => {};
 async function api(path, opts){
   const r = await fetch('/admin/api/'+path, Object.assign({credentials:'same-origin',headers:{'content-type':'application/json'}}, opts||{}));
-  if(r.status===401){ showLogin(); throw new Error('unauthorized'); }
+  if(r.status===401){ onUnauth(); const e=new Error('unauthorized'); e.status=401; throw e; }
   const t = await r.text(); let j=null; try{j=JSON.parse(t);}catch{}
   if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status));
   return j;
 }
+function toast(msg,bad){ const t=document.getElementById('toast'); t.textContent=msg; t.style.borderColor=bad?'var(--red)':'var(--grn)'; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),2600); }
+const clone = o => JSON.parse(JSON.stringify(o==null?{}:o));
+const nfmt = n => { n=+n||0; if(n>=1e9)return (n/1e9).toFixed(2)+'B'; if(n>=1e6)return (n/1e6).toFixed(2)+'M'; if(n>=1e3)return (n/1e3).toFixed(1)+'k'; return ''+Math.round(n); };
+const usd = n => { n=+n||0; if(n===0)return '$0'; if(n<0.01)return '<$0.01'; return '$'+n.toFixed(n<10?2:0); };
+const ago = ts => { if(!ts)return '—'; const s=(Date.now()-ts)/1000; if(s<60)return Math.round(s)+'s'; if(s<3600)return Math.round(s/60)+'m'; if(s<86400)return Math.round(s/3600)+'h'; return Math.round(s/86400)+'d'; };
+const fmtMs = ms => { if(ms==null)return '—'; return ms>=1000?(ms/1000).toFixed(ms>=10000?0:1)+'s':Math.round(ms)+'ms'; };
+const fmtTime = ts => new Date(ts).toISOString().replace('T',' ').slice(5,19);
+const SLOW_MS = 30000;
+const laneCls = {local:'local',crazyrouter:'crazyrouter',wrappy:'wrappy',cloud:'crazyrouter',claude:'wrappy',blocked:'down'};
+const PALETTE = ['#3b82f6','#22c55e','#f97316','#f59e0b','#a855f7','#ef4444','#06b6d4','#eab308','#84cc16','#ec4899'];
+const LANE_COLOR = {local:'#22c55e',crazyrouter:'#3b82f6',wrappy:'#f97316',blocked:'#ef4444',images:'#a855f7'};
+const seriesColor = (name,i) => LANE_COLOR[name]||PALETTE[i%PALETTE.length];
 
-// ---- auth ----
-function showLogin(){ $('app').classList.add('hide'); $('login').classList.remove('hide'); $('pw').focus&&$('pw').focus(); }
-function showApp(){ $('login').classList.add('hide'); $('app').classList.remove('hide'); }
-async function doLogin(){
-  $('loginerr').classList.add('hide');
-  try{
-    await api('login',{method:'POST',body:JSON.stringify({password:$('pw').value})});
-    $('pw').value=''; init();
-  }catch(e){ $('loginerr').textContent=e.message; $('loginerr').classList.remove('hide'); }
-}
-async function doLogout(){ try{await api('logout',{method:'POST'});}catch{} showLogin(); }
+/* ───────── icons ───────── */
+const ICON = {
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>',
+  list:'<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+  chart:'<path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="8" rx="1"/><rect x="12" y="6" width="3" height="12" rx="1"/><rect x="17" y="13" width="3" height="5" rx="1"/>',
+  route:'<circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8 19h6.5a3.5 3.5 0 0 0 0-7h-4a3.5 3.5 0 0 1 0-7H16"/>',
+  box:'<path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5"/><path d="M12 12v10"/>',
+  cloud:'<path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6 1.6A3.5 3.5 0 0 0 6.5 19z"/>',
+  key:'<circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4M18 5l2 2M15 6l2 2"/>',
+};
+const Svg = ({n}) => html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" dangerouslySetInnerHTML=${{__html:ICON[n]||''}}></svg>`;
 
-// ---- navigation: sidebar + real per-section URLs under /admin/<slug> ----
-const BASE='/admin';
-const NAV=[
+const NAV = [
   {sec:'Monitor'},
   {name:'Overview',slug:'overview',icon:'grid'},
   {name:'Calls',slug:'calls',icon:'list'},
@@ -523,599 +173,30 @@ const NAV=[
   {name:'Crazyrouter',slug:'crazyrouter',icon:'cloud'},
   {name:'Secrets',slug:'secrets',icon:'key'},
 ];
-const ICON={
-  grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>',
-  list:'<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
-  chart:'<path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="8" rx="1"/><rect x="12" y="6" width="3" height="12" rx="1"/><rect x="17" y="13" width="3" height="5" rx="1"/>',
-  route:'<circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8 19h6.5a3.5 3.5 0 0 0 0-7h-4a3.5 3.5 0 0 1 0-7H16"/>',
-  box:'<path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5"/><path d="M12 12v10"/>',
-  cloud:'<path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6 1.6A3.5 3.5 0 0 0 6.5 19z"/>',
-  key:'<circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4M18 5l2 2M15 6l2 2"/>',
+const BASE='/admin';
+const slugFor = n => (NAV.find(x=>x.name===n)||{}).slug||'overview';
+const nameFor = s => (NAV.find(x=>x.slug===s)||{}).name||'Overview';
+
+/* ───────── shared UI atoms ───────── */
+const Pill = ({cls,children}) => html`<span class="pill ${cls||''}">${children}</span>`;
+const LanePill = ({lane}) => html`<${Pill} cls=${laneCls[lane]||''}>${lane||'?'}<//>`;
+const StatusPill = ({status,error}) => {
+  const refusal = status>=400 && /^json_validation_failed/.test(error||'');
+  if(refusal) return html`<${Pill} cls="warnp">🙅 ${status}<//>`;
+  if(status>=400) return html`<${Pill} cls="down">${status}<//>`;
+  return html`<${Pill} cls="up">${status||'—'}<//>`;
 };
-const svg=n=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON[n]||''}</svg>`;
-const slugFor=n=>{const i=NAV.find(x=>x.name===n);return i?i.slug:'overview';};
-const nameFor=s=>{const i=NAV.find(x=>x.slug===s);return i?i.name:'Overview';};
-function buildNav(){
-  const c=$('nav'); c.innerHTML='';
-  NAV.forEach(it=>{
-    if(it.sec){const d=document.createElement('div');d.className='nav-sec';d.textContent=it.sec;c.appendChild(d);return;}
-    const a=document.createElement('a');a.className='nav-item';a.href=BASE+'/'+it.slug;a.dataset.name=it.name;
-    a.innerHTML=svg(it.icon)+`<span>${it.name}</span>`;
-    a.onclick=e=>{e.preventDefault();go(it.slug);if(window.innerWidth<=860)$('sidebar').classList.remove('open');};
-    c.appendChild(a);
-  });
-}
-// go(): update the URL then switch view. selTab() is view-only (used by popstate too).
-function go(slug){ history.pushState({},'',BASE+'/'+slug); selTab(nameFor(slug)); }
-function selTab(name){
-  document.querySelectorAll('#nav .nav-item').forEach(a=>a.classList.toggle('on',a.dataset.name===name));
-  document.querySelectorAll('.tab').forEach(d=>d.classList.toggle('hide',d.dataset.tab!==name));
-  $('crumb').textContent=name; document.title='hostbun · '+name;
-  if(name==='Overview') loadHealth();
-  if(name==='Crazyrouter') loadCrazy();
-  if(name==='Models & test') loadModels();
-  if(name==='Calls') loadCalls();
-  if(name==='Stats') loadStats();
-}
-function route(){
-  let s=location.pathname.replace(BASE,'').replace(/^\/+/,'').split('/')[0]||'overview';
-  if(!NAV.some(x=>x.slug===s))s='overview';
-  selTab(nameFor(s));
-}
-window.addEventListener('popstate',route);
+const KV = ({n,children}) => html`<div class="kv"><div class="n">${n}</div><div class="v">${children}</div></div>`;
+const Card = ({cls,children}) => html`<div class="card ${cls||''}">${children}</div>`;
 
-// ---- render state ----
-function renderState(s){
-  S=s; if(!S.modelRoutes)S.modelRoutes={}; if(!S.projectRoutes)S.projectRoutes={}; if(!Array.isArray(S.projectGroups))S.projectGroups=[];
-  // overview
-  $('ovcfgpre').textContent=JSON.stringify({forceModel:s.forceModel,modelRoutes:s.modelRoutes,projectRoutes:s.projectRoutes,projectGroups:s.projectGroups,cloudPolicy:s.cloudPolicy,cloudAllowlist:s.cloudAllowlist,defaultRoute:s.defaultRoute,localMap:s.localMap,gatedModels:s.gatedModels,bases:s.bases,jsonEnforce:s.jsonEnforce,configPersisted:s.configPersisted},null,2);
-  // routing forms
-  $('b-local').value=s.bases.local; $('b-crazy').value=s.bases.crazyrouter; $('b-claude').value=s.bases.wrappy;
-  $('claudePrefix').value=s.wrappyPrefix; $('jsonEnforce').checked=!!s.jsonEnforce; $('jsonMaxRetries').value=s.jsonMaxRetries;
-  $('gatedModels').value=(s.gatedModels||[]).join(', ');
-  $('kid-e4b').textContent=s.knownLocalIds.e4b; $('kid-gemma').textContent=s.knownLocalIds.gemma; $('kid-obl').textContent=s.knownLocalIds.obliterated;
-  // flow control
-  const fm=s.forceModel||{}; $('forceEnabled').checked=!!fm.enabled; $('forceLane').value=fm.lane||'wrappy'; $('forceModel').value=fm.model||'';
-  const wf=s.wrappyFallback||{}; $('wfEnabled').checked=!!wf.enabled; $('wfModel').value=wf.model||'';
-  document.querySelectorAll('input[name=cp]').forEach(r=>r.checked=(r.value===(s.cloudPolicy||'open')));
-  $('cloudAllowlist').value=(s.cloudAllowlist||[]).join(', ');
-  const dr=s.defaultRoute||{}; $('drLane').value=dr.lane||'none'; $('drModel').value=dr.model||'';
-  if(!S.projectLimits)S.projectLimits={};
-  renderMap(); renderRoutes(); renderProjGroups(); renderProjRoutes(); renderLimits(); fillProjectList();
-  // secrets
-  $('m-claude').textContent=s.wrappyTokenMasked||'(none)';
-  $('m-oblit').textContent=s.oblitTokenSet?s.oblitTokenMasked:'(open — no gate)';
-  $('m-admin').textContent=s.adminPasswordMasked;
-  $('cfgfile').textContent=s.configFile;
-  // logging
-  const lg=s.logging||{}; $('logEnabled').checked=!!lg.enabled; $('logContent').checked=!!lg.content; $('logRetain').value=lg.retain||50000;
-  $('logdbstate').textContent=s.loggingDbReady?'DB ready — calls.db on the /data persistent volume':'⚠ call DB unavailable — logging is off (check node:sqlite / /data)';
-}
-function renderMap(){
-  const t=$('maptbl'); t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  Object.entries(S.localMap).forEach(([a,tg])=>{
-    const gated=(S.gatedModels||[]).includes(tg);
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="mono">${esc(a)}</td><td class="mono">${esc(tg)}</td><td>${gated?'<span class="pill warnp">🔒</span>':''}</td><td style="width:34px"><span class="x" title="remove" onclick="delAlias('${esc(a)}')">✕</span></td>`;
-    t.appendChild(tr);
-  });
-}
-function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-
-function addAlias(){
-  const a=$('newalias').value.trim().toLowerCase(), tg=$('newtarget').value.trim();
-  if(!a||!tg){toast('alias and target required',true);return;}
-  S.localMap[a]=tg; $('newalias').value='';$('newtarget').value=''; renderMap();
-  toast('added (unsaved) — click Save routing');
-}
-function delAlias(a){ delete S.localMap[a]; renderMap(); toast('removed (unsaved) — click Save routing'); }
-
-const laneCls={local:'local',crazyrouter:'crazyrouter',wrappy:'wrappy',cloud:'crazyrouter',claude:'wrappy',blocked:'down'};
-function renderRoutes(){
-  const t=$('routetbl'); t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  Object.entries(S.modelRoutes||{}).forEach(([k,v])=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="mono">${esc(k)}</td><td><span class="pill ${laneCls[v.lane]||''}">${esc(v.lane)}</span></td><td class="mono">${esc(v.model||'(unchanged)')}</td><td style="width:34px"><span class="x" title="remove" onclick="delRoute('${esc(k)}')">✕</span></td>`;
-    t.appendChild(tr);
-  });
-}
-function addRoute(){
-  const k=$('newrin').value.trim().toLowerCase(), lane=$('newrlane').value, model=$('newrmodel').value.trim();
-  if(!k){toast('incoming model required',true);return;}
-  S.modelRoutes[k]={lane,model}; $('newrin').value='';$('newrmodel').value=''; renderRoutes();
-  toast('added (unsaved) — click Save routing');
-}
-function delRoute(k){ delete S.modelRoutes[k]; renderRoutes(); toast('removed (unsaved) — click Save routing'); }
-
-// Model choices for the per-project dropdown. value "" = auto (no override).
-// Each non-empty value is "lane|model".
-const PROJ_MODELS=[
-  {lane:'wrappy',model:'claude-sonnet-4-6'},
-  {lane:'wrappy',model:'claude-opus-4-8'},
-  {lane:'wrappy',model:'claude-haiku-4-5-20251001'},
-  {lane:'crazyrouter',model:'gemini-2.5-flash-lite'},
-  {lane:'crazyrouter',model:'gemini-2.5-flash'},
-  {lane:'crazyrouter',model:'gemini-2.5-pro'},
-  {lane:'local',model:'gemma-4-e4b-it-obliterated'},
-  {lane:'local',model:'google/gemma-4-26b-a4b'},
-];
-let KNOWN_PROJECTS=[];
-const BLOCK_VAL='__block__';
-// Options for a routing rule dropdown. cur = null (auto) | {block:true} | {lane,model}.
-function ruleOpts(cur){
-  const blocked=!!(cur&&cur.block);
-  const sel=(cur&&!cur.block)?`${cur.lane}|${cur.model}`:'';
-  let extra='';
-  // If the saved override isn't one of the presets, keep it as a selectable option.
-  if(cur && !cur.block && !PROJ_MODELS.some(p=>p.lane===cur.lane&&p.model===cur.model))
-    extra=`<option value="${esc(sel)}" selected>${esc(cur.lane)}: ${esc(cur.model||'(keep caller\'s)')}</option>`;
-  const opts=PROJ_MODELS.map(p=>{const v=`${p.lane}|${p.model}`;return `<option value="${esc(v)}"${v===sel?' selected':''}>${esc(p.lane)}: ${esc(p.model)}</option>`;}).join('');
-  return `<option value=""${(!cur)?' selected':''}>— auto (normal routing) —</option>`
-        +`<option value="${BLOCK_VAL}"${blocked?' selected':''}>🚫 block — reject (0 tokens)</option>`
-        +`${extra}${opts}`;
-}
-// Convert a dropdown value back into a rule object (or null for auto).
-function valToRule(val){
-  if(!val)return null;
-  if(val===BLOCK_VAL)return{block:true};
-  const [lane,...rest]=val.split('|'); return{lane,model:rest.join('|')};
-}
-function rulePill(cur){
-  if(cur&&cur.block)return`<span class="pill down">🚫 blocked</span>`;
-  if(cur)return`<span class="pill ${laneCls[cur.lane]||''}">${esc(cur.lane)}</span>`;
-  return`<span class="pill mut" style="opacity:.5">auto</span>`;
-}
-function renderProjRoutes(){
-  const t=$('projrouttbl'); if(!t)return; t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  const names=new Set([...KNOWN_PROJECTS, ...Object.keys(S.projectRoutes||{})].filter(p=>p&&p!=='(none)'));
-  const list=[...names].sort();
-  if(!list.length){ const tr=document.createElement('tr'); tr.innerHTML=`<td colspan="2" class="mut">no projects seen yet — they appear once apps send an X-Project header</td>`; t.appendChild(tr); return; }
-  list.forEach(k=>{
-    const cur=S.projectRoutes[k];
-    const grp=cur?null:matchGroupFor(k); // show inherited group rule when no explicit per-project override
-    const pill=cur?rulePill(cur):(grp?`<span class="pill ${grp.block?'down':(laneCls[grp.lane]||'')}" title="from group ${esc(grp.name)}">${grp.block?'🚫':esc(grp.lane)} ·grp</span>`:rulePill(null));
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="mono">${esc(k)}</td><td><div class="flex"><span style="flex:0 0 96px">${pill}</span><select onchange="setProjModel('${esc(k)}',this.value)" style="flex:1">${ruleOpts(cur)}</select></div></td>`;
-    t.appendChild(tr);
-  });
-}
-// Mirror server-side matchProjectGroup: first group whose prefix matches the project slug.
-function matchGroupFor(pkey){
-  const p=String(pkey||'').toLowerCase();
-  for(const g of S.projectGroups||[]) for(const pre of g.prefixes||[]) if(p===pre||p.startsWith(pre)) return g;
-  return null;
-}
-function setProjModel(k,val){
-  const rule=valToRule(val);
-  if(!rule) delete S.projectRoutes[k]; else S.projectRoutes[k]=rule;
-  renderProjRoutes(); toast('changed (unsaved) — click Save routing');
-}
-
-// ---- project groups ----
-// ---- usage limits editor ----
-const LIM_WINDOWS=['1h','6h','24h','7d','30d'];
-const LIM_HARD=[['block','🚫 block 429'],['slow','🐢 slow only'],['warn','⚠ warn only']];
-function limOpts(arr,val){return arr.map(o=>{const v=Array.isArray(o)?o[0]:o,l=Array.isArray(o)?o[1]:o;return `<option value="${v}"${v===val?' selected':''}>${esc(l)}</option>`;}).join('');}
-function limUsageCell(name,isDef){
-  if(isDef)return '<span class="mut">—</span>';
-  const r=(STAT&&STAT.byProject||[]).find(p=>(p.project||'').toLowerCase()===String(name).toLowerCase());
-  if(r&&r.limitPct!=null){const sp=(r.limit&&r.limit.slowPct)||95;const c=r.limitPct>=100?'var(--red)':r.limitPct>=sp?'var(--amb)':'var(--grn)';return `<span class="mono" style="color:${c};font-weight:700">${r.limitPct}%</span>`;}
-  return '<span class="mut" style="font-size:11px">—</span>';
-}
-function limRowHtml(kind,name,l){
-  const isDef=kind==='default';
-  const projCell=isDef?`<td><b>★ default</b><div class="hint">all attributed projects</div></td>`
-    :`<td class="mono"><input value="${esc(name)}" data-f="name" style="width:140px"/></td>`;
-  return projCell
-    +`<td><select data-f="window">${limOpts(LIM_WINDOWS,l.window||'24h')}</select></td>`
-    +`<td><input type="number" min="0" data-f="tokens" value="${l.tokens||0}" style="width:100px"/></td>`
-    +`<td><input type="number" min="0" data-f="calls" value="${l.calls||0}" style="width:78px"/></td>`
-    +`<td><input type="number" min="0" max="100" data-f="warnPct" value="${l.warnPct??80}" style="width:50px"/></td>`
-    +`<td><input type="number" min="0" max="100" data-f="slowPct" value="${l.slowPct??95}" style="width:50px"/></td>`
-    +`<td><input type="number" min="0" data-f="slowMs" value="${l.slowMs??1500}" style="width:62px"/></td>`
-    +`<td><select data-f="hard">${limOpts(LIM_HARD,l.hard||'block')}</select></td>`
-    +`<td>${limUsageCell(name,isDef)}</td>`
-    +`<td>${isDef?'':`<button class="ghost" title="remove" onclick="this.closest('tr').remove()">✕</button>`}</td>`;
-}
-function renderLimits(){
-  const t=$('limittbl'); if(!t)return; t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  const def=S.projectLimitDefault||{window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'};
-  const dtr=document.createElement('tr'); dtr.dataset.kind='default'; dtr.innerHTML=limRowHtml('default','',def); t.appendChild(dtr);
-  const pl=S.projectLimits||{};
-  Object.keys(pl).sort().forEach(k=>{ const tr=document.createElement('tr'); tr.dataset.kind='project'; tr.innerHTML=limRowHtml('project',k,pl[k]); t.appendChild(tr); });
-}
-function addLimitRow(){
-  const name=($('newlimproj').value||'').trim().toLowerCase(); if(!name){toast('enter a project slug',true);return;}
-  const t=$('limittbl');
-  if([...t.querySelectorAll('tr[data-kind="project"] input[data-f="name"]')].some(i=>i.value.trim().toLowerCase()===name)){toast('that project already has a row',true);return;}
-  const tr=document.createElement('tr'); tr.dataset.kind='project'; tr.innerHTML=limRowHtml('project',name,{window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'});
-  t.appendChild(tr); $('newlimproj').value='';
-}
-function readLimRow(tr){ const g=f=>tr.querySelector(`[data-f="${f}"]`);
-  return {window:g('window').value,tokens:+g('tokens').value||0,calls:+g('calls').value||0,warnPct:+g('warnPct').value||0,slowPct:+g('slowPct').value||0,slowMs:+g('slowMs').value||0,hard:g('hard').value}; }
-async function saveLimits(){
-  const t=$('limittbl'); const projectLimits={}; let projectLimitDefault=null;
-  t.querySelectorAll('tr[data-kind]').forEach(tr=>{
-    if(tr.dataset.kind==='default'){ projectLimitDefault=readLimRow(tr); return; }
-    const ni=tr.querySelector('[data-f="name"]'); const nm=(ni&&ni.value||'').trim().toLowerCase(); if(!nm)return;
-    projectLimits[nm]=readLimRow(tr);
-  });
-  try{ const r=await api('config',{method:'POST',body:JSON.stringify({projectLimits,projectLimitDefault})}); renderState(r.state); toast('usage limits saved'+(r.persisted?' & persisted':' (NOT persisted!)'),!r.persisted); $('limitmsg').textContent=`${Object.keys(projectLimits).length} project limit(s) active`; }
-  catch(e){ toast(e.message,true); }
-}
-
-function renderProjGroups(){
-  const t=$('projgrptbl'); if(!t)return; t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  const groups=S.projectGroups||[];
-  if(!groups.length){ const tr=document.createElement('tr'); tr.innerHTML=`<td colspan="4" class="mut">no groups — add one below to route or block a set of projects by prefix</td>`; t.appendChild(tr); return; }
-  groups.forEach((g,i)=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td class="mono">${esc(g.name)}</td>`
-      +`<td><input value="${esc((g.prefixes||[]).join(', '))}" onchange="setGroupPrefixes(${i},this.value)" style="width:100%" class="mono"/></td>`
-      +`<td><div class="flex"><span style="flex:0 0 96px">${rulePill(g)}</span><select onchange="setGroupModel(${i},this.value)" style="flex:1">${ruleOpts(g)}</select></div></td>`
-      +`<td><button class="ghost" onclick="delGroup(${i})" title="remove group">✕</button></td>`;
-    t.appendChild(tr);
-  });
-}
-function addGroup(){
-  const name=$('newgrpname').value.trim();
-  const prefixes=$('newgrpprefix').value.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
-  if(!name){toast('group name required',true);return;}
-  if(!prefixes.length){toast('at least one prefix required',true);return;}
-  if((S.projectGroups||[]).some(g=>g.name.toLowerCase()===name.toLowerCase())){toast('group name already exists',true);return;}
-  S.projectGroups=S.projectGroups||[]; S.projectGroups.push({name,prefixes,block:true});
-  $('newgrpname').value='';$('newgrpprefix').value='';
-  renderProjGroups(); renderProjRoutes(); toast('added (unsaved) — defaults to 🚫 block; pick a model if you want routing, then Save');
-}
-function delGroup(i){ S.projectGroups.splice(i,1); renderProjGroups(); renderProjRoutes(); toast('removed (unsaved) — click Save routing'); }
-function setGroupModel(i,val){
-  const g=S.projectGroups[i]; const rule=valToRule(val);
-  const prefixes=g.prefixes, name=g.name;
-  if(!rule) S.projectGroups[i]={name,prefixes,block:false,lane:'',model:''}; // auto = inert group (kept for editing)
-  else S.projectGroups[i]=Object.assign({name,prefixes},rule);
-  renderProjGroups(); renderProjRoutes(); toast('changed (unsaved) — click Save routing');
-}
-function setGroupPrefixes(i,val){
-  S.projectGroups[i].prefixes=val.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
-  renderProjRoutes(); toast('changed (unsaved) — click Save routing');
-}
-// Pull the live project list from stats so the table lists every app.
-async function fillProjectList(){
-  try{ const s=await api('stats?window=all'); KNOWN_PROJECTS=(s.byProject||[]).map(r=>r.project).filter(Boolean); }
-  catch(e){ /* keep whatever we have */ }
-  renderProjRoutes();
-}
-
-async function doResolve(){
-  const model=$('resolveIn').value.trim(); const project=$('resolveProj').value.trim(); const out=$('resolveOut'); out.classList.remove('hide'); out.textContent='…';
-  try{ const r=await api('resolve',{method:'POST',body:JSON.stringify({model,project})});
-    out.textContent=(r.blocked?`❌ BLOCKED — ${r.why}\n`:`✅ ${r.input||'(empty)'}${r.project?'  [project='+r.project+']':''}  →  lane=${r.lane}  model=${r.sentModel}${r.gated?'  🔒gated':''}\n`)+`reason: ${r.reason}\nupstream: ${r.base}`;
-  }catch(e){ out.textContent='error: '+e.message; }
-}
-
-async function saveRouting(){
-  const cp=(document.querySelector('input[name=cp]:checked')||{}).value||'open';
-  const patch={
-    bases:{local:$('b-local').value.trim(),crazyrouter:$('b-crazy').value.trim(),wrappy:$('b-claude').value.trim()},
-    localMap:S.localMap,
-    modelRoutes:S.modelRoutes,
-    projectRoutes:S.projectRoutes,
-    projectGroups:S.projectGroups,
-    forceModel:{enabled:$('forceEnabled').checked,lane:$('forceLane').value,model:$('forceModel').value.trim()},
-    wrappyFallback:{enabled:$('wfEnabled').checked,model:$('wfModel').value.trim()},
-    cloudPolicy:cp,
-    cloudAllowlist:$('cloudAllowlist').value.split(',').map(x=>x.trim()).filter(Boolean),
-    defaultRoute:{lane:$('drLane').value,model:$('drModel').value.trim()},
-    wrappyPrefix:$('claudePrefix').value.trim()||'claude',
-    jsonEnforce:$('jsonEnforce').checked,
-    jsonMaxRetries:parseInt($('jsonMaxRetries').value||'2',10),
-    gatedModels:$('gatedModels').value.split(',').map(x=>x.trim()).filter(Boolean),
-  };
-  if(patch.forceModel.enabled && !patch.forceModel.model){toast('force model is on but no model id set',true);return;}
-  try{ const r=await api('config',{method:'POST',body:JSON.stringify(patch)}); renderState(r.state); toast('saved'+(r.persisted?' & persisted':' (NOT persisted!)'),!r.persisted); }
-  catch(e){ toast(e.message,true); }
-}
-async function resetCfg(){
-  if(!confirm('Reset all routing/secrets to env defaults? This deletes the saved config file.'))return;
-  try{ const r=await api('reset',{method:'POST'}); renderState(r.state); toast('reset to env defaults'); }catch(e){toast(e.message,true);}
-}
-
-// ---- secrets ----
-async function setSecret(field,inputId){
-  const v=$(inputId).value; if(!v){toast('enter a value',true);return;}
-  try{ const r=await api('config',{method:'POST',body:JSON.stringify({[field]:v})}); $(inputId).value=''; renderState(r.state); toast(field+' updated'); }catch(e){toast(e.message,true);}
-}
-async function disableGate(){
-  if(!confirm('Disable the gate? Gated models become open to anyone.'))return;
-  try{ const r=await api('config',{method:'POST',body:JSON.stringify({oblitToken:''})}); renderState(r.state); toast('gate disabled'); }catch(e){toast(e.message,true);}
-}
-async function changePw(){
-  const v=$('s-adminPassword').value; if(v.length<3){toast('min 3 chars',true);return;}
-  if(!confirm('Change admin password? You may need to sign in again.'))return;
-  try{ await api('config',{method:'POST',body:JSON.stringify({adminPassword:v})}); $('s-adminPassword').value=''; toast('password changed — re-login if prompted'); }catch(e){toast(e.message,true);}
-}
-
-// ---- health / overview ----
-function fmtMs(ms){ if(ms==null)return'—'; return ms>=1000?(ms/1000).toFixed(ms>=10000?0:1)+'s':Math.round(ms)+'ms'; }
-const SLOW_MS=30000; // a lane whose 1h-avg latency exceeds this is flagged as slow
-
-async function loadHealth(){
-  let h,st;
-  try{ [h,st]=await Promise.all([api('health'),api('stats?window=1h')]); }
-  catch(e){ try{h=await api('health');}catch{return;} st=null; }
-  const laneStat={}; (st&&st.byLane||[]).forEach(r=>laneStat[r.lane]=r);
-  const lanes=[['local',S.bases.local,h.local],['wrappy',S.bases.wrappy,h.wrappy],['crazyrouter',S.bases.crazyrouter,h.crazyrouter]];
-  const t=$('healthtbl'); t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  lanes.forEach(([lane,base,r])=>{
-    const ls=laneStat[lane]||{};
-    const probe=r.up?`<span class="pill up">UP ${r.status}</span>`:`<span class="pill down">DOWN ${r.status||''}</span>`;
-    const slow=ls.avg_ms>SLOW_MS, errd=ls.errors>0;
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td><span class="pill ${lane}">${lane}</span></td><td class="mono" style="font-size:12px">${esc(base)}</td>`+
-      `<td>${probe}</td><td class="mono">${r.ms}ms</td><td>${r.count??'—'}</td>`+
-      `<td class="mono">${ls.n??'—'}</td>`+
-      `<td class="mono"${slow?' style="color:var(--amb);font-weight:700"':''}>${fmtMs(ls.avg_ms)}</td>`+
-      `<td class="mono"${errd?' style="color:var(--red);font-weight:700"':''}>${ls.errors??'—'}</td>`;
-    t.appendChild(tr);
-  });
-  renderOvCards(h);
-  renderIssues(h,st);
-  loadOvActivity();
-  loadRecent();
-}
-function renderOvCards(h){
-  const up=[h.local,h.wrappy,h.crazyrouter].filter(x=>x&&x.up).length;
-  const fm=S.forceModel||{};
-  $('ovgrid').innerHTML=
-    kv('Lanes up',(up<3?'<span class="down">':'')+up+' / 3'+(up<3?'</span>':''))+
-    kv('Force model',fm.enabled?`<span class="warnp">${esc(fm.lane)}/${esc(fm.model)}</span>`:'off')+
-    kv('Wrappy failover',(S.wrappyFallback&&S.wrappyFallback.enabled)?`→ crazyrouter${S.wrappyFallback.model?' ('+esc(S.wrappyFallback.model)+')':''}`:'<span class="warnp">off</span>')+
-    kv('Cloud policy',S.cloudPolicy||'open')+
-    kv('Project gate',S.requireProject?'required':'off')+
-    kv('JSON enforce',S.jsonEnforce?'ON':'OFF')+
-    kv('Config',S.configPersisted?'file-backed':'env defaults');
-}
-// Auto-diagnose: scan the live probe + last-hour stats and surface anything worth a human look.
-function renderIssues(h,st){
-  const box=$('issues'); if(!box)return;
-  const probs=[];
-  ['local','wrappy','crazyrouter'].forEach(l=>{ const r=h[l]; if(r&&!r.up) probs.push(['down',`Lane <b>${l}</b> is DOWN (status ${r.status||'—'}). Traffic to it will fail.`]); });
-  if(st&&st.byLane){
-    st.byLane.forEach(r=>{ if(r.avg_ms>SLOW_MS) probs.push(['slow',`Lane <b>${esc(r.lane)}</b> is slow — avg <b>${fmtMs(r.avg_ms)}</b> over the last hour (${r.n} calls). Callers may be timing out.`]); });
-    if(st.windowJsonFails>0) probs.push(['refusal',`<b>${st.windowJsonFails}</b> JSON-enforce failure${st.windowJsonFails>1?'s':''} in the last hour — usually the model refusing in prose while the caller demanded JSON, surfaced as 422. <span class="mut">Not a proxy bug.</span>`]);
-    const otherErr=st.windowErrors-(st.windowJsonFails||0);
-    const rate=st.windowCalls>0?otherErr/st.windowCalls:0;
-    if(rate>0.05 && st.windowCalls>=20) probs.push(['err',`Non-refusal error rate <b>${(rate*100).toFixed(0)}%</b> over the last hour (${otherErr}/${st.windowCalls}).`]);
-  }
-  if(S.forceModel&&S.forceModel.enabled) probs.push(['force',`Force-model is ON → every request rewritten to <b>${esc(S.forceModel.lane)}/${esc(S.forceModel.model)}</b>, ignoring the caller's model.`]);
-  if(!probs.length){ box.innerHTML=`<div class="card" style="border-color:var(--grn);background:#0f1f14"><b style="color:var(--grn)">✓ All healthy</b> <span class="mut">— lanes up, no slow lanes or elevated errors in the last hour.</span></div>`; return; }
-  const ic={down:'⛔',slow:'🐢',refusal:'🙅',err:'⚠️',force:'⏻'};
-  box.innerHTML=`<div class="card" style="border-color:var(--amb);background:#1f1a0e"><b style="color:var(--amb)">${probs.length} thing${probs.length>1?'s':''} to look at</b><ul style="margin:8px 0 0;padding-left:20px;list-style:none">`+
-    probs.map(([k,m])=>`<li style="margin:5px 0">${ic[k]||'•'} ${m}</li>`).join('')+`</ul></div>`;
-}
-function kv(n,v){return `<div class="kv"><div class="n">${n}</div><div class="v">${v}</div></div>`;}
-
-// ---- models ----
-async function loadModels(){
-  try{ MODELS=await api('models'); }catch(e){return;}
-  const dl=$('modellist'); dl.innerHTML='';
-  [...MODELS.local,...MODELS.wrappy,...MODELS.crazyrouter].forEach(m=>{const o=document.createElement('option');o.value=m.id;dl.appendChild(o);});
-  $('modelcounts').textContent=`(local ${MODELS.local.length} · wrappy ${MODELS.wrappy.length} · crazyrouter ${MODELS.crazyrouter.length})`;
-  renderModels();
-}
-function renderModels(){
-  if(!MODELS)return;
-  const f=$('modelfilter').value.toLowerCase();
-  const sec=(title,cls,arr)=>{
-    const items=arr.filter(m=>!f||m.id.toLowerCase().includes(f));
-    if(!items.length)return '';
-    return `<div style="margin:10px 0 4px"><span class="pill ${cls}">${title}</span> <span class="mut">${items.length}</span></div>`+
-      items.map(m=>`<div style="padding:3px 0">${esc(m.id)} <span class="mut">· ${esc(m.owned_by||'')}</span></div>`).join('');
-  };
-  $('modelwrap').innerHTML=sec('local','local',MODELS.local)+sec('wrappy','wrappy',MODELS.wrappy)+sec('crazyrouter','crazyrouter',MODELS.crazyrouter)||'<span class="mut">no matches</span>';
-}
-async function runTest(){
-  const model=$('testmodel').value.trim(); if(!model){toast('enter a model',true);return;}
-  const out=$('testout'); out.classList.remove('hide'); out.textContent='running…';
-  try{
-    const r=await api('test',{method:'POST',body:JSON.stringify({model,prompt:$('testprompt').value})});
-    out.textContent=`lane=${r.lane} sent=${r.sentModel} status=${r.status} ${r.ms}ms\n`+
-      (r.content!=null?('\n'+r.content):('\n[no content]\n'+(r.error||r.raw||'')));
-  }catch(e){ out.textContent='error: '+e.message; }
-}
-
-// ---- crazyrouter ----
-async function loadCrazy(){
-  $('crazygrid').innerHTML='<div class="kv"><div class="n">checking…</div></div>';
-  let c; try{c=await api('crazyrouter');}catch(e){return;}
-  $('crazygrid').innerHTML=
-    kv('Key',c.keySet?(c.keyValid?'<span class="up">valid</span>':'<span class="down">INVALID</span>'):'<span class="down">not set</span>')+
-    kv('Limit',c.hardLimitUsd!=null?('$'+c.hardLimitUsd):'—')+
-    kv('Used',c.totalUsageUsd!=null?('$'+c.totalUsageUsd.toFixed(2)):'—')+
-    kv('Remaining',c.remainingUsd!=null?('$'+c.remainingUsd.toFixed(2)):'—')+
-    kv('Models',c.modelCount??'—')+
-    kv('Key id',c.keyMasked||'(none)');
-  const msg=$('crazymsg');
-  if(c.message||!c.keyValid){ msg.classList.remove('hide'); msg.textContent=(c.message||'key check failed')+(c.statuses?(' · statuses '+JSON.stringify(c.statuses)):''); }
-  else msg.classList.add('hide');
-}
-async function testKey(){
-  const key=$('newkey').value.trim(); if(!key){toast('paste a key',true);return;}
-  const out=$('keytest'); out.classList.remove('hide'); out.textContent='testing…';
-  try{ const c=await api('crazyrouter/test',{method:'POST',body:JSON.stringify({key})});
-    out.textContent=JSON.stringify(c,null,2);
-    toast(c.keyValid?'key is VALID — click Save key':'key is INVALID',!c.keyValid);
-  }catch(e){ out.textContent='error: '+e.message; }
-}
-async function saveKey(){
-  const key=$('newkey').value.trim(); if(!key){toast('paste a key',true);return;}
-  try{ const r=await api('config',{method:'POST',body:JSON.stringify({crazyrouterKey:key})}); $('newkey').value=''; renderState(r.state); toast('key saved (live)'); loadCrazy(); }catch(e){toast(e.message,true);}
-}
-
-// ---- calls ----
-function fmtTime(ts){const d=new Date(ts);return d.toISOString().replace('T',' ').slice(5,19);}
-async function loadCalls(){
-  const p=new URLSearchParams({limit:'150'});
-  if($('callq').value.trim())p.set('q',$('callq').value.trim());
-  if($('callmodel').value.trim())p.set('model',$('callmodel').value.trim());
-  if($('callproject').value.trim())p.set('project',$('callproject').value.trim());
-  if($('calllane').value)p.set('lane',$('calllane').value);
-  if($('callstatus').value)p.set('status',$('callstatus').value);
-  let d; try{d=await api('calls?'+p.toString());}catch(e){return;}
-  $('callmeta').textContent=d.dbReady===false?'call DB unavailable':`${d.rows.length} shown of ${d.total} total`;
-  const t=$('callstbl'); t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  d.rows.forEach(r=>{
-    const tr=document.createElement('tr'); tr.style.cursor='pointer'; tr.onclick=()=>showCall(r.id);
-    const refusal=r.status>=400 && /^json_validation_failed/.test(r.error||'');
-    const st=refusal?`<span class="pill warnp" title="model refused in prose; caller wanted JSON — not a proxy bug">🙅 ${r.status}</span>`
-      :r.status>=400?`<span class="pill down">${r.status}</span>`:`<span class="pill up">${r.status||'—'}</span>`;
-    const lane=`<span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span>`;
-    const proj=r.project?`<span class="pill" style="background:#2a3a2a;color:#8bc88b">${esc(r.project)}</span>`:`<span class="mut" style="font-size:11px">(none)</span>`;
-    tr.innerHTML=`<td class="mono" style="font-size:12px;white-space:nowrap">${fmtTime(r.ts)}</td>`+
-      `<td style="font-size:12px">${proj}</td>`+
-      `<td class="mono" style="font-size:12px">${esc(r.req_model||'-')}${r.sent_model&&r.sent_model!==r.req_model?' <span class="mut">→ '+esc(r.sent_model)+'</span>':''}${r.stream?' <span class="mut">≈stream</span>':''}</td>`+
-      `<td>${lane}</td><td class="mono" style="font-size:12px">${esc(r.key_label||'')}</td><td>${st}</td>`+
-      `<td class="mono">${r.duration_ms??'—'}</td><td class="mono">${r.total_tokens??'—'}</td>`+
-      `<td class="mut mono" style="font-size:11px">${esc(r.ip||'')}<br>${esc((r.ua||'').slice(0,32))}</td>`;
-    t.appendChild(tr);
-  });
-}
-async function showCall(id){
-  const out=$('calldetail'); out.classList.remove('hide'); out.textContent='loading…';
-  try{ const c=await api('call?id='+id);
-    out.textContent=`#${c.id}  ${fmtTime(c.ts)}\n`+
-      `lane=${c.lane}  model=${c.req_model} → ${c.sent_model}  key=${c.key_label}\n`+
-      `status=${c.status}  ${c.duration_ms}ms  stream=${c.stream?'yes':'no'}  tokens: prompt=${c.prompt_tokens??'?'} completion=${c.completion_tokens??'?'} total=${c.total_tokens??'?'}\n`+
-      `ip=${c.ip}  ua=${c.ua||''}\n`+`project=${c.project||'(none)'}\n`+(c.error?`error: ${c.error}\n`:'')+
-      `\n── PROMPT ──\n${c.req_content||'(not stored)'}\n\n── REPLY ──\n${c.resp_content||'(not stored)'}`;
-    out.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }catch(e){ out.textContent='error: '+e.message; }
-}
-async function saveLogging(){
-  const patch={logging:{enabled:$('logEnabled').checked,content:$('logContent').checked,retain:parseInt($('logRetain').value||'50000',10)}};
-  try{ const r=await api('config',{method:'POST',body:JSON.stringify(patch)}); renderState(r.state); toast('logging settings saved'); }catch(e){toast(e.message,true);}
-}
-async function clearCalls(){
-  if(!confirm('Delete ALL logged calls? This cannot be undone.'))return;
-  try{ await api('calls/clear',{method:'POST'}); toast('call log cleared'); loadCalls(); }catch(e){toast(e.message,true);}
-}
-
-// ---- stats ----
-let statWin='24h';
-const WIN_LABEL={'15m':'Last 15 min','1h':'Last hour','6h':'Last 6h','24h':'Last 24h','7d':'Last 7d','30d':'Last 30d','all':'All time'};
-$('statwin').addEventListener('click',e=>{
-  const b=e.target.closest('button[data-win]'); if(!b)return;
-  statWin=b.dataset.win;
-  [...$('statwin').children].forEach(x=>x.classList.toggle('on',x===b));
-  loadStats();
-});
-// shared formatters + color palette for charts/share bars
-function nfmt(n){ n=+n||0; if(n>=1e9)return (n/1e9).toFixed(2)+'B'; if(n>=1e6)return (n/1e6).toFixed(2)+'M'; if(n>=1e3)return (n/1e3).toFixed(1)+'k'; return ''+Math.round(n); }
-function usd(n){ n=+n||0; if(n===0)return '$0'; if(n<0.01)return '<$0.01'; return '$'+n.toFixed(n<10?2:0); }
-function ago(ts){ if(!ts)return '—'; const s=(Date.now()-ts)/1000; if(s<60)return Math.round(s)+'s'; if(s<3600)return Math.round(s/60)+'m'; if(s<86400)return Math.round(s/3600)+'h'; return Math.round(s/86400)+'d'; }
-const PALETTE=['#58a6ff','#3fb950','#d08770','#d29922','#bc8cff','#f85149','#56d4dd','#e3b341','#8bc88b','#ff7b72'];
-const LANE_COLOR={local:'#3fb950',crazyrouter:'#58a6ff',wrappy:'#d08770',blocked:'#f85149',images:'#bc8cff'};
-function seriesColor(name,i){ return LANE_COLOR[name]||PALETTE[i%PALETTE.length]; }
-
-let STAT=null, chartMetric='tok', chartBy='lane', projSort={key:'tok',dir:-1};
-const METRIC_LABEL={tok:'tokens',n:'calls',err:'errors'};
-
-async function loadStats(){
-  let s; try{s=await api('stats?window='+encodeURIComponent(statWin));}catch(e){return;}
-  if(s.dbReady===false){ $('statgrid').innerHTML=kv('Status','call DB unavailable'); return; }
-  STAT=s; const lbl=WIN_LABEL[s.window]||s.window;
-  const inT=s.windowPromptTokens||0, outT=s.windowCompletionTokens||0, tot=s.windowTokens||0;
-  const avgTok=s.windowCalls>0?Math.round(tot/s.windowCalls):0;
-  $('statgrid').innerHTML=
-    kv('Tokens ('+lbl+')',(tot).toLocaleString())+
-    kv('In → Out',`${nfmt(inT)} <span class="mut">→</span> ${nfmt(outT)}`)+
-    kv('Avg / call',avgTok.toLocaleString())+
-    kv('Est. cost',`${usd(s.windowCost)} <small class="hint">crazyrouter</small>`)+
-    kv('Calls',s.windowCalls.toLocaleString())+
-    kv('Errors',(s.windowErrors||0)+(s.windowJsonFails?` <small class="hint">(${s.windowJsonFails} refusal)</small>`:''))+
-    kv('Total ever',s.total.toLocaleString())+
-    kv('Oldest',s.oldest?fmtTime(s.oldest):'—');
-  renderLaneShare(s);
-  renderProjects();
-  const fill=(tbl,rows,cells)=>{const t=$(tbl);t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());rows.forEach(r=>{const tr=document.createElement('tr');tr.innerHTML=cells(r);t.appendChild(tr);});};
-  fill('bymodeltbl',s.byModel||[],r=>`<td class="mono" style="font-size:12px">${esc(r.req_model||'-')}</td><td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td><td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td>`);
-  KNOWN_PROJECTS=(s.byProject||[]).map(r=>r.project).filter(Boolean); renderProjRoutes();
-  fill('bylanetbl',s.byLane||[],r=>`<td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono">${fmtMs(r.avg_ms)}</td><td class="mono"${r.errors>0?' style="color:var(--red)"':''}>${r.errors??'—'}</td>`);
-  fill('bykeytbl',s.byKey||[],r=>`<td class="mono" style="font-size:12px">${esc(r.key_label||'')}</td><td class="mono">${r.n}</td>`);
-  loadSeries();
-}
-
-// ---- routing share bars (by lane) ----
-function renderLaneShare(s){
-  const box=$('laneshare'); const lanes=s.byLane||[];
-  const totN=lanes.reduce((a,r)=>a+r.n,0)||1, totT=lanes.reduce((a,r)=>a+r.tok,0)||1;
-  box.innerHTML=lanes.map((r,i)=>{
-    const c=seriesColor(r.lane,i), cp=(r.n/totN*100), tp=(r.tok/totT*100);
-    return `<div class="lblrow"><span class="nm"><span class="swatch" style="background:${c}"></span>${esc(r.lane)}</span>`+
-      `<span class="bar"><i style="width:${cp.toFixed(1)}%;background:${c}"></i></span>`+
-      `<span class="vv">${r.n} calls (${cp.toFixed(0)}%) · ${nfmt(r.tok)} tok (${tp.toFixed(0)}%)</span></div>`;
-  }).join('')||'<span class="mut">no traffic in window</span>';
-}
-
-// ---- by-project table (sortable + click to drill into call log) ----
-function renderProjects(){
-  if(!STAT)return; const t=$('byprojecttbl');
-  t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  const rows=[...(STAT.byProject||[])];
-  const maxT=Math.max(1,...rows.map(r=>r.tok||0));
-  const k=projSort.key, d=projSort.dir;
-  rows.sort((a,b)=>{ let x,y;
-    if(k==='project'){x=a.project||'';y=b.project||'';return d*String(x).localeCompare(String(y));}
-    if(k==='io'){x=a.ptok||0;y=b.ptok||0;} else if(k==='errors'){x=a.n?a.errors/a.n:0;y=b.n?b.errors/b.n:0;}
-    else {x=a[k]||0;y=b[k]||0;}
-    return d*((x>y?1:x<y?-1:0));
-  });
-  // header arrows
-  [...t.querySelectorAll('th[data-sort]')].forEach(th=>{const own=th.dataset.sort===k; th.style.color=own?'var(--acc)':''; th.dataset.arr=own?(d<0?' ▾':' ▴'):''; if(!th.dataset.base)th.dataset.base=th.textContent.replace(/[ ▾▴]+$/,''); th.textContent=th.dataset.base+(own?(d<0?' ▾':' ▴'):'');});
-  rows.forEach(r=>{
-    const errPct=r.n>0?(r.errors/r.n*100):0;
-    const errCls=r.errors>0?'style="color:var(--red);font-weight:700"':'class="mut"';
-    const share=(r.tok/maxT*100);
-    const tr=document.createElement('tr'); tr.dataset.proj=r.project||'';
-    tr.onclick=()=>{ go('calls'); $('callproject').value=(r.project&&r.project!=='(none)')?r.project:''; loadCalls(); };
-    let badge='';
-    if(r.limit&&r.limitPct!=null){ const sp=r.limit.slowPct||95; const col=r.limitPct>=100?'var(--red)':r.limitPct>=sp?'var(--amb)':'#3fb950';
-      const cap=r.limit.tokens>0?nfmt(r.limit.tokens)+' tok':r.limit.calls>0?r.limit.calls+' calls':'';
-      badge=` <span class="chip" title="${r.limitPct}% of ${cap}/${r.limit.window} · at 100%: ${r.limit.hard}" style="color:${col};border-color:${col}">${r.limitPct}% ${r.limit.hard==='block'?'🚫':r.limit.hard==='slow'?'🐢':'⚠'}</span>`; }
-    tr.innerHTML=`<td class="mono" style="font-size:12px">${esc(r.project||'(none)')}${badge}</td>`+
-      `<td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td>`+
-      `<td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td>`+
-      `<td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td>`+
-      `<td class="mono" ${errCls}>${errPct.toFixed(errPct&&errPct<10?1:0)}%</td>`+
-      `<td style="font-size:11px">${esc(String(r.lanes||'').split(',').join(' '))}</td>`+
-      `<td class="mono mut" style="font-size:11px">${ago(r.last)}</td>`+
-      `<td><span class="bar"><i style="width:${share.toFixed(1)}%;background:var(--acc)"></i></span></td>`;
-    t.appendChild(tr);
-  });
-}
-// header click → sort
-$('byprojecttbl').addEventListener('click',e=>{
-  const th=e.target.closest('th[data-sort]'); if(!th)return;
-  const key=th.dataset.sort;
-  projSort = projSort.key===key ? {key,dir:-projSort.dir} : {key,dir:(key==='project'?1:-1)};
-  renderProjects();
-});
-
-// ---- history chart (inline SVG, stacked bars) ----
-$('metricSeg').addEventListener('click',e=>{const b=e.target.closest('button[data-metric]');if(!b)return;chartMetric=b.dataset.metric;[...$('metricSeg').children].forEach(x=>x.classList.toggle('on',x===b));loadSeries();});
-$('bySeg').addEventListener('click',e=>{const b=e.target.closest('button[data-by]');if(!b)return;chartBy=b.dataset.by;[...$('bySeg').children].forEach(x=>x.classList.toggle('on',x===b));loadSeries();});
-async function loadSeries(){
-  let d; try{d=await api('series?window='+encodeURIComponent(statWin)+'&by='+chartBy);}catch(e){return;}
-  drawChart(d,chartMetric,{wrap:$('chartwrap'),legend:$('chartlegend'),hint:$('charthint'),by:chartBy,H:240});
-}
-// Reusable stacked-bar time chart. els={wrap,legend,hint?,by,H?}. metric ∈ tok|n|err.
-function drawChart(d,metric,els){
-  const wrap=els.wrap, leg=els.legend;
-  const pts=d.points||[], series=d.series||[];
+/* ───────── stacked-bar time chart ───────── */
+const METRIC_LABEL = {tok:'tokens',n:'calls',err:'errors'};
+function buildChart(d, metric, opts){
+  const pts=d.points||[], series=d.series||[]; const H=opts.H||240;
   const bm=d.bucketMs, bl=bm>=86400000?(bm/86400000+'d'):bm>=3600000?(bm/3600000+'h'):(bm/60000+'min');
-  if(els.hint)els.hint.textContent=`— ${METRIC_LABEL[metric]} per ${bl} bucket${els.by?', '+els.by:''}`;
-  if(!pts.length){ wrap.innerHTML='<span class="mut">no data in window</span>'; if(leg)leg.innerHTML=''; return; }
-  const H=els.H||240, W=Math.max(560,pts.length*16+60), padL=52, padB=22, padT=10, plotH=H-padB-padT, plotW=W-padL-10;
+  const hint=`— ${METRIC_LABEL[metric]} per ${bl} bucket${opts.by?', '+opts.by:''}`;
+  if(!pts.length) return {svg:'<span class="mut">no data in window</span>',hint,legend:[]};
+  const W=Math.max(560,pts.length*16+60), padL=52, padB=22, padT=10, plotH=H-padB-padT, plotW=W-padL-10;
   const field=metric==='tok'?'tok':'n';
   const stackVal=(p,name)=>metric==='err'?(name==='__err'?p.totalErr:0):(p[field][name]||0);
   const useSeries=metric==='err'?['__err']:series;
@@ -1123,61 +204,693 @@ function drawChart(d,metric,els){
   const maxV=Math.max(1,...totals);
   const bw=Math.max(4,Math.min(26,(plotW/pts.length)-3));
   const x=i=>padL+i*(plotW/pts.length)+(plotW/pts.length-bw)/2;
-  let g=''; for(let i=0;i<=4;i++){const yy=padT+plotH-(i/4*plotH);const vv=maxV*i/4;g+=`<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W-10}" y2="${yy.toFixed(1)}" stroke="#21262d"/><text x="${padL-6}" y="${(yy+3).toFixed(1)}" fill="#9aa4b2" font-size="10" text-anchor="end">${nfmt(vv)}</text>`;}
+  let g=''; for(let i=0;i<=4;i++){const yy=padT+plotH-(i/4*plotH);const vv=maxV*i/4;g+=`<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W-10}" y2="${yy.toFixed(1)}" stroke="#26262b"/><text x="${padL-6}" y="${(yy+3).toFixed(1)}" fill="#a1a1aa" font-size="10" text-anchor="end">${nfmt(vv)}</text>`;}
   let bars='';
-  pts.forEach((p,i)=>{
-    let yacc=padT+plotH;
-    useSeries.forEach((nm)=>{
-      const v=stackVal(p,nm); if(v<=0)return;
-      const h=v/maxV*plotH; yacc-=h;
-      const c=metric==='err'?'#f85149':seriesColor(nm,series.indexOf(nm));
-      bars+=`<rect x="${x(i).toFixed(1)}" y="${yacc.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${c}"><title>${fmtTime(p.t)}\n${esc(nm==='__err'?'errors':nm)}: ${v.toLocaleString()}</title></rect>`;
+  pts.forEach((p,i)=>{ let yacc=padT+plotH;
+    useSeries.forEach((nm)=>{ const v=stackVal(p,nm); if(v<=0)return; const hh=v/maxV*plotH; yacc-=hh;
+      const c=metric==='err'?'#ef4444':seriesColor(nm,series.indexOf(nm));
+      bars+=`<rect x="${x(i).toFixed(1)}" y="${yacc.toFixed(1)}" width="${bw.toFixed(1)}" height="${hh.toFixed(1)}" fill="${c}" rx="1"><title>${fmtTime(p.t)}\n${nm==='__err'?'errors':nm}: ${v.toLocaleString()}</title></rect>`;
     });
   });
   let xl=''; const step=Math.max(1,Math.ceil(pts.length/6));
-  pts.forEach((p,i)=>{ if(i%step)return; const t=new Date(p.t); const lab=bm<3600000?t.toISOString().slice(11,16):t.toISOString().slice(5,16).replace('T',' '); xl+=`<text x="${(x(i)+bw/2).toFixed(1)}" y="${H-6}" fill="#9aa4b2" font-size="10" text-anchor="middle">${lab}</text>`; });
-  wrap.innerHTML=`<svg width="${W}" height="${H}" style="max-width:none">${g}${bars}${xl}</svg>`;
-  if(leg)leg.innerHTML=metric==='err'?'<span><span class="swatch" style="background:#f85149"></span>errors</span>'
-    :series.map((nm,i)=>`<span><span class="swatch" style="background:${seriesColor(nm,i)}"></span>${esc(nm)}</span>`).join('');
+  pts.forEach((p,i)=>{ if(i%step)return; const t=new Date(p.t); const lab=bm<3600000?t.toISOString().slice(11,16):t.toISOString().slice(5,16).replace('T',' '); xl+=`<text x="${(x(i)+bw/2).toFixed(1)}" y="${H-6}" fill="#a1a1aa" font-size="10" text-anchor="middle">${lab}</text>`; });
+  const svg=`<svg width="${W}" height="${H}" style="max-width:none">${g}${bars}${xl}</svg>`;
+  const legend=metric==='err'?[{name:'errors',color:'#ef4444'}]:series.map((nm,i)=>({name:nm,color:seriesColor(nm,i)}));
+  return {svg,hint,legend};
+}
+const Chart = ({data,metric,by,H}) => {
+  const {svg,hint,legend}=useMemo(()=>buildChart(data,metric,{by,H}),[data,metric,by,H]);
+  return html`<div>
+    <div style="overflow-x:auto" dangerouslySetInnerHTML=${{__html:svg}}></div>
+    <div class="flex" style="gap:12px;flex-wrap:wrap;margin-top:8px;font-size:12px">
+      ${legend.map(l=>html`<span><span class="swatch" style="background:${l.color}"></span>${l.name}</span>`)}
+    </div>
+    <div class="mut" style="font-size:12px;margin-top:2px">${hint}</div>
+  </div>`;
+};
+const Seg = ({items,val,onChange}) => html`<div class="seg">
+  ${items.map(([v,l])=>html`<button class=${v===val?'on':''} onClick=${()=>onChange(v)}>${l}</button>`)}
+</div>`;
+
+/* ───────── app context ───────── */
+const Ctx = createContext(null);
+const useApp = () => useContext(Ctx);
+
+/* ───────── OVERVIEW ───────── */
+function Overview(){
+  const {state,openCall} = useApp();
+  const [health,setHealth]=useState(null);
+  const [st1h,setSt1h]=useState(null);
+  const [recent,setRecent]=useState(null);
+  const [series,setSeries]=useState(null);
+  const [ovWin,setOvWin]=useState('6h');
+  const [ovMetric,setOvMetric]=useState('n');
+  const [cfgOpen,setCfgOpen]=useState(false);
+  const load=useCallback(async()=>{
+    try{ const [h,s]=await Promise.all([api('health'),api('stats?window=1h').catch(()=>null)]); setHealth(h); setSt1h(s); }catch(e){}
+    try{ setRecent((await api('calls?limit=18')).rows||[]); }catch(e){}
+  },[]);
+  useEffect(()=>{load();},[load]);
+  useEffect(()=>{ (async()=>{ try{ setSeries(await api('series?window='+ovWin+'&by=lane')); }catch(e){} })(); },[ovWin]);
+  if(!health) return html`<${PageHead} title="Overview" onRefresh=${load}/><div class="mut">loading…</div>`;
+  const laneStat={}; ((st1h&&st1h.byLane)||[]).forEach(r=>laneStat[r.lane]=r);
+  const lanes=[['local',state.bases.local,health.local],['wrappy',state.bases.wrappy,health.wrappy],['crazyrouter',state.bases.crazyrouter,health.crazyrouter]];
+  const up=[health.local,health.wrappy,health.crazyrouter].filter(x=>x&&x.up).length;
+  const fm=state.forceModel||{};
+  return html`
+  <${PageHead} title="Overview" onRefresh=${load}/>
+  <${Issues} health=${health} st=${st1h} state=${state}/>
+  <${Card}>
+    <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Activity <small class="hint">— when, by lane</small></h3>
+      <div class="flex" style="gap:6px;flex-wrap:wrap">
+        <${Seg} val=${ovMetric} onChange=${setOvMetric} items=${[['n','Calls'],['tok','Tokens'],['err','Errors']]}/>
+        <${Seg} val=${ovWin} onChange=${setOvWin} items=${[['15m','15m'],['1h','1h'],['6h','6h'],['24h','24h']]}/>
+      </div>
+    </div>
+    <div style="margin-top:12px">${series?html`<${Chart} data=${series} metric=${ovMetric} by="lane" H=${200}/>`:html`<span class="mut">loading…</span>`}</div>
+  </${Card}>
+  <${Card}>
+    <div class="flex" style="justify-content:space-between"><h3 style="margin:0">Recent calls <small class="hint">— newest first · click to open</small></h3><button class="ghost sm" onClick=${()=>load()}>↻</button></div>
+    <div style="overflow:auto"><table>
+      <tr><th>when</th><th>project</th><th>model</th><th>lane</th><th>status</th><th>lat · tok</th></tr>
+      ${(recent||[]).length? (recent||[]).map(r=>html`
+        <tr class="click" onClick=${()=>openCall(r.id)}>
+          <td class="mono mut" style="font-size:12px;white-space:nowrap" title=${fmtTime(r.ts)}>${ago(r.ts)} ago</td>
+          <td style="font-size:12px">${r.project?html`<span class="chip" style="color:#8bc88b">${r.project}</span>`:html`<span class="mut" style="font-size:11px">(none)</span>`}</td>
+          <td class="mono" style="font-size:12px">${r.req_model||'-'}</td>
+          <td><${LanePill} lane=${r.lane}/></td>
+          <td><${StatusPill} status=${r.status} error=${r.error}/></td>
+          <td class="mono" style="font-size:12px">${fmtMs(r.duration_ms)} · ${r.total_tokens??'—'}t</td>
+        </tr>`) : html`<tr><td colspan="6" class="mut">no calls logged yet</td></tr>`}
+    </table></div>
+  </${Card}>
+  <div class="grid">
+    <${KV} n="Lanes up">${up<3?html`<span class="down">${up} / 3</span>`:up+' / 3'}<//>
+    <${KV} n="Force model">${fm.enabled?html`<span class="warnp">${fm.lane}/${fm.model}</span>`:'off'}<//>
+    <${KV} n="Wrappy failover">${(state.wrappyFallback&&state.wrappyFallback.enabled)?'→ crazyrouter':html`<span class="warnp">off</span>`}<//>
+    <${KV} n="Cloud policy">${state.cloudPolicy||'open'}<//>
+    <${KV} n="JSON enforce">${state.jsonEnforce?'ON':'OFF'}<//>
+    <${KV} n="Config">${state.configPersisted?'file-backed':'env defaults'}<//>
+  </div>
+  <${Card}>
+    <h3>Lane health <small class="hint">— live probe + last-hour traffic</small></h3>
+    <div style="overflow:auto"><table>
+      <tr><th>Lane</th><th>Target</th><th>Probe</th><th>RTT</th><th>Models</th><th>Calls 1h</th><th>Avg</th><th>Err</th></tr>
+      ${lanes.map(([lane,base,r])=>{ const ls=laneStat[lane]||{}; const slow=ls.avg_ms>SLOW_MS, errd=ls.errors>0;
+        return html`<tr>
+          <td><${Pill} cls=${lane}>${lane}<//></td>
+          <td class="mono" style="font-size:12px">${base}</td>
+          <td>${r.up?html`<${Pill} cls="up">UP ${r.status}<//>`:html`<${Pill} cls="down">DOWN ${r.status||''}<//>`}</td>
+          <td class="mono">${r.ms}ms</td><td>${r.count??'—'}</td>
+          <td class="mono">${ls.n??'—'}</td>
+          <td class="mono" style=${slow?'color:var(--amb);font-weight:700':''}>${fmtMs(ls.avg_ms)}</td>
+          <td class="mono" style=${errd?'color:var(--red);font-weight:700':''}>${ls.errors??'—'}</td>
+        </tr>`;})}
+    </table></div>
+  </${Card}>
+  <details class="adv" open=${cfgOpen}><summary onClick=${e=>{e.preventDefault();setCfgOpen(!cfgOpen);}}>Effective config (raw JSON)</summary>
+    ${cfgOpen&&html`<pre>${JSON.stringify({forceModel:state.forceModel,modelRoutes:state.modelRoutes,projectRoutes:state.projectRoutes,projectGroups:state.projectGroups,cloudPolicy:state.cloudPolicy,cloudAllowlist:state.cloudAllowlist,defaultRoute:state.defaultRoute,localMap:state.localMap,gatedModels:state.gatedModels,bases:state.bases,jsonEnforce:state.jsonEnforce,configPersisted:state.configPersisted},null,2)}</pre>`}
+  </details>`;
+}
+function Issues({health,st,state}){
+  const probs=[];
+  ['local','wrappy','crazyrouter'].forEach(l=>{ const r=health[l]; if(r&&!r.up) probs.push(['down',`Lane ${l} is DOWN (status ${r.status||'—'}). Traffic to it will fail.`]); });
+  if(st&&st.byLane){
+    st.byLane.forEach(r=>{ if(r.avg_ms>SLOW_MS) probs.push(['slow',`Lane ${r.lane} is slow — avg ${fmtMs(r.avg_ms)} over the last hour (${r.n} calls).`]); });
+    if(st.windowJsonFails>0) probs.push(['refusal',`${st.windowJsonFails} JSON-enforce failure(s) in the last hour — usually a prose refusal, surfaced as 422. Not a proxy bug.`]);
+    const otherErr=st.windowErrors-(st.windowJsonFails||0); const rate=st.windowCalls>0?otherErr/st.windowCalls:0;
+    if(rate>0.05 && st.windowCalls>=20) probs.push(['err',`Non-refusal error rate ${(rate*100).toFixed(0)}% over the last hour (${otherErr}/${st.windowCalls}).`]);
+  }
+  if(state.forceModel&&state.forceModel.enabled) probs.push(['force',`Force-model is ON → every request rewritten to ${state.forceModel.lane}/${state.forceModel.model}.`]);
+  const ic={down:'⛔',slow:'🐢',refusal:'🙅',err:'⚠️',force:'⏻'};
+  if(!probs.length) return html`<div class="banner ok"><b style="color:var(--grn)">✓ All healthy</b> <span class="mut">— lanes up, no slow lanes or elevated errors in the last hour.</span></div>`;
+  return html`<div class="banner bad"><b style="color:var(--amb)">${probs.length} thing${probs.length>1?'s':''} to look at</b>
+    <ul style="margin:8px 0 0;padding-left:20px;list-style:none">${probs.map(([k,m])=>html`<li style="margin:5px 0">${ic[k]||'•'} ${m}</li>`)}</ul></div>`;
 }
 
-// ---- Overview: recent activity (the "when") + live recent-calls feed ----
-let ovWin='6h', ovMetric='n';
-async function loadOvActivity(){
-  let d; try{d=await api('series?window='+ovWin+'&by=lane');}catch(e){return;}
-  drawChart(d,ovMetric,{wrap:$('ovchart'),legend:$('ovchartleg'),hint:$('ovcharthint'),by:'lane',H:200});
+/* ───────── CALLS ───────── */
+function Calls(){
+  const {state,openCall,reload} = useApp();
+  const [rows,setRows]=useState([]); const [meta,setMeta]=useState('');
+  const [f,setF]=useState({q:'',model:'',project:'',lane:'',status:''});
+  const [lg,setLg]=useState(()=>clone(state.logging));
+  useEffect(()=>{ setLg(clone(state.logging)); },[state.logging]);
+  const search=window.location.search; // allow ?project= drill-in via openCallsWith
+  const load=useCallback(async()=>{
+    const p=new URLSearchParams({limit:'150'});
+    Object.entries(f).forEach(([k,v])=>{ if(v&&v.trim())p.set(k,v.trim()); });
+    try{ const d=await api('calls?'+p.toString()); setRows(d.rows||[]); setMeta(d.dbReady===false?'call DB unavailable':`${(d.rows||[]).length} shown of ${d.total} total`); }catch(e){}
+  },[f]);
+  useEffect(()=>{ // seed project filter from ?project on first mount
+    const q=new URLSearchParams(window.location.search); const pr=q.get('project');
+    if(pr){ setF(x=>({...x,project:pr})); }
+  },[]);
+  useEffect(()=>{load();},[load]);
+  const upd=(k,v)=>setF(x=>({...x,[k]:v}));
+  async function saveLogging(){ try{ const r=await api('config',{method:'POST',body:JSON.stringify({logging:{enabled:lg.enabled,content:lg.content,retain:parseInt(lg.retain||50000,10)}})}); reload(r.state); toast('logging settings saved'); }catch(e){toast(e.message,true);} }
+  async function clearCalls(){ if(!confirm('Delete ALL logged calls? This cannot be undone.'))return; try{ await api('calls/clear',{method:'POST'}); toast('call log cleared'); load(); }catch(e){toast(e.message,true);} }
+  return html`
+  <${PageHead} title="Call log"/>
+  <${Card}>
+    <div class="row">
+      <input placeholder="search model / ip / ua / prompt / reply…" style="flex:3" value=${f.q} onInput=${e=>upd('q',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load()}/>
+      <input placeholder="exact model" style="flex:1" value=${f.model} onInput=${e=>upd('model',e.target.value)}/>
+      <input placeholder="project" style="flex:1" value=${f.project} onInput=${e=>upd('project',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load()}/>
+      <select style="flex:0 0 130px" value=${f.lane} onChange=${e=>upd('lane',e.target.value)}><option value="">any lane</option><option>local</option><option>crazyrouter</option><option>wrappy</option><option>blocked</option></select>
+      <select style="flex:0 0 110px" value=${f.status} onChange=${e=>upd('status',e.target.value)}><option value="">any status</option><option value="ok">ok (&lt;400)</option><option value="error">error (≥400)</option></select>
+      <button class="ghost sm" style="flex:0 0 auto" onClick=${load}>↻ Load</button>
+    </div>
+    <small class="hint">${meta}</small>
+  </${Card}>
+  <${Card}><div style="overflow:auto"><table>
+    <tr><th>time</th><th>project</th><th>model → sent</th><th>lane</th><th>key</th><th>status</th><th>ms</th><th>tok</th><th>ip / ua</th></tr>
+    ${rows.map(r=>html`<tr class="click" onClick=${()=>openCall(r.id)}>
+      <td class="mono" style="font-size:12px;white-space:nowrap">${fmtTime(r.ts)}</td>
+      <td style="font-size:12px">${r.project?html`<span class="pill" style="background:#2a3a2a;color:#8bc88b">${r.project}</span>`:html`<span class="mut" style="font-size:11px">(none)</span>`}</td>
+      <td class="mono" style="font-size:12px">${r.req_model||'-'}${r.sent_model&&r.sent_model!==r.req_model?html` <span class="mut">→ ${r.sent_model}</span>`:''}${r.stream?html` <span class="mut">≈stream</span>`:''}</td>
+      <td><${LanePill} lane=${r.lane}/></td>
+      <td class="mono" style="font-size:12px">${r.key_label||''}</td>
+      <td><${StatusPill} status=${r.status} error=${r.error}/></td>
+      <td class="mono">${r.duration_ms??'—'}</td><td class="mono">${r.total_tokens??'—'}</td>
+      <td class="mut mono" style="font-size:11px">${r.ip||''}<br/>${(r.ua||'').slice(0,32)}</td>
+    </tr>`)}
+  </table></div></${Card}>
+  <${Card}>
+    <h3>Logging settings</h3>
+    <div class="row">
+      <label class="flex" style="flex:0 0 auto"><input type="checkbox" checked=${!!lg.enabled} onChange=${e=>setLg({...lg,enabled:e.target.checked})} style="width:auto;margin-right:8px"/> log calls</label>
+      <label class="flex" style="flex:0 0 auto"><input type="checkbox" checked=${!!lg.content} onChange=${e=>setLg({...lg,content:e.target.checked})} style="width:auto;margin-right:8px"/> store prompt + reply content</label>
+      <div style="flex:0 0 auto"><label style="margin:0">retain rows</label><input type="number" min="100" step="1000" value=${lg.retain||50000} onInput=${e=>setLg({...lg,retain:e.target.value})} style="width:130px"/></div>
+    </div>
+    <small class="hint">${state.loggingDbReady?'DB ready — calls.db on the /data persistent volume':'⚠ call DB unavailable — logging is off'}</small>
+    <div style="margin-top:10px"><button onClick=${saveLogging}>Save logging settings</button><button class="danger" style="margin-left:8px" onClick=${clearCalls}>Clear log</button></div>
+  </${Card}>`;
 }
-async function loadRecent(){
-  let d; try{d=await api('calls?limit=18');}catch(e){return;}
-  const t=$('recenttbl'); t.querySelectorAll('tr:not(:first-child)').forEach(r=>r.remove());
-  if(!d.rows||!d.rows.length){ const tr=document.createElement('tr'); tr.innerHTML='<td colspan="6" class="mut">no calls logged yet</td>'; t.appendChild(tr); return; }
-  d.rows.forEach(r=>{
-    const tr=document.createElement('tr'); tr.style.cursor='pointer'; tr.onclick=()=>{ go('calls'); showCall(r.id); };
-    const refusal=r.status>=400 && /^json_validation_failed/.test(r.error||'');
-    const st=refusal?`<span class="pill warnp">🙅 ${r.status}</span>`:r.status>=400?`<span class="pill down">${r.status}</span>`:`<span class="pill up">${r.status||'—'}</span>`;
-    const proj=r.project?`<span class="chip" style="color:#8bc88b">${esc(r.project)}</span>`:'<span class="mut" style="font-size:11px">(none)</span>';
-    tr.innerHTML=`<td class="mono mut" style="font-size:12px;white-space:nowrap" title="${fmtTime(r.ts)}">${ago(r.ts)} ago</td>`+
-      `<td style="font-size:12px">${proj}</td>`+
-      `<td class="mono" style="font-size:12px">${esc(r.req_model||'-')}</td>`+
-      `<td><span class="pill ${laneCls[r.lane]||''}">${esc(r.lane||'?')}</span></td>`+
-      `<td>${st}</td>`+
-      `<td class="mono" style="font-size:12px">${fmtMs(r.duration_ms)} · ${r.total_tokens??'—'}t</td>`;
-    t.appendChild(tr);
+
+/* ───────── STATS ───────── */
+const WIN_ITEMS=[['15m','Last 15 min'],['1h','Last hour'],['6h','Last 6h'],['24h','Last 24h'],['7d','Last 7d'],['30d','Last 30d'],['all','All time']];
+function Stats(){
+  const {go,setCallsProject} = useApp();
+  const [win,setWin]=useState('24h');
+  const [s,setS]=useState(null);
+  const [series,setSeries]=useState(null);
+  const [metric,setMetric]=useState('tok'); const [by,setBy]=useState('lane');
+  const [sort,setSort]=useState({key:'tok',dir:-1});
+  const load=useCallback(async()=>{ try{ setS(await api('stats?window='+encodeURIComponent(win))); }catch(e){} },[win]);
+  useEffect(()=>{load();},[load]);
+  useEffect(()=>{ (async()=>{ try{ setSeries(await api('series?window='+encodeURIComponent(win)+'&by='+by)); }catch(e){} })(); },[win,by]);
+  return html`
+  <${PageHead} title="Usage stats" onRefresh=${load}/>
+  <div class="wintabs">${WIN_ITEMS.map(([v,l])=>html`<button class=${v===win?'on':''} onClick=${()=>setWin(v)}>${l}</button>`)}</div>
+  ${!s?html`<div class="mut">loading…</div>`: s.dbReady===false?html`<${KV} n="Status">call DB unavailable<//>`: html`
+  ${(()=>{ const inT=s.windowPromptTokens||0,outT=s.windowCompletionTokens||0,tot=s.windowTokens||0; const avg=s.windowCalls>0?Math.round(tot/s.windowCalls):0; const lbl=(WIN_ITEMS.find(w=>w[0]===s.window)||[])[1]||s.window;
+    return html`<div class="grid">
+      <${KV} n=${'Tokens ('+lbl+')'}>${tot.toLocaleString()}<//>
+      <${KV} n="In → Out">${nfmt(inT)} <span class="mut">→</span> ${nfmt(outT)}<//>
+      <${KV} n="Avg / call">${avg.toLocaleString()}<//>
+      <${KV} n="Est. cost">${usd(s.windowCost)} <small class="hint">crazyrouter</small><//>
+      <${KV} n="Calls">${s.windowCalls.toLocaleString()}<//>
+      <${KV} n="Errors">${(s.windowErrors||0)}${s.windowJsonFails?html` <small class="hint">(${s.windowJsonFails} refusal)</small>`:''}<//>
+      <${KV} n="Total ever">${s.total.toLocaleString()}<//>
+      <${KV} n="Oldest">${s.oldest?fmtTime(s.oldest):'—'}<//>
+    </div>`; })()}
+  <${Card}>
+    <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">History</h3>
+      <div class="flex" style="gap:6px;flex-wrap:wrap">
+        <${Seg} val=${metric} onChange=${setMetric} items=${[['tok','Tokens'],['n','Calls'],['err','Errors']]}/>
+        <${Seg} val=${by} onChange=${setBy} items=${[['lane','by lane'],['project','by project'],['model','by model']]}/>
+      </div>
+    </div>
+    <div style="margin-top:12px">${series?html`<${Chart} data=${series} metric=${metric} by=${by} H=${240}/>`:html`<span class="mut">loading…</span>`}</div>
+  </${Card}>
+  <${Card}>
+    <h3>Routing — where traffic & tokens go <small class="hint">— share by lane</small></h3>
+    ${(()=>{ const lanes=s.byLane||[]; const totN=lanes.reduce((a,r)=>a+r.n,0)||1, totT=lanes.reduce((a,r)=>a+r.tok,0)||1;
+      return lanes.length?lanes.map((r,i)=>{ const c=seriesColor(r.lane,i),cp=r.n/totN*100,tp=r.tok/totT*100;
+        return html`<div class="lblrow"><span class="nm"><span class="swatch" style="background:${c}"></span>${r.lane}</span>
+          <span class="bar"><i style="width:${cp.toFixed(1)}%;background:${c}"></i></span>
+          <span class="vv">${r.n} calls (${cp.toFixed(0)}%) · ${nfmt(r.tok)} tok (${tp.toFixed(0)}%)</span></div>`;
+      }):html`<span class="mut">no traffic in window</span>`; })()}
+  </${Card}>
+  <${Card}>
+    <h3>By project <small class="hint">— click a row to see its calls. <code>(none)</code> = no <code>X-Project</code> header.</small></h3>
+    <div style="overflow:auto">${ProjectTable({s,sort,setSort,go,setCallsProject})}</div>
+  </${Card}>
+  <${Card}>
+    <h3>By model</h3>
+    <div style="overflow:auto"><table>
+      <tr><th>requested model</th><th>lane</th><th>calls</th><th>tokens</th><th>in → out</th><th>est $</th><th>avg</th></tr>
+      ${(s.byModel||[]).map(r=>html`<tr><td class="mono" style="font-size:12px">${r.req_model||'-'}</td><td><${LanePill} lane=${r.lane}/></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td><td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td></tr>`)}
+    </table></div>
+  </${Card}>
+  <div class="row">
+    <${Card}><h3>By lane</h3><table><tr><th>lane</th><th>calls</th><th>tokens</th><th>avg</th><th>err</th></tr>
+      ${(s.byLane||[]).map(r=>html`<tr><td><${LanePill} lane=${r.lane}/></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono">${fmtMs(r.avg_ms)}</td><td class="mono" style=${r.errors>0?'color:var(--red)':''}>${r.errors??'—'}</td></tr>`)}
+    </table></${Card}>
+    <${Card}><h3>By key</h3><table><tr><th>key</th><th>calls</th></tr>
+      ${(s.byKey||[]).map(r=>html`<tr><td class="mono" style="font-size:12px">${r.key_label||''}</td><td class="mono">${r.n}</td></tr>`)}
+    </table></${Card}>
+  </div>
+  `}`;
+}
+function ProjectTable({s,sort,setSort,go,setCallsProject}){
+  const rows=[...(s.byProject||[])]; const maxT=Math.max(1,...rows.map(r=>r.tok||0));
+  const k=sort.key,d=sort.dir;
+  rows.sort((a,b)=>{ let x,y;
+    if(k==='project'){return d*String(a.project||'').localeCompare(String(b.project||''));}
+    if(k==='io'){x=a.ptok||0;y=b.ptok||0;} else if(k==='errors'){x=a.n?a.errors/a.n:0;y=b.n?b.errors/b.n:0;} else {x=a[k]||0;y=b[k]||0;}
+    return d*((x>y?1:x<y?-1:0));
   });
+  const cols=[['project','project'],['n','calls'],['tok','tokens'],['io','in → out'],['usd','est $'],['avg_ms','avg'],['errors','err%'],[null,'lanes'],['last','last seen'],[null,'share']];
+  const onSort=key=>{ if(!key)return; setSort(sort.key===key?{key,dir:-sort.dir}:{key,dir:(key==='project'?1:-1)}); };
+  return html`<table>
+    <tr>${cols.map(([key,lbl])=>html`<th class=${key?'sortable '+(key===k?'on':''):''} onClick=${()=>onSort(key)}>${lbl}${key===k?(d<0?' ▾':' ▴'):''}</th>`)}</tr>
+    ${rows.map(r=>{ const errPct=r.n>0?(r.errors/r.n*100):0; const share=r.tok/maxT*100;
+      let badge=null; if(r.limit&&r.limitPct!=null){ const sp=r.limit.slowPct||95; const col=r.limitPct>=100?'var(--red)':r.limitPct>=sp?'var(--amb)':'#22c55e'; const cap=r.limit.tokens>0?nfmt(r.limit.tokens)+' tok':r.limit.calls>0?r.limit.calls+' calls':'';
+        badge=html` <span class="chip" title=${r.limitPct+'% of '+cap+'/'+r.limit.window+' · at 100%: '+r.limit.hard} style="color:${col};border-color:${col}">${r.limitPct}% ${r.limit.hard==='block'?'🚫':r.limit.hard==='slow'?'🐢':'⚠'}</span>`; }
+      return html`<tr class="click" onClick=${()=>{ setCallsProject((r.project&&r.project!=='(none)')?r.project:''); go('calls'); }}>
+        <td class="mono" style="font-size:12px">${r.project||'(none)'}${badge}</td>
+        <td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td>
+        <td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td>
+        <td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td>
+        <td class="mono" style=${r.errors>0?'color:var(--red);font-weight:700':'color:var(--mut)'}>${errPct.toFixed(errPct&&errPct<10?1:0)}%</td>
+        <td style="font-size:11px">${String(r.lanes||'').split(',').join(' ')}</td>
+        <td class="mono mut" style="font-size:11px">${ago(r.last)}</td>
+        <td><span class="bar"><i style="width:${share.toFixed(1)}%;background:var(--acc)"></i></span></td>
+      </tr>`; })}
+  </table>`;
 }
-$('ovwinSeg').addEventListener('click',e=>{const b=e.target.closest('button[data-w]');if(!b)return;ovWin=b.dataset.w;[...$('ovwinSeg').children].forEach(x=>x.classList.toggle('on',x===b));loadOvActivity();});
-$('ovmetricSeg').addEventListener('click',e=>{const b=e.target.closest('button[data-m]');if(!b)return;ovMetric=b.dataset.m;[...$('ovmetricSeg').children].forEach(x=>x.classList.toggle('on',x===b));loadOvActivity();});
 
-// ---- boot ----
-async function refreshAll(){
-  try{ const s=await api('state'); renderState(s); loadHealth(); }
-  catch(e){ /* showLogin already called on 401 */ }
+/* ───────── ROUTING ───────── */
+const PROJ_MODELS=[
+  {lane:'wrappy',model:'claude-sonnet-4-6'},{lane:'wrappy',model:'claude-opus-4-8'},{lane:'wrappy',model:'claude-haiku-4-5-20251001'},
+  {lane:'crazyrouter',model:'gemini-2.5-flash-lite'},{lane:'crazyrouter',model:'gemini-2.5-flash'},{lane:'crazyrouter',model:'gemini-2.5-pro'},
+  {lane:'local',model:'gemma-4-e4b-it-obliterated'},{lane:'local',model:'google/gemma-4-26b-a4b'},
+];
+const BLOCK_VAL='__block__';
+const valToRule=v=>{ if(!v)return null; if(v===BLOCK_VAL)return{block:true}; const [lane,...rest]=v.split('|'); return{lane,model:rest.join('|')}; };
+const ruleToVal=cur=>(cur&&!cur.block)?`${cur.lane}|${cur.model}`:(cur&&cur.block?BLOCK_VAL:'');
+function RulePill({cur}){ if(cur&&cur.block)return html`<${Pill} cls="down">🚫 blocked<//>`; if(cur)return html`<${LanePill} lane=${cur.lane}/>`; return html`<span class="pill mut" style="opacity:.5">auto</span>`; }
+function RuleSelect({cur,onChange}){
+  const sel=ruleToVal(cur); const extra=(cur&&!cur.block&&!PROJ_MODELS.some(p=>p.lane===cur.lane&&p.model===cur.model));
+  return html`<select value=${sel} onChange=${e=>onChange(valToRule(e.target.value))} style="flex:1">
+    <option value="">— auto (normal routing) —</option>
+    <option value=${BLOCK_VAL}>🚫 block — reject (0 tokens)</option>
+    ${extra&&html`<option value=${sel}>${cur.lane}: ${cur.model||"(keep caller's)"}</option>`}
+    ${PROJ_MODELS.map(p=>{const v=`${p.lane}|${p.model}`; return html`<option value=${v}>${p.lane}: ${p.model}</option>`;})}
+  </select>`;
 }
-async function init(){
-  try{ const s=await api('state'); showApp(); renderState(s); route(); }
-  catch(e){ showLogin(); }
+const LIM_WINDOWS=['1h','6h','24h','7d','30d'];
+const LIM_HARD=[['block','🚫 block 429'],['slow','🐢 slow only'],['warn','⚠ warn only']];
+function Routing(){
+  const {state,reload} = useApp();
+  const [d,setD]=useState(()=>seed(state));
+  const [known,setKnown]=useState([]);
+  const [resolveOut,setResolveOut]=useState(null);
+  const [resIn,setResIn]=useState(''); const [resProj,setResProj]=useState('');
+  const [na,setNa]=useState({alias:'',target:''}), [nr,setNr]=useState({in:'',lane:'wrappy',model:''}), [ng,setNg]=useState({name:'',prefix:''}), [nl,setNl]=useState('');
+  useEffect(()=>{ setD(seed(state)); },[state]);
+  useEffect(()=>{ (async()=>{ try{ const s=await api('stats?window=all'); setKnown((s.byProject||[]).map(r=>r.project).filter(Boolean)); }catch(e){} })(); },[]);
+  function seed(s){ return { bases:clone(s.bases), wrappyPrefix:s.wrappyPrefix, jsonEnforce:!!s.jsonEnforce, jsonMaxRetries:s.jsonMaxRetries,
+    gatedModels:(s.gatedModels||[]).slice(), localMap:clone(s.localMap), modelRoutes:clone(s.modelRoutes), projectRoutes:clone(s.projectRoutes),
+    projectGroups:clone(s.projectGroups||[]), projectLimits:clone(s.projectLimits), projectLimitDefault:clone(s.projectLimitDefault||{window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'}),
+    forceModel:clone(s.forceModel), wrappyFallback:clone(s.wrappyFallback), cloudPolicy:s.cloudPolicy||'open', cloudAllowlist:(s.cloudAllowlist||[]).slice(),
+    defaultRoute:clone(s.defaultRoute) }; }
+  const set=(k,v)=>setD(x=>({...x,[k]:v}));
+  const matchGroup=pkey=>{ const p=String(pkey||'').toLowerCase(); for(const g of d.projectGroups||[]) for(const pre of g.prefixes||[]) if(p===pre||p.startsWith(pre)) return g; return null; };
+  const projNames=[...new Set([...known,...Object.keys(d.projectRoutes||{})].filter(p=>p&&p!=='(none)'))].sort();
+
+  async function save(){
+    const patch={ bases:d.bases, localMap:d.localMap, modelRoutes:d.modelRoutes, projectRoutes:d.projectRoutes, projectGroups:d.projectGroups,
+      forceModel:{enabled:d.forceModel.enabled,lane:d.forceModel.lane||'wrappy',model:(d.forceModel.model||'').trim()},
+      wrappyFallback:{enabled:d.wrappyFallback.enabled,model:(d.wrappyFallback.model||'').trim()},
+      cloudPolicy:d.cloudPolicy, cloudAllowlist:d.cloudAllowlist, defaultRoute:{lane:d.defaultRoute.lane||'none',model:(d.defaultRoute.model||'').trim()},
+      wrappyPrefix:(d.wrappyPrefix||'').trim()||'claude', jsonEnforce:d.jsonEnforce, jsonMaxRetries:parseInt(d.jsonMaxRetries||2,10),
+      gatedModels:d.gatedModels };
+    if(patch.forceModel.enabled && !patch.forceModel.model){toast('force model is on but no model id set',true);return;}
+    try{ const r=await api('config',{method:'POST',body:JSON.stringify(patch)}); reload(r.state); toast('saved'+(r.persisted?' & persisted':' (NOT persisted!)'),!r.persisted); }catch(e){toast(e.message,true);}
+  }
+  async function saveLimits(){
+    const projectLimits={}; Object.entries(d.projectLimits||{}).forEach(([k,v])=>{ if(k.trim())projectLimits[k.trim().toLowerCase()]=v; });
+    try{ const r=await api('config',{method:'POST',body:JSON.stringify({projectLimits,projectLimitDefault:d.projectLimitDefault})}); reload(r.state); toast('usage limits saved'+(r.persisted?' & persisted':' (NOT persisted!)'),!r.persisted); }catch(e){toast(e.message,true);}
+  }
+  async function doResolve(){ setResolveOut('…'); try{ const r=await api('resolve',{method:'POST',body:JSON.stringify({model:resIn.trim(),project:resProj.trim()})});
+    setResolveOut((r.blocked?`❌ BLOCKED — ${r.why}\n`:`✅ ${r.input||'(empty)'}${r.project?'  [project='+r.project+']':''}  →  lane=${r.lane}  model=${r.sentModel}${r.gated?'  🔒gated':''}\n`)+`reason: ${r.reason}\nupstream: ${r.base}`);
+  }catch(e){ setResolveOut('error: '+e.message); } }
+  async function resetCfg(){ if(!confirm('Reset all routing/secrets to env defaults? This deletes the saved config file.'))return; try{ const r=await api('reset',{method:'POST'}); reload(r.state); toast('reset to env defaults'); }catch(e){toast(e.message,true);} }
+
+  const stg=state.knownLocalIds||{};
+  return html`
+  <${PageHead} title="Routing & flow control"/>
+  <${Card} cls="acc">
+    <h3 style="font-size:16px">🎯 Per-project model <small class="hint">— pick a model per app. <b>Auto</b> = normal routing. <b>🚫 Block</b> = reject. Beats groups + everything below.</small></h3>
+    <table><tr><th style="width:40%">Project</th><th>Model</th></tr>
+      ${projNames.length?projNames.map(k=>{ const cur=d.projectRoutes[k]; const grp=cur?null:matchGroup(k);
+        const pill=cur?html`<${RulePill} cur=${cur}/>`:(grp?html`<span class="pill ${grp.block?'down':(laneCls[grp.lane]||'')}" title=${'from group '+grp.name}>${grp.block?'🚫':grp.lane} ·grp</span>`:html`<${RulePill} cur=${null}/>`);
+        return html`<tr><td class="mono">${k}</td><td><div class="flex"><span style="flex:0 0 96px">${pill}</span>
+          <${RuleSelect} cur=${cur} onChange=${rule=>{ const pr=clone(d.projectRoutes); if(!rule)delete pr[k]; else pr[k]=rule; set('projectRoutes',pr); }}/></div></td></tr>`;
+      }):html`<tr><td colspan="2" class="mut">no projects seen yet — they appear once apps send an X-Project header</td></tr>`}
+    </table>
+  </${Card}>
+
+  <${Card} cls="acc">
+    <h3 style="font-size:16px">👥 Project groups <small class="hint">— bundle projects by name prefix and route/<b>block</b> together. A per-project model above overrides its group.</small></h3>
+    <table><tr><th style="width:22%">Group</th><th style="width:34%">Prefixes</th><th>Model / action</th><th style="width:40px"></th></tr>
+      ${(d.projectGroups||[]).length?(d.projectGroups||[]).map((g,i)=>html`<tr>
+        <td class="mono">${g.name}</td>
+        <td><input class="mono" style="width:100%" value=${(g.prefixes||[]).join(', ')} onChange=${e=>{ const gs=clone(d.projectGroups); gs[i].prefixes=e.target.value.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean); set('projectGroups',gs); }}/></td>
+        <td><div class="flex"><span style="flex:0 0 96px"><${RulePill} cur=${g.block?{block:true}:(g.lane?{lane:g.lane,model:g.model}:null)}/></span>
+          <${RuleSelect} cur=${g.block?{block:true}:(g.lane?{lane:g.lane,model:g.model}:null)} onChange=${rule=>{ const gs=clone(d.projectGroups); const {name,prefixes}=gs[i]; gs[i]=rule?Object.assign({name,prefixes},rule):{name,prefixes,block:false,lane:'',model:''}; set('projectGroups',gs); }}/></div></td>
+        <td><button class="ghost" onClick=${()=>{ const gs=clone(d.projectGroups); gs.splice(i,1); set('projectGroups',gs); }}>✕</button></td>
+      </tr>`):html`<tr><td colspan="4" class="mut">no groups — add one below</td></tr>`}
+    </table>
+    <div class="row" style="margin-top:8px">
+      <input placeholder="group name (e.g. seoul)" style="flex:1" value=${ng.name} onInput=${e=>setNg({...ng,name:e.target.value})}/>
+      <input placeholder="prefixes, comma-sep (e.g. seoul:)" style="flex:2" value=${ng.prefix} onInput=${e=>setNg({...ng,prefix:e.target.value})}/>
+      <button style="flex:0 0 auto" onClick=${()=>{ const name=ng.name.trim(); const prefixes=ng.prefix.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean); if(!name){toast('group name required',true);return;} if(!prefixes.length){toast('at least one prefix required',true);return;} if((d.projectGroups||[]).some(g=>g.name.toLowerCase()===name.toLowerCase())){toast('group name already exists',true);return;} set('projectGroups',[...(d.projectGroups||[]),{name,prefixes,block:true}]); setNg({name:'',prefix:''}); toast('added (unsaved) — defaults to 🚫 block; pick a model then Save'); }}>+ add group</button>
+    </div>
+  </${Card}>
+
+  <${Card} cls="amb">
+    <h3 style="font-size:16px">📊 Usage limits <small class="hint">— cap tokens/calls per project over a rolling window: <b style="color:var(--amb)">warn</b> → <b style="color:var(--amb)">slow</b> → <b style="color:var(--red)">block</b>. 0 = no cap.</small></h3>
+    <div style="overflow:auto"><table>
+      <tr><th style="min-width:150px">Project</th><th>Window</th><th>Token cap</th><th>Call cap</th><th>Warn%</th><th>Slow%</th><th>Slow ms</th><th>At 100%</th><th style="width:40px"></th></tr>
+      ${LimRow({name:'★ default',l:d.projectLimitDefault,isDef:true,onChg:v=>set('projectLimitDefault',v)})}
+      ${Object.keys(d.projectLimits||{}).sort().map(k=>LimRow({name:k,l:d.projectLimits[k],isDef:false,
+        onChg:v=>{ const pl=clone(d.projectLimits); pl[k]=v; set('projectLimits',pl); },
+        onRm:()=>{ const pl=clone(d.projectLimits); delete pl[k]; set('projectLimits',pl); }}))}
+    </table></div>
+    <div class="row" style="margin-top:8px;align-items:center">
+      <input placeholder="project slug (exact, e.g. fb-bot)" style="flex:1" value=${nl} onInput=${e=>setNl(e.target.value)}/>
+      <button style="flex:0 0 auto" onClick=${()=>{ const name=nl.trim().toLowerCase(); if(!name){toast('enter a project slug',true);return;} if((d.projectLimits||{})[name]){toast('that project already has a row',true);return;} const pl=clone(d.projectLimits); pl[name]={window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'}; set('projectLimits',pl); setNl(''); }}>+ add project limit</button>
+      <span style="flex:1"></span>
+      <button style="flex:0 0 auto" onClick=${saveLimits}>Save usage limits</button>
+    </div>
+  </${Card}>
+
+  <${Card} cls="amb">
+    <h3 style="color:var(--amb)">⏻ Force model <small class="hint">— override EVERY request, ignore what the caller asks for</small></h3>
+    <div class="row">
+      <label class="flex" style="flex:0 0 auto"><input type="checkbox" checked=${!!d.forceModel.enabled} onChange=${e=>set('forceModel',{...d.forceModel,enabled:e.target.checked})} style="width:auto;margin-right:8px"/> force enabled</label>
+      <select style="flex:0 0 140px" value=${d.forceModel.lane||'wrappy'} onChange=${e=>set('forceModel',{...d.forceModel,lane:e.target.value})}><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
+      <input style="flex:2" placeholder="model id sent to that lane" value=${d.forceModel.model||''} onInput=${e=>set('forceModel',{...d.forceModel,model:e.target.value})}/>
+    </div>
+  </${Card}>
+
+  <${Card}>
+    <h3>🛟 Wrappy failover <small class="hint">— if claudebox dies, auto-retry on crazyrouter</small></h3>
+    <div class="row">
+      <label class="flex" style="flex:0 0 auto"><input type="checkbox" checked=${!!d.wrappyFallback.enabled} onChange=${e=>set('wrappyFallback',{...d.wrappyFallback,enabled:e.target.checked})} style="width:auto;margin-right:8px"/> fallback enabled</label>
+      <input style="flex:2" placeholder="crazyrouter model (blank = resend caller's model)" value=${d.wrappyFallback.model||''} onInput=${e=>set('wrappyFallback',{...d.wrappyFallback,model:e.target.value})}/>
+    </div>
+    <small class="hint">Triggers on wrappy fetch-failure / HTTP ≥500 / 429 / 401 / 403. One retry per request.</small>
+  </${Card}>
+
+  <div style="margin:14px 0 4px"><button onClick=${save}>Save routing</button></div>
+
+  <details class="adv"><summary>Advanced routing &amp; config</summary>
+    <${Card}>
+      <h3>🔎 Resolve / trace <small class="hint">— see where a model goes, without calling it</small></h3>
+      <div class="row">
+        <input style="flex:2" placeholder="model name e.g. deepseek-v3" value=${resIn} onInput=${e=>setResIn(e.target.value)}/>
+        <input style="flex:1" placeholder="project (optional)" value=${resProj} onInput=${e=>setResProj(e.target.value)}/>
+        <button class="ghost" style="flex:0 0 auto" onClick=${doResolve}>Trace</button>
+      </div>
+      ${resolveOut!=null&&html`<pre>${resolveOut}</pre>`}
+    </${Card}>
+    <${Card}>
+      <h3>↪ Model overrides <small class="hint">— force a specific incoming model to ANY lane + model</small></h3>
+      <table><tr><th>Incoming model</th><th>→ lane</th><th>→ sent model</th><th></th></tr>
+        ${Object.entries(d.modelRoutes||{}).map(([k,v])=>html`<tr><td class="mono">${k}</td><td><${LanePill} lane=${v.lane}/></td><td class="mono">${v.model||'(unchanged)'}</td><td style="width:34px"><span class="x" onClick=${()=>{ const mr=clone(d.modelRoutes); delete mr[k]; set('modelRoutes',mr); }}>✕</span></td></tr>`)}
+      </table>
+      <div class="row" style="margin-top:8px">
+        <input placeholder="incoming e.g. deepseek-v3" value=${nr.in} onInput=${e=>setNr({...nr,in:e.target.value})}/>
+        <select style="flex:0 0 130px" value=${nr.lane} onChange=${e=>setNr({...nr,lane:e.target.value})}><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
+        <input placeholder="sent model id" value=${nr.model} onInput=${e=>setNr({...nr,model:e.target.value})}/>
+        <button class="ghost sm" style="flex:0 0 auto" onClick=${()=>{ const k=nr.in.trim().toLowerCase(); if(!k){toast('incoming model required',true);return;} const mr=clone(d.modelRoutes); mr[k]={lane:nr.lane,model:nr.model.trim()}; set('modelRoutes',mr); setNr({in:'',lane:nr.lane,model:''}); }}>+ Add</button>
+      </div>
+    </${Card}>
+    <${Card}>
+      <h3>☁ Crazyrouter policy</h3>
+      <div class="row" style="gap:18px">
+        ${['open','allowlist','off'].map(v=>html`<label class="flex" style="flex:0 0 auto"><input type="radio" name="cp" checked=${d.cloudPolicy===v} onChange=${()=>set('cloudPolicy',v)} style="width:auto;margin-right:6px"/> ${v==='open'?'open (forward anything)':v==='allowlist'?'allowlist only':'off (block crazyrouter)'}</label>`)}
+      </div>
+      <label>crazyrouter allowlist <small class="hint">(comma-separated model ids)</small></label>
+      <input placeholder="gemini-2.5-flash-lite, gpt-5.5, …" value=${(d.cloudAllowlist||[]).join(', ')} onInput=${e=>set('cloudAllowlist',e.target.value.split(',').map(x=>x.trim()).filter(Boolean))}/>
+      <h3 style="margin-top:14px">Default route <small class="hint">— for unknown/empty/blocked models. lane <code>none</code> = reject 400.</small></h3>
+      <div class="row">
+        <select style="flex:0 0 140px" value=${d.defaultRoute.lane||'none'} onChange=${e=>set('defaultRoute',{...d.defaultRoute,lane:e.target.value})}><option>none</option><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
+        <input placeholder="default model id (when lane ≠ none)" value=${d.defaultRoute.model||''} onInput=${e=>set('defaultRoute',{...d.defaultRoute,model:e.target.value})}/>
+      </div>
+    </${Card}>
+    <${Card}>
+      <h3>Local model aliases <small class="hint">— caller <code>model</code> → exact id sent to LM Studio</small></h3>
+      <table><tr><th>Alias</th><th>→ Upstream id</th><th>gated?</th><th></th></tr>
+        ${Object.entries(d.localMap||{}).map(([a,tg])=>html`<tr><td class="mono">${a}</td><td class="mono">${tg}</td><td>${(d.gatedModels||[]).includes(tg)?html`<${Pill} cls="warnp">🔒<//>`:''}</td><td style="width:34px"><span class="x" onClick=${()=>{ const lm=clone(d.localMap); delete lm[a]; set('localMap',lm); }}>✕</span></td></tr>`)}
+      </table>
+      <div class="row" style="margin-top:8px">
+        <input placeholder="alias e.g. local" value=${na.alias} onInput=${e=>setNa({...na,alias:e.target.value})}/>
+        <input placeholder="upstream id e.g. gemma-4-e4b-it-obliterated" value=${na.target} onInput=${e=>setNa({...na,target:e.target.value})}/>
+        <button class="ghost sm" style="flex:0 0 auto" onClick=${()=>{ const a=na.alias.trim().toLowerCase(),tg=na.target.trim(); if(!a||!tg){toast('alias and target required',true);return;} const lm=clone(d.localMap); lm[a]=tg; set('localMap',lm); setNa({alias:'',target:''}); }}>+ Add</button>
+      </div>
+      <small class="hint">Known local ids: e4b <code>${stg.e4b}</code> · gemma <code>${stg.gemma}</code> · obliterated <code>${stg.obliterated}</code></small>
+    </${Card}>
+    <${Card}>
+      <h3>Lane base URLs</h3>
+      <label>local lane (llama.cpp @ pbox GPU)</label><input value=${d.bases.local} onInput=${e=>set('bases',{...d.bases,local:e.target.value})}/>
+      <label>crazyrouter lane</label><input value=${d.bases.crazyrouter} onInput=${e=>set('bases',{...d.bases,crazyrouter:e.target.value})}/>
+      <label>wrappy lane (claudebox @ claude.hostbun.cc)</label><input value=${d.bases.wrappy} onInput=${e=>set('bases',{...d.bases,wrappy:e.target.value})}/>
+      <label>wrappy prefix <small class="hint">— models starting with this route to wrappy (default <code>claude</code>)</small></label><input value=${d.wrappyPrefix||''} onInput=${e=>set('wrappyPrefix',e.target.value)}/>
+    </${Card}>
+    <${Card}>
+      <h3>Structured / JSON output enforcement</h3>
+      <div class="row">
+        <label class="flex" style="flex:0 0 auto"><input type="checkbox" checked=${!!d.jsonEnforce} onChange=${e=>set('jsonEnforce',e.target.checked)} style="width:auto;margin-right:8px"/> enabled</label>
+        <div style="flex:0 0 auto"><label style="margin:0">max retries</label><input type="number" min="0" max="5" style="width:90px" value=${d.jsonMaxRetries} onInput=${e=>set('jsonMaxRetries',e.target.value)}/></div>
+      </div>
+      <label>Gated upstream model ids <small class="hint">— require the obliterated gate token</small></label>
+      <input value=${(d.gatedModels||[]).join(', ')} onInput=${e=>set('gatedModels',e.target.value.split(',').map(x=>x.trim()).filter(Boolean))}/>
+    </${Card}>
+    <button class="danger" onClick=${resetCfg}>Reset to env defaults</button>
+  </details>`;
 }
-buildNav();
-init();
+function LimRow({name,l,isDef,onChg,onRm}){
+  const g=(f,v)=>onChg({...l,[f]:v});
+  const num=(f,w)=>html`<input type="number" min="0" style="width:${w}" value=${l[f]??0} onInput=${e=>g(f,+e.target.value||0)}/>`;
+  return html`<tr>
+    ${isDef?html`<td><b>★ default</b><div class="hint">all attributed projects</div></td>`:html`<td class="mono">${name}</td>`}
+    <td><select value=${l.window||'24h'} onChange=${e=>g('window',e.target.value)}>${LIM_WINDOWS.map(w=>html`<option>${w}</option>`)}</select></td>
+    <td>${num('tokens','100px')}</td><td>${num('calls','78px')}</td>
+    <td><input type="number" min="0" max="100" style="width:50px" value=${l.warnPct??80} onInput=${e=>g('warnPct',+e.target.value||0)}/></td>
+    <td><input type="number" min="0" max="100" style="width:50px" value=${l.slowPct??95} onInput=${e=>g('slowPct',+e.target.value||0)}/></td>
+    <td>${num('slowMs','62px')}</td>
+    <td><select value=${l.hard||'block'} onChange=${e=>g('hard',e.target.value)}>${LIM_HARD.map(([v,lb])=>html`<option value=${v}>${lb}</option>`)}</select></td>
+    <td>${isDef?'':html`<button class="ghost" onClick=${onRm}>✕</button>`}</td>
+  </tr>`;
+}
+
+/* ───────── MODELS & TEST ───────── */
+function Models(){
+  const [models,setModels]=useState(null);
+  const [filter,setFilter]=useState('');
+  const [tm,setTm]=useState(''); const [tp,setTp]=useState('In one short sentence, what model are you?');
+  const [out,setOut]=useState(null);
+  useEffect(()=>{ (async()=>{ try{ setModels(await api('models')); }catch(e){} })(); },[]);
+  async function runTest(){ const model=tm.trim(); if(!model){toast('enter a model',true);return;} setOut('running…');
+    try{ const r=await api('test',{method:'POST',body:JSON.stringify({model,prompt:tp})}); setOut(`lane=${r.lane} sent=${r.sentModel} status=${r.status} ${r.ms}ms\n`+(r.content!=null?('\n'+r.content):('\n[no content]\n'+(r.error||r.raw||'')))); }
+    catch(e){ setOut('error: '+e.message); } }
+  const all=models?[...models.local,...models.wrappy,...models.crazyrouter]:[];
+  const sec=(title,cls,arr)=>{ const items=(arr||[]).filter(m=>!filter||m.id.toLowerCase().includes(filter.toLowerCase())); if(!items.length)return '';
+    return html`<div style="margin:10px 0 4px"><${Pill} cls=${cls}>${title}<//> <span class="mut">${items.length}</span></div>${items.map(m=>html`<div style="padding:3px 0">${m.id} <span class="mut">· ${m.owned_by||''}</span></div>`)}`; };
+  return html`
+  <${PageHead} title="Models & test"/>
+  <${Card}>
+    <h3>Test a model <small class="hint">— runs a real chat completion through current routing</small></h3>
+    <div class="row">
+      <input list="modellist" style="flex:2" placeholder="model e.g. local / claude-sonnet-4-6 / gemini-2.5-pro" value=${tm} onInput=${e=>setTm(e.target.value)}/>
+      <button style="flex:0 0 auto" onClick=${runTest}>Run</button>
+    </div>
+    <datalist id="modellist">${all.map(m=>html`<option value=${m.id}></option>`)}</datalist>
+    <input placeholder="prompt" value=${tp} onInput=${e=>setTp(e.target.value)} style="margin-top:8px"/>
+    ${out!=null&&html`<pre>${out}</pre>`}
+  </${Card}>
+  <${Card}>
+    <h3>Available models ${models?html`<span class="mut">(local ${models.local.length} · wrappy ${models.wrappy.length} · crazyrouter ${models.crazyrouter.length})</span>`:''}</h3>
+    <input placeholder="filter…" value=${filter} onInput=${e=>setFilter(e.target.value)} style="margin-bottom:8px"/>
+    <div class="mono" style="max-height:420px;overflow:auto">${models?html`${sec('local','local',models.local)}${sec('wrappy','wrappy',models.wrappy)}${sec('crazyrouter','crazyrouter',models.crazyrouter)}`:html`<span class="mut">loading…</span>`}</div>
+  </${Card}>`;
+}
+
+/* ───────── CRAZYROUTER ───────── */
+function Crazyrouter(){
+  const {reload}=useApp();
+  const [c,setC]=useState(null); const [nk,setNk]=useState(''); const [test,setTest]=useState(null);
+  const load=useCallback(async()=>{ setC('loading'); try{ setC(await api('crazyrouter')); }catch(e){ setC(null); } },[]);
+  useEffect(()=>{load();},[load]);
+  async function testKey(){ const key=nk.trim(); if(!key){toast('paste a key',true);return;} setTest('testing…');
+    try{ const r=await api('crazyrouter/test',{method:'POST',body:JSON.stringify({key})}); setTest(JSON.stringify(r,null,2)); toast(r.keyValid?'key is VALID — click Save key':'key is INVALID',!r.keyValid); }catch(e){ setTest('error: '+e.message); } }
+  async function saveKey(){ const key=nk.trim(); if(!key){toast('paste a key',true);return;} try{ const r=await api('config',{method:'POST',body:JSON.stringify({crazyrouterKey:key})}); reload(r.state); setNk(''); toast('key saved (live)'); load(); }catch(e){toast(e.message,true);} }
+  return html`
+  <${PageHead} title="Crazyrouter (cloud lane)" onRefresh=${load}/>
+  <${Card}>
+    ${c==='loading'||c==null?html`<div class="mut">${c==null?'unavailable':'checking…'}</div>`:html`
+    <div class="grid">
+      <${KV} n="Key">${c.keySet?(c.keyValid?html`<span class="up">valid</span>`:html`<span class="down">INVALID</span>`):html`<span class="down">not set</span>`}<//>
+      <${KV} n="Limit">${c.hardLimitUsd!=null?'$'+c.hardLimitUsd:'—'}<//>
+      <${KV} n="Used">${c.totalUsageUsd!=null?'$'+c.totalUsageUsd.toFixed(2):'—'}<//>
+      <${KV} n="Remaining">${c.remainingUsd!=null?'$'+c.remainingUsd.toFixed(2):'—'}<//>
+      <${KV} n="Models">${c.modelCount??'—'}<//>
+      <${KV} n="Key id">${c.keyMasked||'(none)'}<//>
+    </div>
+    ${(c.message||!c.keyValid)&&html`<p class="warn" style="margin-top:12px">${(c.message||'key check failed')+(c.statuses?' · statuses '+JSON.stringify(c.statuses):'')}</p>`}`}
+  </${Card}>
+  <${Card}>
+    <h3>Update key <small class="hint">— paste a new <code>sk-</code> key; test it before saving</small></h3>
+    <input placeholder="sk-…" value=${nk} onInput=${e=>setNk(e.target.value)}/>
+    <div class="flex" style="margin-top:10px"><button class="ghost" onClick=${testKey}>Test key</button><button onClick=${saveKey}>Save key (live, no redeploy)</button></div>
+    ${test!=null&&html`<pre>${test}</pre>`}
+  </${Card}>`;
+}
+
+/* ───────── SECRETS ───────── */
+function Secrets(){
+  const {state,reload}=useApp();
+  const [v,setV]=useState({claude:'',oblit:'',admin:''});
+  async function setSecret(field,val){ if(!val){toast('enter a value',true);return;} try{ const r=await api('config',{method:'POST',body:JSON.stringify({[field]:val})}); reload(r.state); toast(field+' updated'); }catch(e){toast(e.message,true);} }
+  async function disableGate(){ if(!confirm('Disable the gate? Gated models become open to anyone.'))return; try{ const r=await api('config',{method:'POST',body:JSON.stringify({oblitToken:''})}); reload(r.state); toast('gate disabled'); }catch(e){toast(e.message,true);} }
+  async function changePw(){ if(v.admin.length<3){toast('min 3 chars',true);return;} if(!confirm('Change admin password? You may need to sign in again.'))return; try{ await api('config',{method:'POST',body:JSON.stringify({adminPassword:v.admin})}); setV({...v,admin:''}); toast('password changed — re-login if prompted'); }catch(e){toast(e.message,true);} }
+  return html`
+  <${PageHead} title="Secrets & gate"/>
+  <div class="warn">Live, file-backed overrides (<code>${state.configFile}</code>). Leaving a field blank keeps the current value.</div>
+  <${Card}>
+    <h3>Wrappy lane token <small class="hint">(claudebox @ claude.hostbun.cc)</small> <span class="mut">(current: ${state.wrappyTokenMasked||'(none)'})</span></h3>
+    <div class="flex"><input type="password" placeholder="new wrappy token" value=${v.claude} onInput=${e=>setV({...v,claude:e.target.value})}/><button class="sm" style="flex:0 0 auto" onClick=${()=>{setSecret('wrappyToken',v.claude);setV({...v,claude:''});}}>Update</button></div>
+  </${Card}>
+  <${Card}>
+    <h3>Obliterated / uncensored gate <span class="mut">(token: ${state.oblitTokenSet?state.oblitTokenMasked:'(open — no gate)'})</span></h3>
+    <p class="mut" style="font-size:13px;margin:0 0 8px">When set, requests to a gated model require <code>Authorization: Bearer &lt;token&gt;</code>. Empty = open.</p>
+    <div class="flex"><input type="password" placeholder="new gate token" value=${v.oblit} onInput=${e=>setV({...v,oblit:e.target.value})}/><button class="sm" style="flex:0 0 auto" onClick=${()=>{setSecret('oblitToken',v.oblit);setV({...v,oblit:''});}}>Update</button><button class="danger sm" style="flex:0 0 auto" onClick=${disableGate}>Disable gate</button></div>
+    <small class="hint">Gated upstream model ids are edited on the Routing page (Advanced → JSON enforcement).</small>
+  </${Card}>
+  <${Card}>
+    <h3>Admin password <span class="mut">(current: ${state.adminPasswordMasked})</span></h3>
+    <div class="flex"><input type="password" placeholder="new admin password (≥3 chars)" value=${v.admin} onInput=${e=>setV({...v,admin:e.target.value})}/><button class="sm danger" style="flex:0 0 auto" onClick=${changePw}>Change</button></div>
+    <small class="hint">changing this signs you out of other sessions.</small>
+  </${Card}>`;
+}
+
+/* ───────── shared page header ───────── */
+const PageHead = ({title,onRefresh}) => html`<div class="flex" style="justify-content:space-between;margin-bottom:6px"><h2>${title}</h2>${onRefresh&&html`<button class="ghost sm" onClick=${onRefresh}>↻ Refresh</button>`}</div>`;
+
+/* ───────── call drawer ───────── */
+function CallDrawer({id,onClose}){
+  const [c,setC]=useState(null);
+  useEffect(()=>{ if(id==null){setC(null);return;} setC('loading');
+    (async()=>{ try{ setC(await api('call?id='+id)); }catch(e){ setC({error:e.message}); } })();
+  },[id]);
+  useEffect(()=>{ const h=e=>{ if(e.key==='Escape')onClose(); }; window.addEventListener('keydown',h); return ()=>window.removeEventListener('keydown',h); },[onClose]);
+  const open=id!=null;
+  const copy=()=>{ if(c&&typeof c==='object'&&!c.error) navigator.clipboard.writeText(JSON.stringify(c,null,2)).then(()=>toast('copied call JSON')); };
+  return html`
+  <div class=${'dov'+(open?' open':'')} onClick=${onClose}></div>
+  <aside class=${'drawer'+(open?' open':'')} aria-hidden=${!open}>
+    <div class="drawer-hd">
+      <div style="font-weight:600">${c&&c.id?html`Call #${c.id} <${StatusPill} status=${c.status} error=${c.error}/> <${LanePill} lane=${c.lane}/>`:'Call'}</div>
+      <span style="flex:1"></span>
+      <button class="ghost sm" onClick=${copy}>Copy JSON</button>
+      <button class="ghost sm" onClick=${onClose}>✕</button>
+    </div>
+    <div class="drawer-bd">
+      ${c==null||c==='loading'?html`<span class="mut">${c==='loading'?'loading…':''}</span>`
+      : c.error?html`<span class="down">error: ${c.error}</span>`
+      : html`
+      <div class="dsec"><div class="dmeta">
+        <${KV} n="when">${fmtTime(c.ts)}<//>
+        <${KV} n="project">${c.project||'(none)'}<//>
+        <${KV} n="model">${c.req_model||'-'}${c.sent_model&&c.sent_model!==c.req_model?html` <span class="mut">→ ${c.sent_model}</span>`:''}<//>
+        <${KV} n="key">${c.key_label||'—'}<//>
+        <${KV} n="latency">${fmtMs(c.duration_ms)}<//>
+        <${KV} n="stream">${c.stream?'yes':'no'}<//>
+        <${KV} n="tokens">${c.prompt_tokens??'?'} → ${c.completion_tokens??'?'} <span class="mut">(${c.total_tokens??'?'})</span><//>
+        <${KV} n="ip">${c.ip||'—'}<//>
+      </div></div>
+      ${c.error&&html`<div class="dsec"><div class="dlbl" style="color:var(--red)">error</div><div class="msgbox" style="color:var(--red)">${c.error}</div></div>`}
+      <div class="dsec"><div class="dlbl">prompt</div><div class="msgbox">${c.req_content||'(not stored)'}</div></div>
+      <div class="dsec"><div class="dlbl">reply</div><div class="msgbox">${c.resp_content||'(not stored)'}</div></div>
+      ${c.ua&&html`<div class="dsec"><div class="dlbl">user agent</div><div class="msgbox" style="max-height:none">${c.ua}</div></div>`}
+      `}
+    </div>
+  </aside>`;
+}
+
+/* ───────── shell ───────── */
+const PAGES={overview:Overview,calls:Calls,stats:Stats,routing:Routing,models:Models,crazyrouter:Crazyrouter,secrets:Secrets};
+function Shell({slug,go,children}){
+  const [sbOpen,setSbOpen]=useState(false);
+  return html`<div class="shell">
+    <aside class=${'sidebar'+(sbOpen?' open':'')}>
+      <div class="sb-brand"><div class="logo">hb</div><div><div class="t">hostbun</div><div class="s">llm proxy · admin</div></div></div>
+      <nav class="nav">
+        ${NAV.map(it=>it.sec?html`<div class="nav-sec">${it.sec}</div>`:html`
+          <a class=${'nav-item'+(it.slug===slug?' on':'')} href=${BASE+'/'+it.slug} onClick=${e=>{e.preventDefault();go(it.slug);setSbOpen(false);}}>
+            <${Svg} n=${it.icon}/><span>${it.name}</span>
+          </a>`)}
+      </nav>
+      <div class="sb-foot"><button class="ghost sm" style="width:100%" onClick=${async()=>{ try{await api('logout',{method:'POST'});}catch{} location.reload(); }}>Sign out</button></div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <button class="ghost sm hamb" onClick=${()=>setSbOpen(!sbOpen)}>☰</button>
+        <span class="crumb">Admin <span style="opacity:.5">/</span></span><h2 style="font-size:16px">${nameFor(slug)}</h2>
+      </header>
+      <div class="content">${children}</div>
+    </div>
+  </div>`;
+}
+
+/* ───────── login ───────── */
+function Login({onOk}){
+  const [pw,setPw]=useState(''); const [err,setErr]=useState('');
+  async function submit(){ setErr(''); try{ await api('login',{method:'POST',body:JSON.stringify({password:pw})}); onOk(); }catch(e){ setErr(e.message); } }
+  return html`<div class="login">
+    <div class="sb-brand" style="justify-content:center;border:0;margin:0 0 8px;padding:0"><div class="logo">hb</div></div>
+    <h1 style="font-size:20px">llm.hostbun.cc</h1>
+    <p class="mut">admin panel</p>
+    <div class="card">
+      <input type="password" placeholder="password" autofocus value=${pw} onInput=${e=>setPw(e.target.value)} onKeyDown=${e=>e.key==='Enter'&&submit()}/>
+      <div style="height:10px"></div>
+      <button style="width:100%" onClick=${submit}>Sign in</button>
+      ${err&&html`<p class="down" style="margin:10px 0 0;font-size:13px">${err}</p>`}
+    </div>
+  </div>`;
+}
+
+/* ───────── root ───────── */
+function App(){
+  const [authed,setAuthed]=useState(null); // null=checking
+  const [state,setState]=useState(null);
+  const [slug,setSlug]=useState(()=>{ let s=location.pathname.replace(BASE,'').replace(/^\/+/,'').split('/')[0]||'overview'; return NAV.some(x=>x.slug===s)?s:'overview'; });
+  const [callId,setCallId]=useState(null);
+  const callsProjectRef=useRef('');
+  const boot=useCallback(async()=>{ try{ const s=await api('state'); setState(s); setAuthed(true); }catch(e){ setAuthed(false); } },[]);
+  useEffect(()=>{ onUnauth=()=>setAuthed(false); boot(); },[boot]);
+  useEffect(()=>{ const h=()=>{ let s=location.pathname.replace(BASE,'').replace(/^\/+/,'').split('/')[0]||'overview'; setSlug(NAV.some(x=>x.slug===s)?s:'overview'); }; window.addEventListener('popstate',h); return ()=>window.removeEventListener('popstate',h); },[]);
+  const go=useCallback(s=>{ history.pushState({},'',BASE+'/'+s); setSlug(s); document.title='hostbun · '+nameFor(s); },[]);
+  useEffect(()=>{ document.title='hostbun · '+nameFor(slug); },[slug]);
+  const reload=useCallback(s=>{ if(s)setState(s); else boot(); },[boot]);
+
+  if(authed===null) return html`<div class="mut" style="padding:40px;text-align:center">…</div>`;
+  if(!authed) return html`<${Login} onOk=${boot}/>`;
+  if(!state) return html`<div class="mut" style="padding:40px;text-align:center">loading…</div>`;
+  const Page=PAGES[slug]||Overview;
+  const ctx={ state, reload, go, openCall:setCallId, setCallsProject:v=>{callsProjectRef.current=v; try{const u=new URL(location.href);u.searchParams.set('project',v);history.replaceState({},'',u);}catch{}}, callsProjectRef };
+  return html`<${Ctx.Provider} value=${ctx}>
+    <${Shell} slug=${slug} go=${go}><${Page}/></${Shell}>
+    <${CallDrawer} id=${callId} onClose=${()=>setCallId(null)}/>
+  </${Ctx.Provider}>`;
+}
+render(html`<${App}/>`, document.getElementById('root'));
 </script>
 </body></html>
