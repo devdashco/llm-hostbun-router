@@ -488,11 +488,24 @@ function keyLabel(route) {
 // Extract the prompt text from a request body (chat messages / responses input / prompt).
 // full=true (local-dev anthropic lane) saves the ENTIRE turn — system + tools + messages, uncapped —
 // so every chat is preserved verbatim. Other lanes keep the clipped messages-only view (prod DB size).
+// Distinct MCP servers + counts from a tools[] array. Claude Code ships ~1000 tool
+// DEFINITIONS (name + full input_schema) on EVERY request — ~2.4 MB of mostly-identical
+// JSON. We keep the analysis signal (how many tools, which MCP servers) and DROP the schemas,
+// so the full-save is the conversation (system+messages+response), not a megabyte of tool specs.
+function toolsSummary(tools) {
+  if (!Array.isArray(tools) || !tools.length) return null;
+  const names = tools.map((t) => t && t.name).filter(Boolean);
+  const mcp = names.filter((n) => n.startsWith("mcp__"));
+  const servers = [...new Set(mcp.map((n) => n.split("__")[1]).filter(Boolean))].sort();
+  return { count: names.length, mcp: mcp.length, builtin: names.length - mcp.length, servers };
+}
+
 function extractRequestContent(bodyBuf, full) {
   if (!CFG.logging.content || !bodyBuf || !bodyBuf.length) return null;
   try {
     const j = JSON.parse(bodyBuf.toString());
-    if (full) return JSON.stringify({ model: j.model, system: j.system, tools: j.tools, messages: j.messages });
+    // Full local-dev save: the conversation verbatim + a compact tools SUMMARY (not the schemas).
+    if (full) return JSON.stringify({ model: j.model, system: j.system, messages: j.messages, tools: toolsSummary(j.tools) });
     if (Array.isArray(j.messages)) return clip(JSON.stringify(j.messages));
     if (j.input != null) return clip(typeof j.input === "string" ? j.input : JSON.stringify(j.input));
     if (typeof j.prompt === "string") return clip(j.prompt);
@@ -571,6 +584,7 @@ function extractResponseBody(buf, isStream) {
   if (isStream) {
     let content = "";
     let rawUsage = null;
+    const tools = [];   // tool_use calls the model made in this stream (Claude Code is tool-heavy)
     const mergeUsage = (u) => { if (u && typeof u === "object") rawUsage = { ...(rawUsage || {}), ...u }; };
     for (const line of text.split("\n")) {
       const s = line.trim();
@@ -582,17 +596,22 @@ function extractResponseBody(buf, isStream) {
         // OpenAI chat.completions delta
         const d = j.choices && j.choices[0] && j.choices[0].delta;
         if (d && typeof d.content === "string") content += d.content;
+        if (d && Array.isArray(d.tool_calls)) for (const tc of d.tool_calls) if (tc.function && tc.function.name) tools.push(tc.function.name);
         if (j.usage) mergeUsage(j.usage);
         // Anthropic /v1/messages events: text in content_block_delta, usage split
-        // across message_start (input) and message_delta (output).
+        // across message_start (input) and message_delta (output). tool_use turns emit NO text —
+        // capture the tool name off content_block_start so tool-only replies aren't logged empty.
         if (j.type === "content_block_delta" && j.delta && typeof j.delta.text === "string") content += j.delta.text;
+        if (j.type === "content_block_start" && j.content_block && j.content_block.type === "tool_use" && j.content_block.name) tools.push(j.content_block.name);
         if (j.type === "message_start" && j.message && j.message.usage) mergeUsage(j.message.usage);
         // stop_reason arrives on message_delta (anthropic) / the finish_reason in the last openai chunk.
         if (j.type === "message_delta" && j.delta && j.delta.stop_reason) out.stopReason = j.delta.stop_reason;
         if (d && j.choices[0].finish_reason) out.stopReason = j.choices[0].finish_reason;
       } catch { /* partial / non-json chunk */ }
     }
-    if (content) out.content = content;
+    if (tools.length) out.toolsCalled = tools;
+    // Prefer text; if a turn was pure tool_use (no text), record the calls so it isn't saved blank.
+    out.content = content || (tools.length ? `[tool_use] ${tools.join(", ")}` : null);
     if (rawUsage) out.usage = normalizeUsage(rawUsage);
     return out;
   }
@@ -601,8 +620,11 @@ function extractResponseBody(buf, isStream) {
     if (j.usage) out.usage = normalizeUsage(j.usage);
     const m = j.choices && j.choices[0] && j.choices[0].message;
     if (m && (m.content || m.reasoning_content)) out.content = m.content || m.reasoning_content;
-    else if (Array.isArray(j.content)) // anthropic /v1/messages: content is an array of blocks
+    else if (Array.isArray(j.content)) { // anthropic /v1/messages: content is an array of blocks
       out.content = j.content.map((b) => (b && typeof b.text === "string") ? b.text : JSON.stringify(b)).join("");
+      const tc = j.content.filter((b) => b && b.type === "tool_use").map((b) => b.name).filter(Boolean);
+      if (tc.length) out.toolsCalled = tc;
+    }
     else if (Array.isArray(j.output)) out.content = JSON.stringify(j.output); // responses API
     else if (j.error) out.content = JSON.stringify(j.error);
     out.stopReason = j.stop_reason || (j.choices && j.choices[0] && j.choices[0].finish_reason) || null;
