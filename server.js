@@ -79,7 +79,13 @@ const HEADROOM_LANES = new Set(
 // ─────────────────────────────────────────────────────────────────────────────
 // Lane taxonomy. The three providers, plus legacy-id normalization.
 // ─────────────────────────────────────────────────────────────────────────────
-const LANES = ["local", "crazyrouter", "wrappy"];
+// `anthropic` is a PASSTHROUGH lane: it forwards the caller's request body AND its
+// Authorization header untouched to api.anthropic.com. Unlike `wrappy` (the claudebox
+// text shim, which needs system=string and 422s on Claude Code's system-array + tools),
+// this lane serves real Claude Code / native /v1/messages callers on their own Max OAuth
+// bearer — so the convo, model, effort + tokens land in the call log while staying free.
+// Only reached when a projectRoute/modelRoute opts a caller into it (never a default).
+const LANES = ["local", "crazyrouter", "wrappy", "anthropic"];
 const LANE_SET = new Set(LANES);
 const LEGACY_LANE = { cloud: "crazyrouter", claude: "wrappy" };
 // Normalize any lane id (legacy or canonical) to a canonical one; returns "" if unrecognized.
@@ -118,6 +124,9 @@ function envDefaults() {
       local: (process.env.LOCAL_BASE || "").replace(/\/$/, ""),
       crazyrouter: (process.env.CRAZYROUTER_BASE || process.env.CRAZY_BASE || "https://crazyrouter.com").replace(/\/$/, ""),
       wrappy: (process.env.WRAPPY_BASE || process.env.CLAUDE_BASE || "https://claude.hostbun.cc").replace(/\/$/, ""),
+      // anthropic passthrough lane → the real Anthropic API. No key injected: the caller's
+      // own Authorization (a Max OAuth bearer) is forwarded as-is.
+      anthropic: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
       // image generation lane (SD-Turbo on the pbox GPU). Routed by path, not model name.
       images: (process.env.IMAGE_BASE || "https://sdturbo.bofrid.dev").replace(/\/$/, ""),
     },
@@ -229,6 +238,7 @@ function mergeConfig(base, saved) {
     const loc = pick("local"); if (loc) c.bases.local = loc;
     const cr = pick("crazyrouter", "crazy"); if (cr) c.bases.crazyrouter = cr;
     const wr = pick("wrappy", "claude"); if (wr) c.bases.wrappy = wr;
+    const an = pick("anthropic"); if (an) c.bases.anthropic = an;
   }
   if (saved.localMap && typeof saved.localMap === "object" && !Array.isArray(saved.localMap)) {
     const m = {};
@@ -399,7 +409,7 @@ function costUsd(prices, sentModel, lane, ptok, ctok) {
 // survives restarts/redeploys. All DB work is wrapped so a logging failure can
 // never break proxying.
 // ─────────────────────────────────────────────────────────────────────────────
-let db = null, insertStmt = null, pruneStmt = null, insertsSincePrune = 0;
+let db = null, insertStmt = null, pruneStmt = null, limitsStmt = null, insertsSincePrune = 0;
 function initDb() {
   try {
     const { DatabaseSync } = require("node:sqlite");
@@ -414,7 +424,8 @@ function initDb() {
       status INTEGER, duration_ms INTEGER, stream INTEGER,
       prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER,
       error TEXT, req_content TEXT, resp_content TEXT, project TEXT,
-      effort TEXT, thinking_tokens INTEGER, max_tokens INTEGER, temperature REAL
+      effort TEXT, thinking_tokens INTEGER, max_tokens INTEGER, temperature REAL,
+      user_id TEXT, cache_read INTEGER, cache_write INTEGER, stop_reason TEXT
     );`);
     // Migrate older DBs that predate later columns (each idempotent — throws if it already exists).
     try { db.exec("ALTER TABLE calls ADD COLUMN project TEXT;"); } catch { /* already there */ }
@@ -422,15 +433,39 @@ function initDb() {
     try { db.exec("ALTER TABLE calls ADD COLUMN thinking_tokens INTEGER;"); } catch { /* already there */ }
     try { db.exec("ALTER TABLE calls ADD COLUMN max_tokens INTEGER;"); } catch { /* already there */ }
     try { db.exec("ALTER TABLE calls ADD COLUMN temperature REAL;"); } catch { /* already there */ }
+    // user_id = the caller's session/user identity (Claude Code stamps metadata.user_id per session);
+    // cache_read/cache_write = Anthropic prompt-cache tokens kept separate; stop_reason = why it ended.
+    try { db.exec("ALTER TABLE calls ADD COLUMN user_id TEXT;"); } catch { /* already there */ }
+    try { db.exec("ALTER TABLE calls ADD COLUMN cache_read INTEGER;"); } catch { /* already there */ }
+    try { db.exec("ALTER TABLE calls ADD COLUMN cache_write INTEGER;"); } catch { /* already there */ }
+    try { db.exec("ALTER TABLE calls ADD COLUMN stop_reason TEXT;"); } catch { /* already there */ }
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(req_model);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_lane ON calls(lane);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_project ON calls(project);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_project_ts ON calls(project, ts);"); // per-project usage windows
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_calls_user ON calls(user_id);"); } catch { /* col may not exist on very old dbs mid-migrate */ }
     insertStmt = db.prepare(`INSERT INTO calls
-      (ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,req_content,resp_content,project,effort,thinking_tokens,max_tokens,temperature)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    pruneStmt = db.prepare("DELETE FROM calls WHERE id NOT IN (SELECT id FROM calls ORDER BY id DESC LIMIT ?)");
+      (ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,req_content,resp_content,project,effort,thinking_tokens,max_tokens,temperature,user_id,cache_read,cache_write,stop_reason)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    // Retention prunes the oldest NON-dev rows only — local-dev (anthropic lane) chats are exempt and
+    // kept forever, so a burst of prod traffic can never evict your saved Claude Code conversations.
+    pruneStmt = db.prepare("DELETE FROM calls WHERE lane != 'anthropic' AND id NOT IN (SELECT id FROM calls WHERE lane != 'anthropic' ORDER BY id DESC LIMIT ?)");
+    // acct_limits: the LATEST Anthropic rate-limit snapshot per account, harvested for FREE off the
+    // `anthropic-ratelimit-unified-*` response headers of real inference traffic (no probe / zero
+    // tokens). Keyed by anthropic-organization-id (the account identity, which every /v1/messages
+    // response carries). One row per account, upserted on every call that carries the headers — so
+    // the dashboard reads current 5h/7d utilization without ever spending the budget it measures.
+    db.exec(`CREATE TABLE IF NOT EXISTS acct_limits (
+      org_id TEXT PRIMARY KEY, ts INTEGER,
+      u5 REAL, u7 REAL, reset5 INTEGER, reset7 INTEGER,
+      status TEXT, s5 TEXT, s7 TEXT, project TEXT, model TEXT
+    );`);
+    limitsStmt = db.prepare(`INSERT INTO acct_limits (org_id,ts,u5,u7,reset5,reset7,status,s5,s7,project,model)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(org_id) DO UPDATE SET
+        ts=excluded.ts, u5=excluded.u5, u7=excluded.u7, reset5=excluded.reset5, reset7=excluded.reset7,
+        status=excluded.status, s5=excluded.s5, s7=excluded.s7, project=excluded.project, model=excluded.model`);
     console.log(`[log] call DB ready at ${CALLS_DB}`);
   } catch (e) {
     db = null;
@@ -445,15 +480,19 @@ const clip = (s) => { const t = s == null ? "" : String(s); return t.length > CO
 function keyLabel(route) {
   if (route.lane === "crazyrouter") return "crazyrouterKey";
   if (route.lane === "wrappy") return "wrappyToken";
+  if (route.lane === "anthropic") return "caller-oauth";
   if (route.lane === "local") return isGated(route.target) && CFG.oblitToken ? "oblitToken" : "none (open)";
   return "—";
 }
 
 // Extract the prompt text from a request body (chat messages / responses input / prompt).
-function extractRequestContent(bodyBuf) {
+// full=true (local-dev anthropic lane) saves the ENTIRE turn — system + tools + messages, uncapped —
+// so every chat is preserved verbatim. Other lanes keep the clipped messages-only view (prod DB size).
+function extractRequestContent(bodyBuf, full) {
   if (!CFG.logging.content || !bodyBuf || !bodyBuf.length) return null;
   try {
     const j = JSON.parse(bodyBuf.toString());
+    if (full) return JSON.stringify({ model: j.model, system: j.system, tools: j.tools, messages: j.messages });
     if (Array.isArray(j.messages)) return clip(JSON.stringify(j.messages));
     if (j.input != null) return clip(typeof j.input === "string" ? j.input : JSON.stringify(j.input));
     if (typeof j.prompt === "string") return clip(j.prompt);
@@ -481,10 +520,13 @@ function extractProject(req, bodyBuf) {
 //   Anthropic /v1/messages → thinking.budget_tokens (extended thinking), max_tokens, temperature
 // thinkingTokens: budget when thinking is enabled, 0 when explicitly disabled, null when absent.
 function extractReqParams(bodyBuf) {
-  const out = { effort: null, thinkingTokens: null, maxTokens: null, temperature: null };
+  const out = { effort: null, thinkingTokens: null, maxTokens: null, temperature: null, userId: null };
   if (!bodyBuf || !bodyBuf.length) return out;
   try {
     const j = JSON.parse(bodyBuf.toString());
+    // effort: OpenAI sends reasoning_effort/reasoning.effort as a label. Claude Code / Anthropic
+    // /v1/messages has no effort field — the effort IS the extended-thinking budget, so we derive a
+    // label from thinking.budget_tokens too (so the dev log shows an effort tier either dialect).
     out.effort = j.reasoning_effort || (j.reasoning && j.reasoning.effort) || null;
     if (j.thinking && typeof j.thinking === "object") {
       out.thinkingTokens = j.thinking.type === "enabled"
@@ -493,9 +535,15 @@ function extractReqParams(bodyBuf) {
     } else if (typeof j.max_thinking_tokens === "number") {
       out.thinkingTokens = j.max_thinking_tokens;
     }
+    if (!out.effort && typeof out.thinkingTokens === "number" && out.thinkingTokens > 0) {
+      // Rough tiers matching Claude Code's effort→budget mapping (labels only; thinking_tokens keeps the raw).
+      out.effort = out.thinkingTokens >= 32000 ? "high" : out.thinkingTokens >= 8000 ? "medium" : "low";
+    }
     const mt = j.max_tokens ?? j.max_completion_tokens;
     if (typeof mt === "number") out.maxTokens = mt;
     if (typeof j.temperature === "number") out.temperature = j.temperature;
+    // Claude Code stamps a per-session identity in metadata.user_id; also accept a top-level user.
+    out.userId = (j.metadata && (j.metadata.user_id || j.metadata.userId)) || (typeof j.user === "string" ? j.user : null) || null;
   } catch { /* not json */ }
   return out;
 }
@@ -517,7 +565,7 @@ function normalizeUsage(u) {
 
 // Pull {content, usage} from a finished upstream body (handles SSE streams + plain JSON).
 function extractResponseBody(buf, isStream) {
-  const out = { content: null, usage: null };
+  const out = { content: null, usage: null, stopReason: null };
   if (!buf || !buf.length) return out;
   const text = buf.toString();
   if (isStream) {
@@ -539,6 +587,9 @@ function extractResponseBody(buf, isStream) {
         // across message_start (input) and message_delta (output).
         if (j.type === "content_block_delta" && j.delta && typeof j.delta.text === "string") content += j.delta.text;
         if (j.type === "message_start" && j.message && j.message.usage) mergeUsage(j.message.usage);
+        // stop_reason arrives on message_delta (anthropic) / the finish_reason in the last openai chunk.
+        if (j.type === "message_delta" && j.delta && j.delta.stop_reason) out.stopReason = j.delta.stop_reason;
+        if (d && j.choices[0].finish_reason) out.stopReason = j.choices[0].finish_reason;
       } catch { /* partial / non-json chunk */ }
     }
     if (content) out.content = content;
@@ -554,11 +605,36 @@ function extractResponseBody(buf, isStream) {
       out.content = j.content.map((b) => (b && typeof b.text === "string") ? b.text : JSON.stringify(b)).join("");
     else if (Array.isArray(j.output)) out.content = JSON.stringify(j.output); // responses API
     else if (j.error) out.content = JSON.stringify(j.error);
+    out.stopReason = j.stop_reason || (j.choices && j.choices[0] && j.choices[0].finish_reason) || null;
   } catch { /* non-json envelope */ }
   return out;
 }
 
 // Persist one call. `rec` carries the request-side fields; never throws.
+// Harvest the free rate-limit snapshot off an upstream response's headers. Anthropic stamps
+// `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset,status}` + `anthropic-organization-id`
+// on every /v1/messages response — so any real call tells us that account's live 5h/7d headroom
+// at zero token cost. Upsert keyed by org-id → always the freshest per account. No-op unless the
+// headers are present (only the anthropic lane / native passthrough carries them).
+function recordLimits(headers, project, model) {
+  if (!db || !limitsStmt || !headers) return;
+  try {
+    const h = (k) => headers.get(k);
+    const org = h("anthropic-organization-id");
+    const u5 = h("anthropic-ratelimit-unified-5h-utilization");
+    const u7 = h("anthropic-ratelimit-unified-7d-utilization");
+    if (!org || (u5 == null && u7 == null)) return;               // not an Anthropic-native reply
+    const num = (v) => (v == null || v === "" ? null : Number(v));
+    limitsStmt.run(
+      org, Date.now(), num(u5), num(u7),
+      num(h("anthropic-ratelimit-unified-5h-reset")), num(h("anthropic-ratelimit-unified-7d-reset")),
+      h("anthropic-ratelimit-unified-status") || null,
+      h("anthropic-ratelimit-unified-5h-status") || null, h("anthropic-ratelimit-unified-7d-status") || null,
+      project || null, model || null,
+    );
+  } catch { /* never let limit-harvest break a request */ }
+}
+
 function recordCall(rec) {
   if (!db || !insertStmt || !CFG.logging.enabled) return;
   try {
@@ -570,12 +646,16 @@ function recordCall(rec) {
       u.prompt_tokens ?? null, u.completion_tokens ?? null, u.total_tokens ?? null,
       rec.error || null,
       CFG.logging.content ? (rec.reqContent || null) : null,
-      CFG.logging.content ? (rec.respContent == null ? null : clip(rec.respContent)) : null,
+      CFG.logging.content ? (rec.respContent == null ? null : (rec.full ? String(rec.respContent) : clip(rec.respContent))) : null,
       rec.project || null,
       rec.effort || null,
       rec.thinkingTokens == null ? null : rec.thinkingTokens,
       rec.maxTokens == null ? null : rec.maxTokens,
       rec.temperature == null ? null : rec.temperature,
+      rec.userId || null,
+      u.cache_read_input_tokens == null ? null : u.cache_read_input_tokens,
+      u.cache_creation_input_tokens == null ? null : u.cache_creation_input_tokens,
+      rec.stopReason || null,
     );
     if (++insertsSincePrune >= 200) { insertsSincePrune = 0; try { pruneStmt.run(CFG.logging.retain); } catch {} }
   } catch (e) { /* never let logging break a request */ }
@@ -820,12 +900,13 @@ async function proxy(req, res, base, opts = {}) {
       if (mutated) { body = Buffer.from(JSON.stringify(j)); headers["content-type"] = "application/json"; }
     } catch { /* leave body as-is */ }
   }
-  // Common fields for the call-log row.
+  // Common fields for the call-log row. Local-dev (anthropic lane) saves chats in full (uncapped).
+  const fullContent = (lane === "anthropic");
   const base_rec = {
     ts: t0, ip, ua: req.headers["user-agent"] || "", method: req.method, path: (req.url || "").split("?")[0],
     reqModel: model || null, lane: lane || "local", sentModel: rewriteModel || model || null,
-    keyLabel: keyLabel({ lane: lane || "local", target: opts.target }), stream,
-    reqContent: extractRequestContent(bodyBuf), project: project || null,
+    keyLabel: keyLabel({ lane: lane || "local", target: opts.target }), stream, full: fullContent,
+    reqContent: extractRequestContent(bodyBuf, fullContent), project: project || null,
     ...extractReqParams(bodyBuf),
   };
   let curTarget = target, curLane = lane;
@@ -893,6 +974,9 @@ async function proxy(req, res, base, opts = {}) {
     console.error(`[err] upstream=${up.status} lane=${curLane || "?"} model=${model || "-"} ${curTarget}`);
     up.clone().text().then((t) => shipError(`upstream ${up.status} ${req.method} ${req.url}`, { model: model || "-", lane: curLane || "?", ip, status: up.status, body: t })).catch(() => {});
   }
+  // Free rate-limit harvest: snapshot this account's live 5h/7d headroom off the response headers
+  // (no probe, zero tokens). Fires for any Anthropic-native reply; a no-op for other lanes.
+  recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);
   const rh = {};
   up.headers.forEach((v, k) => { if (!HOP_RES.has(k.toLowerCase())) rh[k] = v; });
   res.writeHead(up.status, rh);
@@ -905,18 +989,19 @@ async function proxy(req, res, base, opts = {}) {
     if (recordThis) {
       const ex = extractResponseBody(preBuf, isStream);
       recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0, usage: ex.usage, respContent: ex.content,
-        error: up.status >= 400 ? `upstream ${up.status}` : null });
+        stopReason: ex.stopReason, error: up.status >= 400 ? `upstream ${up.status}` : null });
     }
     res.end(preBuf);
   } else if (up.body && !up.bodyUsed) {
     const r = Readable.fromWeb(up.body);
     if (recordThis) {
       const chunks = []; let size = 0;
-      r.on("data", (d) => { if (size < CONTENT_CAP + 8192) { chunks.push(Buffer.from(d)); size += d.length; } });
+      const cap = base_rec.full ? Infinity : CONTENT_CAP + 8192;   // local-dev keeps the full streamed reply
+      r.on("data", (d) => { if (size < cap) { chunks.push(Buffer.from(d)); size += d.length; } });
       const done = () => {
         const ex = extractResponseBody(Buffer.concat(chunks), isStream);
         recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0, usage: ex.usage, respContent: ex.content,
-          error: up.status >= 400 ? `upstream ${up.status}` : null });
+          stopReason: ex.stopReason, error: up.status >= 400 ? `upstream ${up.status}` : null });
       };
       r.on("end", done); r.on("error", done);
     }
@@ -1158,6 +1243,9 @@ async function mergedModels(res) {
 function laneRoute(lane, model, reason) {
   const l = normLane(lane) || "crazyrouter";
   if (l === "wrappy") return { lane: "wrappy", base: CFG.bases.wrappy, authToken: CFG.wrappyToken, rewriteModel: model || undefined, reason };
+  // Passthrough: no authToken/injectKey → buildHeaders forwards the caller's own Authorization
+  // (Max OAuth bearer) untouched to api.anthropic.com. model "" keeps the caller's id as-is.
+  if (l === "anthropic") return { lane: "anthropic", base: CFG.bases.anthropic, rewriteModel: model || undefined, reason };
   if (l === "local") return { lane: "local", base: CFG.bases.local, rewriteModel: model, target: model, reason };
   return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
 }
@@ -1501,6 +1589,16 @@ async function handleAdminApi(req, res, path) {
     return sendJson(res, 200, { local: localModelEntries(), wrappy, crazyrouter });
   }
 
+  // Latest per-account rate-limit snapshot harvested off real traffic (zero-token; see recordLimits).
+  // One row per anthropic org-id with live 5h/7d utilization + reset + status. Dashboards read this
+  // instead of probing. Rows go stale for accounts with no recent traffic (ts shows how fresh).
+  if (sub === "limits" && req.method === "GET") {
+    try {
+      const rows = db ? db.prepare("SELECT org_id,ts,u5,u7,reset5,reset7,status,s5,s7,project,model FROM acct_limits ORDER BY ts DESC").all() : [];
+      return sendJson(res, 200, { rows, now: Date.now() });
+    } catch (e) { return sendJson(res, 200, { rows: [], error: String(e && e.message || e) }); }
+  }
+
   if (sub === "crazyrouter" && req.method === "GET") return sendJson(res, 200, await crazyCheck());
   if (sub === "crazyrouter/test" && req.method === "POST") {
     const body = await readBody(req); let key = "";
@@ -1552,6 +1650,7 @@ async function handleAdminApi(req, res, path) {
       // List view: omit big content blobs; send short previews instead.
       const rows = db.prepare(`SELECT id,ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,
         prompt_tokens,completion_tokens,total_tokens,error,project,effort,thinking_tokens,max_tokens,temperature,
+        user_id,cache_read,cache_write,stop_reason,
         substr(req_content,1,160) AS req_preview, substr(resp_content,1,200) AS resp_preview
         FROM calls ${w} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
       return sendJson(res, 200, { rows, total, limit, offset, dbReady: true });
