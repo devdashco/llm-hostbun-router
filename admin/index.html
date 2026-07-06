@@ -60,6 +60,7 @@ button.ghost:hover{background:var(--hover)}
 button.danger{background:transparent;color:var(--red);border:1px solid #7f1d1d}
 button.danger:hover{background:#2a1112}
 button.sm{padding:6px 10px;font-size:12px}
+button:disabled{opacity:.4;cursor:not-allowed}
 table{border-collapse:collapse;width:100%;margin:8px 0}
 th,td{border:0;border-bottom:1px solid var(--bd);padding:9px 10px;text-align:left;vertical-align:middle;font-size:14px}
 th{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em;font-weight:600;cursor:default}
@@ -354,36 +355,61 @@ function Issues({health,st,state}){
 /* ───────── CALLS ───────── */
 function Calls(){
   const {state,openCall,reload} = useApp();
-  const [rows,setRows]=useState([]); const [meta,setMeta]=useState('');
+  const [rows,setRows]=useState([]); const [total,setTotal]=useState(0); const [dbReady,setDbReady]=useState(true);
+  const [pageSize,setPageSize]=useState(200); const [offset,setOffset]=useState(0);
   const [f,setF]=useState({q:'',model:'',project:'',lane:'',status:''});
   const [lg,setLg]=useState(()=>clone(state.logging));
+  const [exporting,setExporting]=useState(false);
   useEffect(()=>{ setLg(clone(state.logging)); },[state.logging]);
-  const search=window.location.search; // allow ?project= drill-in via openCallsWith
-  const load=useCallback(async()=>{
-    const p=new URLSearchParams({limit:'150'});
+  // load a page. off = row offset into the (filtered) result set.
+  const load=useCallback(async(off=0)=>{
+    const p=new URLSearchParams({limit:String(pageSize),offset:String(off)});
     Object.entries(f).forEach(([k,v])=>{ if(v&&v.trim())p.set(k,v.trim()); });
-    try{ const d=await api('calls?'+p.toString()); setRows(d.rows||[]); setMeta(d.dbReady===false?'call DB unavailable':`${(d.rows||[]).length} shown of ${d.total} total`); }catch(e){}
-  },[f]);
+    try{ const d=await api('calls?'+p.toString()); setRows(d.rows||[]); setTotal(d.total||0); setDbReady(d.dbReady!==false); setOffset(off); }catch(e){}
+  },[f,pageSize]);
   useEffect(()=>{ // seed project / q filter from URL on mount (set by Stats drilldowns)
     const sp=new URLSearchParams(window.location.search); const pr=sp.get('project'), qq=sp.get('q');
     if(pr||qq){ setF(x=>({...x,project:pr||'',q:qq||''})); }
   },[]);
-  useEffect(()=>{load();},[load]);
+  useEffect(()=>{ load(0); },[load]); // reload page 0 when filters / pageSize change
   const upd=(k,v)=>setF(x=>({...x,[k]:v}));
+  const A=total?offset+1:0, B=Math.min(offset+rows.length,total), lastOff=Math.max(0,(Math.ceil(total/pageSize)-1)*pageSize);
+  const canPrev=offset>0, canNext=offset+pageSize<total;
   async function saveLogging(){ try{ const r=await api('config',{method:'POST',body:JSON.stringify({logging:{enabled:lg.enabled,content:lg.content,retain:parseInt(lg.retain||50000,10)}})}); reload(r.state); toast('logging settings saved'); }catch(e){toast(e.message,true);} }
-  async function clearCalls(){ if(!confirm('Delete ALL logged calls? This cannot be undone.'))return; try{ await api('calls/clear',{method:'POST'}); toast('call log cleared'); load(); }catch(e){toast(e.message,true);} }
+  async function clearCalls(){ if(!confirm('Delete ALL logged calls? This cannot be undone.'))return; try{ await api('calls/clear',{method:'POST'}); toast('call log cleared'); load(0); }catch(e){toast(e.message,true);} }
+  // Export EVERY row (full prompt+reply content) by paging the id-cursor export endpoint, then download as JSON.
+  async function exportAll(){
+    if(exporting)return; setExporting(true); toast('exporting… paging full call log');
+    try{ let after=0, all=[], guard=0;
+      for(;;){ const d=await api('export?after='+after+'&limit=1000'); const rs=d.rows||[]; all.push(...rs);
+        if(rs.length<1000)break; after=d.maxId; if(++guard>5000)break; }
+      const blob=new Blob([JSON.stringify(all,null,2)],{type:'application/json'});
+      const u=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=u; a.download='llm-hostbun-calls-full.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(u),1000);
+      toast('exported '+all.length.toLocaleString()+' calls (full content)');
+    }catch(e){ toast(e.message,true); } finally{ setExporting(false); }
+  }
   return html`
   <${PageHead} title="Call log"/>
   <${Card}>
     <div class="row">
-      <input placeholder="search model / ip / ua / prompt / reply…" style="flex:3" value=${f.q} onInput=${e=>upd('q',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load()}/>
+      <input placeholder="search model / ip / ua / prompt / reply…" style="flex:3" value=${f.q} onInput=${e=>upd('q',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load(0)}/>
       <input placeholder="exact model" style="flex:1" value=${f.model} onInput=${e=>upd('model',e.target.value)}/>
-      <input placeholder="project" style="flex:1" value=${f.project} onInput=${e=>upd('project',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load()}/>
+      <input placeholder="project" style="flex:1" value=${f.project} onInput=${e=>upd('project',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load(0)}/>
       <select style="flex:0 0 130px" value=${f.lane} onChange=${e=>upd('lane',e.target.value)}><option value="">any lane</option><option>local</option><option>crazyrouter</option><option>wrappy</option><option>blocked</option></select>
       <select style="flex:0 0 110px" value=${f.status} onChange=${e=>upd('status',e.target.value)}><option value="">any status</option><option value="ok">ok (&lt;400)</option><option value="error">error (≥400)</option></select>
-      <button class="ghost sm" style="flex:0 0 auto" onClick=${load}>↻ Load</button>
+      <button class="ghost sm" style="flex:0 0 auto" onClick=${()=>load(0)}>↻ Load</button>
     </div>
-    <small class="hint">${meta}</small>
+    <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:10px">
+      <small class="hint">${dbReady?html`showing <b>${A.toLocaleString()}–${B.toLocaleString()}</b> of <b>${total.toLocaleString()}</b> matching <span class="mut">· DB keeps the newest ${(state.logging&&state.logging.retain||50000).toLocaleString()} rows (older archived to NAS)</span>`:'call DB unavailable'}</small>
+      <div class="flex" style="gap:6px;flex-wrap:wrap">
+        <select value=${pageSize} onChange=${e=>setPageSize(+e.target.value)} style="width:auto" title="rows per page"><option value="100">100 / page</option><option value="200">200 / page</option><option value="500">500 / page</option></select>
+        <button class="ghost sm" disabled=${!canPrev} onClick=${()=>load(0)}>« First</button>
+        <button class="ghost sm" disabled=${!canPrev} onClick=${()=>load(Math.max(0,offset-pageSize))}>‹ Prev</button>
+        <button class="ghost sm" disabled=${!canNext} onClick=${()=>load(offset+pageSize)}>Next ›</button>
+        <button class="ghost sm" disabled=${!canNext} onClick=${()=>load(lastOff)}>Last »</button>
+        <button class="ghost sm" disabled=${exporting} onClick=${exportAll} title="download every row with full prompt+reply as JSON">${exporting?'exporting…':'⬇ Export ALL'}</button>
+      </div>
+    </div>
   </${Card}>
   <${Card}><div style="overflow:auto"><table>
     <tr><th>time</th><th>project</th><th>model → sent</th><th>lane</th><th>key</th><th>status</th><th>ms</th><th>tok</th><th>ip / ua</th></tr>
