@@ -132,6 +132,12 @@ function envDefaults() {
     },
     crazyrouterKey: process.env.CRAZYROUTER_KEY || "",
     wrappyToken: process.env.WRAPPY_TOKEN || process.env.CLAUDE_TOKEN || "ddash",
+    // anthropicPool: Max OAuth setup-tokens the anthropic lane rotates over. STICKY — a session
+    // stays on ONE account (so its prompt cache stays warm; switching orgs = full cache miss ~12x)
+    // and only advances to a fresh account when the current one is maxed (5h/7d) or returns 429.
+    // [{name, org, token}]. Empty = passthrough (use the caller's own Authorization, no rotation).
+    // Seed via ANTHROPIC_POOL env (JSON) or the admin config; tokens are masked in adminState.
+    anthropicPool: (() => { try { return JSON.parse(process.env.ANTHROPIC_POOL || "[]"); } catch { return []; } })(),
     // bearer injected toward the image upstream (SD-Turbo API_TOKEN). Empty = send nothing.
     imageToken: process.env.IMAGE_TOKEN || "",
     // models starting with this prefix (lowercased) route to the wrappy lane.
@@ -255,6 +261,11 @@ function mergeConfig(base, saved) {
   else if (typeof saved.crazyKey === "string") c.crazyrouterKey = saved.crazyKey;
   if (typeof saved.wrappyToken === "string") c.wrappyToken = saved.wrappyToken;
   else if (typeof saved.claudeToken === "string") c.wrappyToken = saved.claudeToken;
+  if (Array.isArray(saved.anthropicPool)) {
+    c.anthropicPool = saved.anthropicPool
+      .filter((a) => a && typeof a.token === "string" && a.token.trim())
+      .map((a) => ({ name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), token: a.token.trim() }));
+  }
   if (typeof saved.wrappyPrefix === "string") c.wrappyPrefix = saved.wrappyPrefix;
   else if (typeof saved.claudePrefix === "string") c.wrappyPrefix = saved.claudePrefix;
   for (const k of ["oblitToken", "adminPassword"])
@@ -878,8 +889,15 @@ function floorWrappyTokens(obj) {
 async function headroomCompress(bodyBuf, model, lane) {
   if (!HEADROOM_URL || !bodyBuf || bodyBuf.length < HEADROOM_MIN_CHARS) return { buf: bodyBuf, stats: null };
   if (HEADROOM_LANES.size && lane && !HEADROOM_LANES.has(lane)) return { buf: bodyBuf, stats: null };
+  // HARD GUARD — never compress cache-optimized / tool-using requests (Claude Code, agents).
+  // Rewriting messages breaks the byte-identical cached prefix → a cache MISS costs ~12x
+  // (cache_read 0.1x vs cache_write 1.25x), dwarfing any compression saving, and can corrupt
+  // tool_use/tool_result pairing. The prompt cache is the better, lossless compression here.
+  // This is deliberately independent of HEADROOM_LANES so a misconfig can't tax agentic traffic.
+  const rawStr = bodyBuf.toString();
+  if (rawStr.includes('"cache_control"') || rawStr.includes('"tools"')) return { buf: bodyBuf, stats: null };
   let obj;
-  try { obj = JSON.parse(bodyBuf.toString()); } catch { return { buf: bodyBuf, stats: null }; }
+  try { obj = JSON.parse(rawStr); } catch { return { buf: bodyBuf, stats: null }; }
   if (!Array.isArray(obj.messages) || !obj.messages.length) return { buf: bodyBuf, stats: null };
   // Skip multimodal/image requests: headroom can't shrink base64 (0 savings) and shipping a multi-MB
   // image to the sidecar and back just adds latency + bandwidth. The image passes through untouched.
@@ -927,7 +945,7 @@ async function proxy(req, res, base, opts = {}) {
   const base_rec = {
     ts: t0, ip, ua: req.headers["user-agent"] || "", method: req.method, path: (req.url || "").split("?")[0],
     reqModel: model || null, lane: lane || "local", sentModel: rewriteModel || model || null,
-    keyLabel: keyLabel({ lane: lane || "local", target: opts.target }), stream, full: fullContent,
+    keyLabel: opts.account ? `anthropic:${opts.account}` : keyLabel({ lane: lane || "local", target: opts.target }), stream, full: fullContent,
     reqContent: extractRequestContent(bodyBuf, fullContent), project: project || null,
     ...extractReqParams(bodyBuf),
   };
@@ -967,6 +985,23 @@ async function proxy(req, res, base, opts = {}) {
   if (lane === "wrappy" && isWrappyFailure(up ? up.status : 0, threw)) {
     wrappyCircuitTrip();
     await doFailover(threw ? `fetch-failed (${fetchErr.message})` : `status ${up.status}`);
+  }
+
+  // Anthropic lane: the pinned account hit its 5h/7d cap (429). Retire it, switch to a fresh pool
+  // account, and retry ONCE so the caller never sees the 429. Decided before any bytes are written to
+  // res, so it's safe for streaming too. The switch re-warms cache on the new account (unavoidable —
+  // the old one is dead), but only happens on the rare limit-hit, not per call.
+  if (lane === "anthropic" && !threw && up && up.status === 429 && CFG.anthropicPool && CFG.anthropicPool.length && opts.account) {
+    recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);  // mark the 429'd account hot NOW
+    const nextAcct = stickyAnthropic(true);
+    if (nextAcct && nextAcct.name !== opts.account) {
+      console.warn(`[anthropic] 429 on ${opts.account} → retry on ${nextAcct.name}`);
+      const h2 = buildHeaders(req, { authToken: nextAcct.token });
+      base_rec.keyLabel = `anthropic:${nextAcct.name}`;
+      const init2 = { method: req.method, headers: h2, redirect: "follow" };
+      if (!["GET", "HEAD"].includes(req.method) && body && body.length) init2.body = body;
+      try { up = await fetch(curTarget, init2); } catch (e) { threw = true; fetchErr = e; }
+    }
   }
 
   // claudebox quota notice leaked as a 200 (status-based failover can't see it). Sniff non-stream
@@ -1346,6 +1381,51 @@ function usageVerdict(project) {
 //   0b. projectGroups (prefix-matched group override)
 //   1. forceModel (global override)  2. modelRoutes (per-model, any lane)  3. local alias map
 //   4. wrappy prefix  5. empty model → default route  6. cloud policy (open/allowlist/off)
+// ── anthropic-lane account rotation (STICKY, switch-on-limit) ──────────────
+// Prompt cache is per-account (per-org): switching accounts = full cache miss (~12x cost). So we
+// PIN one account and only advance when it's maxed/429 — the switch cost is paid once, then the
+// new account's cache re-warms and stays cheap. Headroom for each account comes free from the
+// harvested acct_limits (the rate-limit headers off real traffic — no probe).
+let _anthropicSticky = null;   // {name, org, token}
+function _acctUtil(org) {
+  try {
+    const r = org && db && db.prepare("SELECT u5,u7,s5,s7,ts FROM acct_limits WHERE org_id=?").get(org);
+    if (!r) return { util: 0, hot: false, ts: 0 };
+    const stale = !r.ts || (Date.now() - r.ts > 6 * 3600 * 1000);   // no fresh reading → treat as cool
+    const util = stale ? 0 : Math.max(r.u5 || 0, r.u7 || 0);
+    const hot = !stale && ((r.u5 || 0) >= 0.95 || (r.u7 || 0) >= 0.98 || r.s5 === "rejected" || r.s7 === "rejected");
+    return { util, hot, ts: r.ts || 0 };
+  } catch { return { util: 0, hot: false, ts: 0 }; }
+}
+function pickAnthropic(excludeOrg) {
+  const pool = CFG.anthropicPool || [];
+  const cand = pool.filter((a) => a.org !== excludeOrg).map((a) => ({ ...a, ..._acctUtil(a.org) }));
+  if (!cand.length) return null;
+  const cool = cand.filter((a) => !a.hot);
+  const from = cool.length ? cool : cand;            // if everything's hot, take the least-bad
+  from.sort((a, b) => a.util - b.util || a.ts - b.ts);   // coolest, then least-recently-used
+  return from[0];
+}
+// Return the account to use now: keep the sticky one while it's healthy (cache stays warm); when it
+// goes hot, advance to a fresh one. `force429` immediately retires the current sticky (called on a 429).
+function stickyAnthropic(force429) {
+  if (!(CFG.anthropicPool && CFG.anthropicPool.length)) return null;
+  if (_anthropicSticky) {
+    const s = _acctUtil(_anthropicSticky.org);
+    if (!s.hot && !force429) return _anthropicSticky;
+    const next = pickAnthropic(_anthropicSticky.org);
+    if (next && next.org !== _anthropicSticky.org) {
+      console.log(`[anthropic] switch ${_anthropicSticky.name}(${Math.round(s.util * 100)}%${force429 ? " 429" : ""}) → ${next.name}`);
+      _anthropicSticky = { name: next.name, org: next.org, token: next.token };
+    }
+    return _anthropicSticky;
+  }
+  const p = pickAnthropic(null) || CFG.anthropicPool[0];
+  _anthropicSticky = { name: p.name, org: p.org, token: p.token };
+  console.log(`[anthropic] initial account → ${_anthropicSticky.name}`);
+  return _anthropicSticky;
+}
+
 function resolveRoute(model, project) {
   const m = model == null ? "" : String(model);
   const key = m.toLowerCase();
@@ -1459,6 +1539,8 @@ function adminState() {
     // secrets — never returned in clear
     crazyrouterKeySet: !!CFG.crazyrouterKey, crazyrouterKeyMasked: mask(CFG.crazyrouterKey),
     wrappyTokenSet: !!CFG.wrappyToken, wrappyTokenMasked: mask(CFG.wrappyToken),
+    anthropicPool: (CFG.anthropicPool || []).map((a) => ({ name: a.name, org: a.org, tokenMasked: mask(a.token) })),
+    anthropicSticky: _anthropicSticky ? { name: _anthropicSticky.name, org: _anthropicSticky.org } : null,
     oblitTokenSet: !!CFG.oblitToken, oblitTokenMasked: mask(CFG.oblitToken),
     adminPasswordMasked: mask(CFG.adminPassword),
     configFile: CONFIG_FILE,
@@ -1946,6 +2028,13 @@ const server = http.createServer(async (req, res) => {
     bodyBuf = hc.buf;
     if (hc.stats && hc.stats.tokens_saved > 0)
       console.log(`[headroom] ${path} model=${model || "-"} lane=${lane} ${hc.stats.tokens_before}->${hc.stats.tokens_after} saved=${hc.stats.tokens_saved} (${Math.round(100 * hc.stats.tokens_saved / Math.max(1, hc.stats.tokens_before))}%)`);
+  }
+
+  // Anthropic lane: pin/rotate a pool account (STICKY — switch only when maxed/429) and inject its
+  // token, overriding the caller's. Keeps the prompt cache warm on one account; advances on limit.
+  if (lane === "anthropic" && CFG.anthropicPool && CFG.anthropicPool.length) {
+    const acct = stickyAnthropic(false);
+    if (acct) { route.authToken = acct.token; route.account = acct.name; }
   }
 
   // Terminal dispatch: json-enforce path (JSON response_format) or plain proxy.
