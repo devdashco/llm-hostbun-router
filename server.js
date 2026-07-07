@@ -496,6 +496,17 @@ function keyLabel(route) {
   return "—";
 }
 
+// The wrappy lane hits claude.hostbun.cc, which load-balances internally across the
+// Max accounts — normally opaque (all logged as `wrappyToken`). The claudebox wrapper
+// now stamps the chosen account on the response as `X-Claudebox-Account`, so we can
+// attribute each wrappy call to a specific Max login: `wrappy:<name>`. Returns the
+// enriched label (or null when the header is absent / lane isn't wrappy).
+function wrappyAccountLabel(lane, upHeaders) {
+  if (lane !== "wrappy" || !upHeaders) return null;
+  const a = (upHeaders.get("x-claudebox-account") || "").trim();
+  return a ? `wrappy:${a}` : null;
+}
+
 // Extract the prompt text from a request body (chat messages / responses input / prompt).
 // full=true (local-dev anthropic lane) saves the ENTIRE turn — system + tools + messages, uncapped —
 // so every chat is preserved verbatim. Other lanes keep the clipped messages-only view (prod DB size).
@@ -1031,6 +1042,9 @@ async function proxy(req, res, base, opts = {}) {
     console.error(`[err] upstream=${up.status} lane=${curLane || "?"} model=${model || "-"} ${curTarget}`);
     up.clone().text().then((t) => shipError(`upstream ${up.status} ${req.method} ${req.url}`, { model: model || "-", lane: curLane || "?", ip, status: up.status, body: t })).catch(() => {});
   }
+  // Attribute the wrappy lane to the actual Max account the wrapper picked (X-Claudebox-Account),
+  // so its token usage isn't an opaque `wrappyToken` blob. No-op on other lanes / older wrappers.
+  { const wl = wrappyAccountLabel(curLane, up.headers); if (wl) base_rec.keyLabel = wl; }
   // Free rate-limit harvest: snapshot this account's live 5h/7d headroom off the response headers
   // (no probe, zero tokens). Fires for any Anthropic-native reply; a no-op for other lanes.
   recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);
@@ -1208,6 +1222,8 @@ async function jsonEnforce(req, res, route) {
       res.writeHead(up.status, rh);
       return res.end(text);
     }
+    // Attribute the wrappy lane to the wrapper-chosen Max account (see wrappyAccountLabel).
+    { const wl = wrappyAccountLabel(curLane, up.headers); if (wl) logRec.keyLabel = wl; }
     let parsed = null;
     try { parsed = JSON.parse(text); } catch { /* upstream sent a non-JSON envelope */ }
     const msg = parsed && parsed.choices && parsed.choices[0] && parsed.choices[0].message;
