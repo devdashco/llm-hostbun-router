@@ -1860,6 +1860,9 @@ async function handleAdminApi(req, res, path) {
           MAX(tool_count) AS tools, MAX(mcp_tools) AS mcp_tools,
           MAX(tools_kb) AS tools_kb, MAX(system_kb) AS system_kb,
           SUM(total_tokens) AS tokens, SUM(cache_read) AS cache_read,
+          SUM(cache_write) AS cache_write,
+          SUM(prompt_tokens - COALESCE(cache_read,0)) AS fresh_in,
+          SUM(completion_tokens) AS out,
           MIN(ts) AS first_ts, MAX(ts) AS last_ts,
           SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) AS errors
         FROM calls

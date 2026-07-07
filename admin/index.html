@@ -179,6 +179,7 @@ const NAV = [
   {sec:'Monitor'},
   {name:'Overview',slug:'overview',icon:'grid'},
   {name:'Calls',slug:'calls',icon:'list'},
+  {name:'Convos',slug:'convos',icon:'chart'},
   {name:'Stats',slug:'stats',icon:'chart'},
   {name:'Accounts',slug:'accounts',icon:'key'},
   {sec:'Control'},
@@ -921,7 +922,39 @@ function Accounts(){
     </table></div>
   </div>`;
 }
-const PAGES={overview:Overview,calls:Calls,stats:Stats,accounts:Accounts,routing:Routing,models:Models,crazyrouter:Crazyrouter,secrets:Secrets};
+function Conversations(){
+  const [rows,setRows]=useState([]); const [now,setNow]=useState(Date.now()); const [err,setErr]=useState('');
+  const load=useCallback(async()=>{ try{ const d=await api('conversations?limit=80'); setRows(d.conversations||[]); setNow(Date.now()); setErr(''); }catch(e){ setErr(e.message||'load failed'); } },[]);
+  useEffect(()=>{ load(); const t=setInterval(load,20000); return ()=>clearInterval(t); },[load]);
+  const ago=ts=>{ if(!ts)return ''; const m=(now-ts)/60000; return m<1?'now':m<60?Math.round(m)+'m':Math.round(m/60)+'h'; };
+  const maxTax=Math.max(1,...rows.map(r=>r.tools_kb||0));
+  const bar=(v,max,color)=>html`<div style="display:inline-block;vertical-align:middle;background:#2a2a30;border-radius:3px;height:6px;width:54px;overflow:hidden;margin-right:6px"><div style="height:100%;width:${Math.round(100*Math.min(v||0,max)/max)}%;background:${color}"></div></div>`;
+  const hit=r=>{ const cr=r.cache_read||0, fi=Math.max(0,r.fresh_in||0); const tot=cr+fi; return tot?Math.round(100*cr/tot):0; };
+  return html`
+  <${PageHead} title="Conversations — per-chat MCP tools, cache & cost" onRefresh=${load}/>
+  <div class="card">
+    <p class="hint" style="margin:0 0 12px">Each Claude Code session: how many <b>MCP tools</b> it loads, the <b>tool-schema tax</b> (context KB carried every turn), <b>cache hit</b> (green = warm/cheap), the <b>rebuild</b> cost (cache-write tokens paid when the 5-min prompt cache expires on idle), <b>fresh</b> input (real new tokens, not cached), and total spend.</p>
+    ${err?html`<p class="down">${err}</p>`:''}
+    <div style="overflow:auto"><table>
+      <tr><th>session</th><th>box</th><th>account</th><th>msgs</th><th>MCP/tools</th><th>tool tax</th><th>cache hit</th><th>rebuild</th><th>fresh</th><th>tokens</th><th>err</th><th>seen</th></tr>
+      ${rows.length? rows.map(r=>html`<tr>
+        <td class="mono hint" title=${r.session}>${(r.session||'').slice(0,8)}</td>
+        <td class="mono">${(r.consumer||'').replace('-claude','')}</td>
+        <td><span class="pill">${(r.account||'—').replace('anthropic:','')}</span></td>
+        <td class="mono">${r.msgs||0}</td>
+        <td class="mono" title="${r.mcp_tools||0} MCP of ${r.tools||0} total tools">${r.mcp_tools||0}<span class="hint">/${r.tools||0}</span></td>
+        <td>${bar(r.tools_kb,maxTax,'#f59e0b')}<span class="hint mono">${r.tools_kb||0}KB</span></td>
+        <td><span class="pill ${hit(r)>=90?'up':hit(r)>=50?'warnp':'down'}">${hit(r)}%</span></td>
+        <td class="mono hint" title="cache-write tokens (idle rebuild cost)">${nfmt(r.cache_write)||0}</td>
+        <td class="mono" title="fresh input tokens (not cached)">${nfmt(r.fresh_in)||0}</td>
+        <td class="mono">${nfmt(r.tokens)||0}</td>
+        <td class="mono ${r.errors>0?'down':'hint'}">${r.errors||0}</td>
+        <td class="hint">${ago(r.last_ts)}</td>
+      </tr>`): html`<tr><td colspan="12" class="hint">No conversations yet — a row appears once an anthropic-lane session logs a call.</td></tr>`}
+    </table></div>
+  </div>`;
+}
+const PAGES={overview:Overview,calls:Calls,convos:Conversations,stats:Stats,accounts:Accounts,routing:Routing,models:Models,crazyrouter:Crazyrouter,secrets:Secrets};
 function Shell({slug,go,children}){
   const [sbOpen,setSbOpen]=useState(false);
   return html`<div class="shell">
