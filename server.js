@@ -1567,7 +1567,13 @@ const mask = (s) => { const t = String(s || ""); return !t ? "" : t.length <= 6 
 
 // Naive per-IP login throttle: max 10 attempts / 5 min.
 const loginHits = new Map();
+// Trusted IPs bypass the admin-login throttle entirely (our own fleet's egress —
+// they're never a brute-force threat). Set ADMIN_TRUSTED_IPS=ip1,ip2,… in the env.
+const ADMIN_TRUSTED_IPS = new Set(
+  (process.env.ADMIN_TRUSTED_IPS || "").split(",").map((s) => s.trim()).filter(Boolean),
+);
 function throttled(ip) {
+  if (ADMIN_TRUSTED_IPS.has(ip)) return false;   // our fleet — zero limit
   const now = Date.now();
   const rec = loginHits.get(ip) || { n: 0, reset: now + 300000 };
   if (now > rec.reset) { rec.n = 0; rec.reset = now + 300000; }
