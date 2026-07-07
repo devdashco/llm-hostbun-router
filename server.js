@@ -1212,6 +1212,9 @@ async function jsonEnforce(req, res, route) {
       return res.end(JSON.stringify({ error: { message: "upstream fetch failed: " + e.message } }));
     }
     const text = await up.text();
+    // Attribute the wrappy lane to the wrapper-chosen Max account (see wrappyAccountLabel).
+    // Before the error guard so failed calls (429 = account capped, 500, timeout) attribute too.
+    { const wl = wrappyAccountLabel(curLane, up.headers); if (wl) logRec.keyLabel = wl; }
     if (up.status >= 400) {                                // upstream error
       // wrappy server-side failure → fall back to crazyrouter and retry this attempt.
       if (curLane === "wrappy" && !fellBack && isWrappyFailure(up.status, false)) { wrappyCircuitTrip(); if (switchWrappyToCrazy()) { attempt--; continue; } }
@@ -1222,8 +1225,6 @@ async function jsonEnforce(req, res, route) {
       res.writeHead(up.status, rh);
       return res.end(text);
     }
-    // Attribute the wrappy lane to the wrapper-chosen Max account (see wrappyAccountLabel).
-    { const wl = wrappyAccountLabel(curLane, up.headers); if (wl) logRec.keyLabel = wl; }
     let parsed = null;
     try { parsed = JSON.parse(text); } catch { /* upstream sent a non-JSON envelope */ }
     const msg = parsed && parsed.choices && parsed.choices[0] && parsed.choices[0].message;
