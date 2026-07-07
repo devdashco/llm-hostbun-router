@@ -539,7 +539,7 @@ function extractRequestContent(bodyBuf, full) {
 // we also accept `X-Project-Id`, a body `project`/`metadata.project` field, or the OpenAI
 // `user` field as fallbacks. Normalised to a short lowercase slug. Returns "" if unset.
 function extractProject(req, bodyBuf) {
-  let p = req.headers["x-project"] || req.headers["x-project-id"] || "";
+  let p = req.headers["x-project"] || req.headers["x-consumer"] || req.headers["x-project-id"] || "";
   if (!p && bodyBuf && bodyBuf.length) {
     try {
       const j = JSON.parse(bodyBuf.toString());
@@ -2048,10 +2048,15 @@ const server = http.createServer(async (req, res) => {
       console.log(`[headroom] ${path} model=${model || "-"} lane=${lane} ${hc.stats.tokens_before}->${hc.stats.tokens_after} saved=${hc.stats.tokens_saved} (${Math.round(100 * hc.stats.tokens_saved / Math.max(1, hc.stats.tokens_before))}%)`);
   }
 
-  // Anthropic lane: pin/rotate a pool account (STICKY — switch only when maxed/429) and inject its
-  // token, overriding the caller's. Keeps the prompt cache warm on one account; advances on limit.
+  // Anthropic lane account selection. An explicit `X-Account` (alias `X-CCC-Account`) header LOCKS
+  // the call to that named pool account — this is the PER-CONSUMER lock: each box (pmac/wmac/pbox)
+  // sends the account it owns, so the middleware bills the right sub and the log attributes it. No
+  // header / unknown name → fall back to the global STICKY (rotate on maxed/429). The client Bearer
+  // is always overridden either way, so a box's keychain token value is irrelevant on this lane.
   if (lane === "anthropic" && CFG.anthropicPool && CFG.anthropicPool.length) {
-    const acct = stickyAnthropic(false);
+    const want = String(req.headers["x-account"] || req.headers["x-ccc-account"] || "").trim().toLowerCase();
+    let acct = want ? (CFG.anthropicPool.find((a) => String(a.name).toLowerCase() === want) || null) : null;
+    if (!acct) acct = stickyAnthropic(false);
     if (acct) { route.authToken = acct.token; route.account = acct.name; }
   }
 
