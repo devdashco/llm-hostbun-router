@@ -487,6 +487,28 @@ initDb();
 
 const clip = (s) => { const t = s == null ? "" : String(s); return t.length > CONTENT_CAP ? t.slice(0, CONTENT_CAP) : t; };
 
+// Scrub credential-shaped substrings out of captured content BEFORE it lands in the durable call
+// store. Content logging keeps whole conversations verbatim, so a pasted key, an Authorization
+// header, or a password field would otherwise be persisted in the clear. Covers the secrets that
+// actually flow through this fleet: Anthropic keys/OAuth tokens (sk-ant-*), OpenAI-style sk- keys,
+// `Authorization: Bearer <t>` / `x-api-key: <t>` headers, and obvious password fields. Best-effort
+// and never throws — logging must never break, and a missed pattern is better than a lost request.
+const SECRET_PATTERNS = [
+  [/sk-ant-[A-Za-z0-9_-]{8,}/g, "sk-ant-[REDACTED]"],                       // Anthropic API keys + OAuth tokens
+  [/\bsk-[A-Za-z0-9]{20,}/g, "sk-[REDACTED]"],                              // OpenAI-style secret keys
+  [/(bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[REDACTED]"],                 // Authorization: Bearer <token>
+  [/(x-api-key["'\s:=]{1,4})[A-Za-z0-9._-]{12,}/gi, "$1[REDACTED]"],        // x-api-key: <token>
+  [/(pass(?:word|phrase)["'\\]*\s*[:=]\s*["'\\]*)[^"'\\\s,}]+/gi, "$1[REDACTED]"], // password/passphrase fields (tolerant of JSON-escaped quotes)
+];
+function redactSecrets(s) {
+  if (s == null) return s;
+  try {
+    let t = String(s);
+    for (const [re, rep] of SECRET_PATTERNS) t = t.replace(re, rep);
+    return t;
+  } catch { return s; }
+}
+
 // Which credential a route uses (for the "which keys" view).
 function keyLabel(route) {
   if (route.lane === "crazyrouter") return "crazyrouterKey";
@@ -689,8 +711,8 @@ function recordCall(rec) {
       rec.status == null ? null : rec.status, rec.ms == null ? null : rec.ms, rec.stream ? 1 : 0,
       u.prompt_tokens ?? null, u.completion_tokens ?? null, u.total_tokens ?? null,
       rec.error || null,
-      CFG.logging.content ? (rec.reqContent || null) : null,
-      CFG.logging.content ? (rec.respContent == null ? null : (rec.full ? String(rec.respContent) : clip(rec.respContent))) : null,
+      CFG.logging.content ? (rec.reqContent ? redactSecrets(rec.reqContent) : null) : null,
+      CFG.logging.content ? (rec.respContent == null ? null : redactSecrets(rec.full ? String(rec.respContent) : clip(rec.respContent))) : null,
       rec.project || null,
       rec.effort || null,
       rec.thinkingTokens == null ? null : rec.thinkingTokens,
