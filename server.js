@@ -183,6 +183,12 @@ function envDefaults() {
     // the caller's model id, just switch lane) — OR { block: true } to reject every call from that
     // project so it consumes zero tokens.
     projectRoutes: {},
+    // consumerAccounts: server-side per-CONSUMER account LOCK for the anthropic (claude) lane.
+    // key = X-Consumer (lowercased: "pmac"/"wmac"/"pbox"/"lprod", or a project slug); value = pool
+    // account name. A mapped consumer is pinned to that Max account — NO sticky rotation. This is the
+    // robust replacement for per-box X-Account headers/scripts: the box just sends X-Consumer once,
+    // the gateway decides + logs. Edit it live in /admin. {} = fall back to header/sticky.
+    consumerAccounts: {},
     // projectGroups: bundle many projects (e.g. all seoul:* lanes) under one rule. Each entry is
     // { name, prefixes:[...], lane?, model?, block? }. A project matches when its slug equals or
     // starts with any prefix (so "seoul:" catches seoul:probe, seoul:l1_metadata, …). block:true
@@ -308,6 +314,14 @@ function mergeConfig(base, saved) {
       if (lane) pr[k.trim().toLowerCase()] = { lane, model: typeof v.model === "string" ? v.model.trim() : "" };
     }
     c.projectRoutes = pr;
+  }
+  if (saved.consumerAccounts && typeof saved.consumerAccounts === "object" && !Array.isArray(saved.consumerAccounts)) {
+    const ca = {};
+    for (const [k, v] of Object.entries(saved.consumerAccounts)) {
+      if (typeof k === "string" && k.trim() && typeof v === "string" && v.trim())
+        ca[k.trim().toLowerCase()] = v.trim();
+    }
+    c.consumerAccounts = ca;
   }
   if (Array.isArray(saved.projectGroups)) {
     const pg = [];
@@ -1535,6 +1549,7 @@ function adminState() {
     forceModel: CFG.forceModel,
     modelRoutes: CFG.modelRoutes,
     projectRoutes: CFG.projectRoutes,
+    consumerAccounts: CFG.consumerAccounts,
     projectGroups: CFG.projectGroups,
     projectLimits: CFG.projectLimits,
     projectLimitDefault: CFG.projectLimitDefault,
@@ -1668,6 +1683,7 @@ async function handleAdminApi(req, res, path) {
     if (patch.forceModel) next.forceModel = patch.forceModel;
     if (patch.modelRoutes) next.modelRoutes = patch.modelRoutes;
     if (patch.projectRoutes) next.projectRoutes = patch.projectRoutes;
+    if (patch.consumerAccounts) next.consumerAccounts = patch.consumerAccounts;
     if (patch.projectGroups) next.projectGroups = patch.projectGroups;
     if (Array.isArray(patch.anthropicPool)) next.anthropicPool = patch.anthropicPool;   // Max-token rotation pool
     if (patch.projectLimits) next.projectLimits = patch.projectLimits;
@@ -2054,7 +2070,13 @@ const server = http.createServer(async (req, res) => {
   // header / unknown name → fall back to the global STICKY (rotate on maxed/429). The client Bearer
   // is always overridden either way, so a box's keychain token value is irrelevant on this lane.
   if (lane === "anthropic" && CFG.anthropicPool && CFG.anthropicPool.length) {
-    const want = String(req.headers["x-account"] || req.headers["x-ccc-account"] || "").trim().toLowerCase();
+    // Account resolution, most-specific first:
+    //  1. server-side consumer→account LOCK map (robust; edit in /admin, no client script)
+    //  2. explicit X-Account / X-CCC-Account header (per-request override, legacy)
+    //  3. global sticky (rotates on limit) — only for unmapped, unheadered callers
+    const consumer = String(req.headers["x-consumer"] || project || "").trim().toLowerCase();
+    const mapped = (CFG.consumerAccounts && CFG.consumerAccounts[consumer]) || "";
+    const want = String(mapped || req.headers["x-account"] || req.headers["x-ccc-account"] || "").trim().toLowerCase();
     let acct = want ? (CFG.anthropicPool.find((a) => String(a.name).toLowerCase() === want) || null) : null;
     if (!acct) acct = stickyAnthropic(false);
     if (acct) { route.authToken = acct.token; route.account = acct.name; }
