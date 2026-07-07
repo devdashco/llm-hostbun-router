@@ -2,28 +2,28 @@
   "controls": [
     {
       "id": "links",
-      "title": "🔗 Links (4)",
-      "command": "cccl"
+      "title": "\ud83d\udd17 Links (4)",
+      "command": "cmuxdock"
     }
   ],
   "links": [
     {
-      "group": "This repo — devdashco/llm-hostbun-proxy",
+      "group": "This repo \u2014 devdashco/llm-hostbun-proxy",
       "name": "Repo",
       "url": "https://github.com/devdashco/llm-hostbun-proxy"
     },
     {
-      "group": "This repo — devdashco/llm-hostbun-proxy",
+      "group": "This repo \u2014 devdashco/llm-hostbun-proxy",
       "name": "Issues",
       "url": "https://github.com/devdashco/llm-hostbun-proxy/issues"
     },
     {
-      "group": "This repo — devdashco/llm-hostbun-proxy",
+      "group": "This repo \u2014 devdashco/llm-hostbun-proxy",
       "name": "PRs",
       "url": "https://github.com/devdashco/llm-hostbun-proxy/pulls"
     },
     {
-      "group": "This repo — devdashco/llm-hostbun-proxy",
+      "group": "This repo \u2014 devdashco/llm-hostbun-proxy",
       "name": "Actions",
       "url": "https://github.com/devdashco/llm-hostbun-proxy/actions"
     }
