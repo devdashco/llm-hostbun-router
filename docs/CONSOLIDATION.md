@@ -1,3 +1,11 @@
+> **SUPERSEDED — 2026-07-09.** This plan proposed *demoting* claudebox to an internal
+> translator sidecar. We went further: claudebox is **deleted**, its OpenAI↔Anthropic
+> translation was rewritten from scratch in `translate.js` (the original flattened the
+> conversation into a `"Human:/Assistant:"` string and emitted no tool_call deltas), and the
+> account brain now lives only here — pinned per project, never rotated.
+>
+> Read `CLAUDE.md` for the current architecture. Kept below for history.
+
 # Consolidation: one gateway, one FQDN, one account brain
 
 Goal: collapse the LLM stack from **3 repos / ~6 FQDNs / 4 account brains** down to

@@ -1,18 +1,15 @@
 // llm.hostbun.cc — single-URL OpenAI router + admin UI.
 //
-// PROVIDERS (lanes):
-//   • crazyrouter -> crazyrouter.com cloud relay (CRAZYROUTER_KEY injected server-side)
-//   • wrappy      -> claudebox / claude-code OpenAI shim @ claude.hostbun.cc (wrappyToken injected)
-//   • local       -> live llama.cpp on the pbox GPU (set via config.json, e.g. qwen3.5-9b); legacy
-//                    local ids that have no backend redirect to wrappy via modelRoutes.
+// PROVIDERS — where a request is actually served. Three, and that is the whole taxonomy:
+//   • local        -> llama.cpp on the pbox GPU (OpenAI-native; base + ids from config.json)
+//   • claudecode   -> the claudecode-account-pool (our Claude Max logins) -> api.anthropic.com
+//   • crazyrouter  -> crazyrouter.com cloud relay (CRAZYROUTER_KEY injected server-side)
 //
-//   model "local" / "qwen3.5-9b"                         -> local llama.cpp lane (pbox GPU)
-//   model "gemma" / "obliterated" / "gemma-4-e4b-it-obliterated" / "google/gemma-4-26b-a4b"
-//                                                        -> wrappy (claude-sonnet-4-6, multimodal) via modelRoutes
-//   model "claude*" (e.g. claude-sonnet-4-6)             -> wrappy (claudebox), token injected
-//   any other model                                      -> crazyrouter, key injected
-//   model "imagegen"  +  POST /v1/images/*               -> image generation (SD-Turbo on the pbox GPU)
-//   GET /v1/models                            -> local + wrappy + crazyrouter list (merged)
+//   model "local" / "qwen3.5-9b"                -> local (pbox GPU)
+//   model "claude*" (e.g. claude-sonnet-4-6)    -> claudecode, the pinned account's token injected
+//   any other model                             -> crazyrouter, key injected
+//   model "imagegen"  +  POST /v1/images/*      -> image generation (SD-Turbo on the pbox GPU)
+//   GET /v1/models                              -> local + claudecode + crazyrouter (merged)
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
 //   /local/*                                   -> back-compat: strips /local, proxies to the local lane (pbox)
@@ -23,9 +20,10 @@
 // admin UI take effect immediately AND survive restarts/reboots/redeploys. Nothing here needs a
 // redeploy to change routing.
 //
-// LANE NAMING: canonical lane ids are `local`, `crazyrouter`, `wrappy`. Legacy ids `cloud`
-// (=crazyrouter) and `claude` (=wrappy) are still accepted on input and migrated, so older
-// /data/config.json files and call-log rows keep working without a reset.
+// NAMING: canonical provider ids are `local`, `crazyrouter`, `claudecode`. The legacy ids `cloud`
+// (=crazyrouter), `claude`, `anthropic`, and the retired claudebox wrapper's id all normalize to
+// one of those on input, so older /data/config.json files and call-log rows keep working without a
+// reset. A few internals still spell the field `lane`; it means provider.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -36,7 +34,7 @@ const TR = require("./translate");   // OpenAI <-> Anthropic
 
 // A single malformed request must NEVER take down the whole proxy. This is a
 // stateless per-request router, so a thrown error in one handler is isolated —
-// log it and keep serving every other lane. (Root cause this guards: the wrappy
+// log it and keep serving every other provider. (Root cause this guards: the retired
 // quota-sniff consumes up.body via arrayBuffer(); on a failover path that left
 // up.body locked, Readable.fromWeb(up.body) threw ERR_INVALID_STATE and
 // crash-looped the container ~150x, 308/502'ing every lane incl. funnel-articles.)
@@ -93,7 +91,7 @@ const HEADROOM_LANES = new Set(
 // on input so existing /data/config.json keeps working.
 const PROVIDERS = ["local", "crazyrouter", "claudecode"];
 const PROVIDER_SET = new Set(PROVIDERS);
-// Legacy ids → canonical. `wrappy` (claudebox) and `anthropic` were two names for one thing:
+// Legacy ids → canonical. The claudebox wrapper's id and `anthropic` named one thing:
 // "serve this from a Claude Max subscription". They collapse into `claudecode`.
 const LEGACY_LANE = { cloud: "crazyrouter", claude: "claudecode", wrappy: "claudecode", anthropic: "claudecode" };
 // Normalize any provider id (legacy or canonical); returns "" if unrecognized.
@@ -134,7 +132,7 @@ function envDefaults() {
       local: (process.env.LOCAL_BASE || "").replace(/\/$/, ""),
       crazyrouter: (process.env.CRAZYROUTER_BASE || process.env.CRAZY_BASE || "https://crazyrouter.com").replace(/\/$/, ""),
       // claudecode → the real Anthropic API, called with a pinned account's Max token. The old
-      // `wrappy` base (claude.hostbun.cc, the claudebox subprocess wrapper) is GONE.
+      // old claude.hostbun.cc base (the claudebox subprocess wrapper) is GONE.
       claudecode: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
       // image generation lane (SD-Turbo on the pbox GPU). Routed by path, not model name.
       images: (process.env.IMAGE_BASE || "https://sdturbo.bofrid.dev").replace(/\/$/, ""),
@@ -159,7 +157,7 @@ function envDefaults() {
     gatedModels: [OBLIT],
     // localMap: alias -> local-model-id (resolves the local lane). The old LM Studio backend is
     // gone; the env seed ships this EMPTY (local lane off by default) and the legacy ids
-    // ("local"/"gemma"/"obliterated"/...) fall through to wrappy via modelRoutes below. Production
+    // ("local"/"gemma"/"obliterated"/...) fall through to claudecode via modelRoutes below. Production
     // re-enables the lane via config.json — it points bases.local at the live llama.cpp server on
     // the pbox GPU and maps e.g. "local"/"qwen3.5-9b" -> qwen3.5-9b there.
     localMap: {},
@@ -169,7 +167,7 @@ function envDefaults() {
     forceModel: { enabled: false, lane: "claudecode", model: "" },
     // modelRoutes: explicit per-incoming-model overrides to ANY lane (highest priority after
     // forceModel). key = incoming model name (lowercased). value = { lane, model }.
-    // The legacy local model ids are redirected here to wrappy (claude-sonnet-4-6 is multimodal),
+    // The legacy local model ids are redirected here to claudecode (claude-sonnet-4-6 is multimodal),
     // so requests that still ask for "local"/"gemma"/"obliterated" — including image analysis —
     // are served by Claude instead of the retired LM Studio backend.
     modelRoutes: Object.fromEntries(
@@ -178,7 +176,7 @@ function envDefaults() {
         .map((id) => [id, { lane: "claudecode", model: "claude-sonnet-4-6" }])
     ),
     // projectRoutes: per-PROJECT overrides to ANY lane (highest priority of all — beats forceModel
-    // and modelRoutes). Lets you steer a single app (e.g. promopilot) off gemini onto wrappy without
+    // and modelRoutes). Lets you steer a single app (e.g. promopilot) off gemini onto claudecode without
     // touching anyone else. key = project name (lowercased). value = { lane, model } (model "" = keep
     // the caller's model id, just switch lane) — OR { block: true } to reject every call from that
     // project so it consumes zero tokens.
@@ -242,7 +240,7 @@ function envDefaults() {
 let CFG = envDefaults();
 
 // Merge a saved overlay (from disk / admin POST) over a base, key by key, validating shapes.
-// Accepts both new keys (crazyrouter/wrappy/...) and legacy keys (crazy/claude/crazyKey/claudeToken/
+// Accepts both new keys (crazyrouter/claudecode/...) and legacy keys (crazy/claude/crazyKey/
 // claudePrefix) so older config files migrate transparently.
 function mergeConfig(base, saved) {
   const c = JSON.parse(JSON.stringify(base));
@@ -297,7 +295,8 @@ function mergeConfig(base, saved) {
       model: typeof f.model === "string" ? f.model.trim() : "",
     };
   }
-  // `wrappyFallback` is intentionally NOT read any more. Silent cross-provider failover is gone.
+  // The old wrapper-fallback block is intentionally NOT read any more. Silent cross-provider
+  // failover is gone: a failure is reported, never papered over with a different model.
   if (saved.modelRoutes && typeof saved.modelRoutes === "object" && !Array.isArray(saved.modelRoutes)) {
     const mr = {};
     for (const [k, v] of Object.entries(saved.modelRoutes)) {
@@ -413,7 +412,7 @@ loadConfig();
 // ── pricing (for usage cost estimates in the admin stats view) ──────────────
 // PRICES_FILE is the crazyrouter pricing snapshot ({models:[{model,input_per_1m,
 // output_per_1m}]}). Cached + mtime-invalidated. Returns { id -> {in,out} } in
-// USD per 1M tokens. Only crazyrouter ids are priced; wrappy (claudebox, flat
+// USD per 1M tokens. Only crazyrouter ids are priced; claudecode (Max subscription, flat
 // subscription) and local lanes have no metered cost → treated as $0.
 let _priceCache = { mtime: 0, map: {} };
 function priceMap() {
@@ -429,7 +428,7 @@ function priceMap() {
   } catch { /* no prices file → empty map, everything reads as $0 */ }
   return _priceCache.map;
 }
-// Cost in USD for one (sentModel, lane, ptok, ctok) aggregate. wrappy/local = flat → 0.
+// Cost in USD for one (sentModel, provider, ptok, ctok) aggregate. claudecode/local = flat → 0.
 function costUsd(prices, sentModel, lane, ptok, ctok) {
   if (lane === "claudecode" || lane === "local") return 0;   // Max subscription / local GPU = flat cost
   const p = prices[sentModel]; if (!p) return 0;
@@ -526,7 +525,7 @@ function keyLabel(route) {
   return "—";
 }
 
-// (Removed: wrappyAccountLabel. The gateway now picks the account itself, so the log is
+// (Removed: the wrapper-account label reader. The gateway picks the account itself now, so the log is
 // attributed at dispatch time — no need to read it back out of a wrapper's response header.)
 
 // Extract the prompt text from a request body (chat messages / responses input / prompt).
@@ -780,7 +779,7 @@ const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCas
 const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.claudePrefix || "claude").toLowerCase());
 const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.includes(target);
 
-// ── DELETED: the entire claudebox (wrappy) support apparatus ──────────────
+// ── DELETED: the entire claudebox wrapper support apparatus ───────────────
 // The wrapper spawned a `claude` CLI subprocess per request, so it needed a concurrency gate, a
 // circuit breaker, a half-open prober, a 200-with-a-quota-notice body sniffer, and a silent
 // cross-provider failover to crazyrouter. All of that existed to babysit ONE upstream.
@@ -791,8 +790,9 @@ const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.in
 // answer, blew the prompt cache, and spent money invisibly. If the pinned account is out of quota
 // you get told, and you re-pin.
 //
-// Removed: isWrappyFailure, isClaudeboxNotice, wrappyCircuit{,Open,Trip,Reset}, probeWrappy,
-//          wrappyFallbackRoute, wrappyGate/Acquire/Release, floorWrappyTokens, doFailover.
+// Removed with it: the failure classifier, the quota-notice body sniffer, the circuit breaker and
+// its half-open prober, the crazyrouter fallback route, the admission gate + queue, the max_tokens
+// floor, and the one-shot failover.
 
 const HOP_REQ = new Set(["host", "connection", "content-length", "accept-encoding",
   "keep-alive", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
@@ -939,7 +939,7 @@ async function proxy(req, res, base, opts = {}) {
   // NOTE: there is no failover. Not to another account, not to another provider. A 429 means the
   // project's pinned account is out of quota and the caller is told so; a 5xx means the upstream
   // failed and the caller is told so. Silently re-answering with a different model on someone
-  // else's bill is what the old wrappy→crazyrouter path did, and it hid both cost and truth.
+  // else's bill is what the old wrapper→crazyrouter path did, and it hid both cost and truth.
   if (lane === "claudecode" && !threw && up && up.status === 429 && opts.account) {
     recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);
     console.warn(`[account] 429 on ${opts.account} (project=${base_rec.project || "-"}) — no auto-switch, returning 429 to caller`);
@@ -1322,7 +1322,7 @@ function usageVerdict(project) {
 //   0a. projectRoutes (exact per-project override — beats everything, incl. group rules)
 //   0b. projectGroups (prefix-matched group override)
 //   1. forceModel (global override)  2. modelRoutes (per-model, any lane)  3. local alias map
-//   4. wrappy prefix  5. empty model → default route  6. cloud policy (open/allowlist/off)
+//   4. claude* prefix  5. empty model → default route  6. cloud policy (open/allowlist/off)
 // ── account selection: PINNED per project, never automatic ────────────────
 // One project → one account, decided by config alone. There is deliberately NO auto-rotation:
 // a silent account switch is a full prompt-cache miss (~12x cost) AND it makes "who spent this?"
