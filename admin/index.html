@@ -787,9 +787,11 @@ function ClaudeCatalog(){
       <div style="flex:1">
         <${KV} n="source">${cat?html`<${Pill} cls=${cat.source==='anthropic'?'up':'warnp'}>${cat.source}<//>`:'…'}<//>
       </div>
-      <div style="flex:1"><${KV} n="last checked">${cat?ago(cat.checkedAt):'…'} ${cat&&cat.viaAccount?html`<span class="hint">via ${cat.viaAccount}</span>`:''}<//></div>
+      <div style="flex:1"><${KV} n="last checked">${cat?ago(cat.checkedAt):'…'} ${cat&&cat.sweptAccounts&&cat.sweptAccounts.length?html`<span class="hint">swept ${cat.sweptAccounts.length} account${cat.sweptAccounts.length===1?'':'s'}</span>`:''}<//></div>
     </div>
     ${cat&&cat.source!=='anthropic'&&html`<p class="down" style="margin:0 0 8px">Serving the hardcoded seed — Anthropic's catalog has not been read successfully${cat.error?': '+cat.error:''}. Ids still route; the list may just be stale.</p>`}
+    ${cat&&cat.failedAccounts&&cat.failedAccounts.length>0&&html`<p class="warnp" style="margin:0 0 8px">Could not read the catalog on ${cat.failedAccounts.map(f=>f.account+' ('+f.error+')').join(', ')} — any model only those accounts can see is missing from this list.</p>`}
+    <p class="hint" style="margin:0 0 8px">The catalog is <b>per-account</b>: this is the <b>union</b> across every account, so an id here may 404 on the account your project is pinned to. Probe to find out.</p>
     <div class="row">
       <button class="ghost sm" disabled=${busy} onClick=${refresh}>${busy?'refreshing…':'↻ Refresh from Anthropic'}</button>
       <span style="flex:1"></span>
@@ -799,10 +801,13 @@ function ClaudeCatalog(){
     ${probe&&probe.usable.length===0&&html`<p class="down" style="margin:10px 0 0"><b>${probe.account} serves nothing.</b> Every advertised model returned an error — the subscription is exhausted, not the routing.</p>`}
     <div class="mono" style="max-height:340px;overflow:auto;margin-top:10px">
       ${cat?cat.advertised.map(id=>{ const p=byId.get(id); const m=(cat.models||[]).find(x=>x.id===id);
+        const na=(m&&m.accounts)?m.accounts.length:0, tot=(cat.sweptAccounts||[]).length;
         return html`<div class="flex" key=${id} style="gap:8px;padding:3px 0;align-items:center">
           <span style="flex:0 0 auto">${p?html`<${Pill} cls=${p.ok?'up':'down'}>${p.ok?'200':(p.status||'ERR')}<//>`:html`<span class="pill mut" style="opacity:.45">·</span>`}</span>
           <span>${id}</span>
           <span class="mut">${m&&m.display_name?'· '+m.display_name:''}</span>
+          ${m&&tot>0&&na<tot?html`<span class="pill warnp" title=${'only on: '+m.accounts.join(', ')}>${na}/${tot} accts</span>`:''}
+          ${!m&&cat.source==='anthropic'?html`<span class="pill mut" title="in the code seed, not in Anthropic's catalog">seed only</span>`:''}
           ${p&&!p.ok&&p.error?html`<span class="mut hint">${p.error}</span>`:''}
         </div>`; }):html`<span class="mut">loading…</span>`}
     </div>
