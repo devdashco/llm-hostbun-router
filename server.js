@@ -543,6 +543,8 @@ const dbRow = async (sql, params = []) => (await dbRows(sql, params))[0] || null
 // recordLimits() refreshes it on every call that carries the headers; this primes it once at boot so
 // a freshly restarted container still shows real headroom before the first Anthropic response lands.
 const ACCT_CACHE = new Map();
+// Distinct-value lists for the call-log filter dropdowns. 30s TTL — see `calls/facets`.
+const FACET_CACHE = { at: 0, val: null };
 async function primeAcctCache() {
   for (const r of await dbRows("SELECT org_id,u5,u7,s5,s7,ts FROM acct_limits")) {
     ACCT_CACHE.set(r.org_id, { u5: r.u5, u7: r.u7, s5: r.s5, s7: r.s7, ts: Number(r.ts) || 0 });
@@ -1904,6 +1906,25 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     else if (q.status === "ok") where.push("status < 400");
     else if (q.status) where.push(`status = ${ph(parseInt(q.status, 10))}`);
     if (q.since) where.push(`ts >= ${ph(parseInt(q.since, 10))}`);
+    // Tri-state facets. "" = don't filter; the columns are nullable, so the negative
+    // arm must spell out IS NULL or it silently drops every un-stamped row.
+    if (q.effort === "(none)") where.push("(effort IS NULL OR effort = '')");
+    else if (q.effort) where.push(`effort = ${ph(String(q.effort))}`);
+    if (q.stream === "1") where.push("stream = true");
+    else if (q.stream === "0") where.push("(stream IS NULL OR stream = false)");
+    if (q.thinking === "1") where.push("thinking_tokens > 0");
+    else if (q.thinking === "0") where.push("(thinking_tokens IS NULL OR thinking_tokens = 0)");
+    if (q.tools === "1") where.push("tool_count > 0");
+    else if (q.tools === "0") where.push("(tool_count IS NULL OR tool_count = 0)");
+    if (q.cached === "1") where.push("cache_read > 0");
+    else if (q.cached === "0") where.push("(cache_read IS NULL OR cache_read = 0)");
+    if (q.client) where.push(`ua ILIKE ${ph("%" + String(q.client) + "%")}`);
+    if (q.stop) where.push(`stop_reason = ${ph(String(q.stop))}`);
+    if (q.minTok) where.push(`total_tokens >= ${ph(parseInt(q.minTok, 10))}`);
+    if (q.minMs) where.push(`duration_ms >= ${ph(parseInt(q.minMs, 10))}`);
+    // Live-tail cursor: only rows newer than what the client already holds. `total` then
+    // means "new since afterId", not "matching overall" — the SPA adds it to its own count.
+    if (q.afterId) where.push(`id > ${ph(parseInt(q.afterId, 10))}`);
     if (q.q) {
       const like = ph("%" + String(q.q) + "%");   // one placeholder, reused across the OR
       where.push(`(req_model ILIKE ${like} OR sent_model ILIKE ${like} OR ip ILIKE ${like}
@@ -1921,6 +1942,23 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
       left(req_content,160) AS req_preview, left(resp_content,200) AS resp_preview
       FROM calls ${w} ORDER BY id DESC LIMIT ${ph(limit)} OFFSET ${ph(offset)}`, params);
     return sendJson(res, 200, { rows, total: totalRow ? totalRow.n : 0, limit, offset, dbReady: true });
+  }
+  // Distinct values behind the filter dropdowns. Five sequential scans over `calls`, so it is
+  // cached — the panel refetches it on every mount and the live tail must not pay for it.
+  if (sub === "calls/facets" && req.method === "GET") {
+    if (!dbUp()) return sendJson(res, 200, { projects: [], models: [], keys: [], efforts: [], clients: [], stops: [] });
+    if (FACET_CACHE.at && Date.now() - FACET_CACHE.at < 30000) return sendJson(res, 200, FACET_CACHE.val);
+    const col = async (expr, extra = "") => (await dbRows(
+      `SELECT ${expr} AS v, COUNT(*)::int AS n FROM calls WHERE ${expr} IS NOT NULL AND ${expr}::text <> '' ${extra}
+       GROUP BY 1 ORDER BY n DESC LIMIT 60`)).map((r) => ({ v: String(r.v), n: r.n }));
+    const val = {
+      projects: await col("project"), models: await col("req_model"), keys: await col("key_label"),
+      efforts: await col("effort"), stops: await col("stop_reason"),
+      // UA strings are unbounded; the leading token is the client name and that is all we filter on.
+      clients: await col("split_part(ua, '/', 1)"),
+    };
+    FACET_CACHE.at = Date.now(); FACET_CACHE.val = val;
+    return sendJson(res, 200, val);
   }
   if (sub === "call" && req.method === "GET") {
     if (!dbUp()) return sendJson(res, 404, { error: "no db" });

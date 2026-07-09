@@ -214,9 +214,29 @@ const ParamBadges = ({r}) => {
   if(r.effort) b.push(html`<span class="chip" title="reasoning effort" style="border-color:var(--amb);color:var(--amb)">🧠 ${r.effort}</span>`);
   if(r.thinking_tokens>0) b.push(html`<span class="chip" title="extended thinking budget (tokens)" style="border-color:var(--acc);color:var(--acc)">💭 ${nfmt(r.thinking_tokens)}</span>`);
   else if(r.thinking_tokens===0) b.push(html`<span class="chip" title="thinking explicitly disabled">💭 off</span>`);
+  if(r.tool_count>0) b.push(html`<span class="chip" title=${(r.tool_servers||'')+' · '+(r.tools_kb||0)+'KB of tool schema'}>🔧 ${r.tool_count}${r.mcp_tools>0?html`<span class="mut"> (${r.mcp_tools} mcp)</span>`:''}</span>`);
+  if(r.cache_read>0) b.push(html`<span class="chip" title="prompt-cache read (tokens) — billed at 10%" style="border-color:var(--grn);color:var(--grn)">⚡ ${nfmt(r.cache_read)}</span>`);
+  if(r.cache_write>0) b.push(html`<span class="chip" title="prompt-cache write (tokens) — billed at 125%">✎ ${nfmt(r.cache_write)}</span>`);
+  if(r.max_tokens>0) b.push(html`<span class="chip mut" title="max_tokens">≤${nfmt(r.max_tokens)}</span>`);
+  if(r.temperature!=null) b.push(html`<span class="chip mut" title="temperature">t=${r.temperature}</span>`);
+  if(r.stop_reason&&r.stop_reason!=='end_turn'&&r.stop_reason!=='stop') b.push(html`<span class="chip" title="stop reason" style="border-color:var(--amb);color:var(--amb)">⏹ ${r.stop_reason}</span>`);
   if(!b.length) return '';
   return html`<span> ${b}</span>`;
 };
+
+/* Tri-state facet select: '' = any, '1' = yes, '0' = no. */
+const TriSel = ({label,value,onChange,title}) => html`
+  <select title=${title||label} value=${value} onChange=${e=>onChange(e.target.value)} style="flex:0 0 auto;width:auto">
+    <option value="">${label}: any</option><option value="1">${label}: yes</option><option value="0">${label}: no</option>
+  </select>`;
+
+/* Dropdown seeded from /calls/facets — each option carries its row count. */
+const FacetSel = ({label,items,value,onChange,extra}) => html`
+  <select title=${label} value=${value} onChange=${e=>onChange(e.target.value)} style="flex:0 0 auto;width:auto;max-width:190px">
+    <option value="">${label}: any</option>
+    ${(extra||[]).map(([v,l])=>html`<option value=${v}>${l}</option>`)}
+    ${(items||[]).map(f=>html`<option value=${f.v}>${f.v} (${nfmt(f.n)})</option>`)}
+  </select>`;
 
 /* ───────── stacked-bar time chart ───────── */
 const METRIC_LABEL = {tok:'tokens',n:'calls',err:'errors'};
@@ -360,26 +380,68 @@ function Issues({health,st,state}){
 }
 
 /* ───────── CALLS ───────── */
+const CALL_WINDOWS=[['','any time'],['15m','last 15 min'],['1h','last hour'],['6h','last 6h'],['24h','last 24h'],['7d','last 7d'],['30d','last 30d']];
+const WIN_MS={'15m':9e5,'1h':36e5,'6h':216e5,'24h':864e5,'7d':6048e5,'30d':2592e6};
+const EMPTY_FILTERS={q:'',model:'',project:'',provider:'',status:'',key:'',effort:'',client:'',stop:'',
+  stream:'',thinking:'',tools:'',cached:'',minTok:'',minMs:'',win:''};
+
 function Calls(){
   const {state,openCall,reload} = useApp();
   const [rows,setRows]=useState([]); const [total,setTotal]=useState(0); const [dbReady,setDbReady]=useState(true);
   const [pageSize,setPageSize]=useState(200); const [offset,setOffset]=useState(0);
-  const [f,setF]=useState({q:'',model:'',project:'',provider:'',status:''});
+  const [f,setF]=useState({...EMPTY_FILTERS});
+  const [facets,setFacets]=useState({});
+  const [live,setLive]=useState(false); const [fresh,setFresh]=useState({}); // id -> true, decays
   const [lg,setLg]=useState(()=>clone(state.logging));
   const [exporting,setExporting]=useState(false);
   useEffect(()=>{ setLg(clone(state.logging)); },[state.logging]);
+  useEffect(()=>{ api('calls/facets').then(setFacets).catch(()=>{}); },[]);
+  // Filters -> query string. `win` is client-side sugar over the server's absolute `since`.
+  const qs=useCallback(()=>{
+    const p=new URLSearchParams();
+    Object.entries(f).forEach(([k,v])=>{ if(k!=='win'&&v&&String(v).trim())p.set(k,String(v).trim()); });
+    if(f.win&&WIN_MS[f.win]) p.set('since',String(Date.now()-WIN_MS[f.win]));
+    return p;
+  },[f]);
   // load a page. off = row offset into the (filtered) result set.
   const load=useCallback(async(off=0)=>{
-    const p=new URLSearchParams({limit:String(pageSize),offset:String(off)});
-    Object.entries(f).forEach(([k,v])=>{ if(v&&v.trim())p.set(k,v.trim()); });
+    const p=qs(); p.set('limit',String(pageSize)); p.set('offset',String(off));
     try{ const d=await api('calls?'+p.toString()); setRows(d.rows||[]); setTotal(d.total||0); setDbReady(d.dbReady!==false); setOffset(off); }catch(e){}
-  },[f,pageSize]);
+  },[qs,pageSize]);
   useEffect(()=>{ // seed project / q filter from URL on mount (set by Stats drilldowns)
     const sp=new URLSearchParams(window.location.search); const pr=sp.get('project'), qq=sp.get('q');
     if(pr||qq){ setF(x=>({...x,project:pr||'',q:qq||''})); }
   },[]);
   useEffect(()=>{ load(0); },[load]); // reload page 0 when filters / pageSize change
+  // Live tail. Only ever runs on page 0 — prepending onto a scrolled-back page would corrupt
+  // the offset arithmetic. Asks for rows newer than the newest one held, so the poll stays cheap
+  // and returns nothing at all when the router is idle. The cursor lives in a ref, not in the
+  // effect's deps: keying off `rows` would tear down and rebuild the interval on every new row.
+  const topRef=useRef(0);
+  useEffect(()=>{ topRef.current = rows.length?rows[0].id:0; },[rows]);
+  useEffect(()=>{
+    if(!live||offset!==0) return;
+    let dead=false;
+    const tick=async()=>{
+      if(!topRef.current){ load(0); return; }
+      const p=qs(); p.set('afterId',String(topRef.current)); p.set('limit','200');
+      try{
+        const d=await api('calls?'+p.toString()); if(dead) return;
+        const nu=d.rows||[]; if(!nu.length) return;
+        // A full page of new rows means more arrived than we asked for, and `ORDER BY id DESC`
+        // handed us the newest 200 — prepending them would skip the gap below, permanently.
+        if(nu.length>=200){ load(0); return; }
+        setRows(r=>[...nu,...r].slice(0,pageSize));
+        setTotal(t=>t+nu.length);
+        const mark={}; nu.forEach(r=>mark[r.id]=true); setFresh(x=>({...x,...mark}));
+        setTimeout(()=>{ if(!dead) setFresh(x=>{ const y={...x}; nu.forEach(r=>delete y[r.id]); return y; }); },4000);
+      }catch(e){}
+    };
+    const iv=setInterval(tick,2500);
+    return()=>{ dead=true; clearInterval(iv); };
+  },[live,offset,qs,pageSize,load]);
   const upd=(k,v)=>setF(x=>({...x,[k]:v}));
+  const activeCount=Object.entries(f).filter(([k,v])=>v&&String(v).trim()).length;
   const A=total?offset+1:0, B=Math.min(offset+rows.length,total), lastOff=Math.max(0,(Math.ceil(total/pageSize)-1)*pageSize);
   const canPrev=offset>0, canNext=offset+pageSize<total;
   async function saveLogging(){ try{ const r=await api('config',{method:'POST',body:JSON.stringify({logging:{enabled:lg.enabled,content:lg.content,retain:parseInt(lg.retain||50000,10)}})}); reload(r.state); toast('logging settings saved'); }catch(e){toast(e.message,true);} }
@@ -400,11 +462,26 @@ function Calls(){
   <${Card}>
     <div class="row">
       <input placeholder="search model / ip / ua / prompt / reply…" style="flex:3" value=${f.q} onInput=${e=>upd('q',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load(0)}/>
-      <input placeholder="exact model" style="flex:1" value=${f.model} onInput=${e=>upd('model',e.target.value)}/>
-      <input placeholder="project" style="flex:1" value=${f.project} onInput=${e=>upd('project',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load(0)}/>
       <select style="flex:0 0 130px" value=${f.provider} onChange=${e=>upd('provider',e.target.value)}><option value="">any provider</option><option>local</option><option>crazyrouter</option><option>claudecode</option><option>blocked</option></select>
       <select style="flex:0 0 110px" value=${f.status} onChange=${e=>upd('status',e.target.value)}><option value="">any status</option><option value="ok">ok (&lt;400)</option><option value="error">error (≥400)</option></select>
+      <select style="flex:0 0 auto;width:auto" value=${f.win} onChange=${e=>upd('win',e.target.value)}>${CALL_WINDOWS.map(([v,l])=>html`<option value=${v}>${l}</option>`)}</select>
+      <button class=${live?'sm':'ghost sm'} style="flex:0 0 auto" title="poll every 2.5s and prepend new calls (page 1 only)" onClick=${()=>setLive(x=>!x)}>${live?'● LIVE':'○ Live'}</button>
       <button class="ghost sm" style="flex:0 0 auto" onClick=${()=>load(0)}>↻ Load</button>
+    </div>
+    <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
+      <${FacetSel} label="project" items=${facets.projects} value=${f.project} onChange=${v=>upd('project',v)} extra=${[['(none)','project: (none)']]}/>
+      <${FacetSel} label="model" items=${facets.models} value=${f.model} onChange=${v=>upd('model',v)}/>
+      <${FacetSel} label="account" items=${facets.keys} value=${f.key} onChange=${v=>upd('key',v)}/>
+      <${FacetSel} label="effort" items=${facets.efforts} value=${f.effort} onChange=${v=>upd('effort',v)} extra=${[['(none)','effort: (none)']]}/>
+      <${FacetSel} label="client" items=${facets.clients} value=${f.client} onChange=${v=>upd('client',v)}/>
+      <${FacetSel} label="stop" items=${facets.stops} value=${f.stop} onChange=${v=>upd('stop',v)}/>
+      <${TriSel} label="stream" value=${f.stream} onChange=${v=>upd('stream',v)}/>
+      <${TriSel} label="thinking" value=${f.thinking} onChange=${v=>upd('thinking',v)} title="thinking_tokens > 0"/>
+      <${TriSel} label="tools" value=${f.tools} onChange=${v=>upd('tools',v)} title="tool_count > 0"/>
+      <${TriSel} label="cached" value=${f.cached} onChange=${v=>upd('cached',v)} title="cache_read > 0 — prompt cache hit"/>
+      <input placeholder="min tok" style="flex:0 0 90px" value=${f.minTok} onInput=${e=>upd('minTok',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load(0)}/>
+      <input placeholder="min ms" style="flex:0 0 90px" value=${f.minMs} onInput=${e=>upd('minMs',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load(0)}/>
+      ${activeCount?html`<button class="ghost sm" style="flex:0 0 auto" onClick=${()=>setF({...EMPTY_FILTERS})}>✕ clear ${activeCount} filter${activeCount>1?'s':''}</button>`:''}
     </div>
     <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:10px">
       <small class="hint">${dbReady?html`showing <b>${A.toLocaleString()}–${B.toLocaleString()}</b> of <b>${total.toLocaleString()}</b> matching <span class="mut">· DB keeps the newest ${(state.logging&&state.logging.retain||50000).toLocaleString()} rows (older archived to NAS)</span>`:'call DB unavailable'}</small>
@@ -419,15 +496,24 @@ function Calls(){
     </div>
   </${Card}>
   <${Card}><div style="overflow:auto"><table>
-    <tr><th>time</th><th>project</th><th>model → sent</th><th>provider</th><th>key</th><th>status</th><th>ms</th><th>tok</th><th>ip / ua</th></tr>
-    ${rows.map(r=>html`<tr class="click" onClick=${()=>openCall(r.id)}>
+    <tr><th>time</th><th>project</th><th>model → sent</th><th>provider</th><th>key</th><th>effort</th><th>status</th><th>ms</th>
+      <th title="prompt → completion tokens">in → out</th><th title="cache read / write tokens">cache</th><th title="tool schemas loaded">tools</th><th>ip / ua</th></tr>
+    ${rows.map(r=>html`<tr class="click" onClick=${()=>openCall(r.id)} style=${fresh[r.id]?'background:rgba(90,200,140,.12)':''}>
       <td class="mono" style="font-size:12px;white-space:nowrap">${fmtTime(r.ts)}</td>
       <td style="font-size:12px">${r.project?html`<span class="pill" style="background:#2a3a2a;color:#8bc88b">${r.project}</span>`:html`<span class="mut" style="font-size:11px">(none)</span>`}</td>
       <td class="mono" style="font-size:12px">${r.req_model||'-'}${r.sent_model&&r.sent_model!==r.req_model?html` <span class="mut">→ ${r.sent_model}</span>`:''}${r.stream?html` <span class="mut">≈stream</span>`:''}<${ParamBadges} r=${r}/></td>
       <td><${ProviderPill} provider=${r.provider}/></td>
       <td class="mono" style="font-size:12px">${r.key_label||''}</td>
+      <td class="mono" style="font-size:12px">${r.effort?html`<span style="color:var(--amb)">${r.effort}</span>`:html`<span class="mut">—</span>`}${r.thinking_tokens>0?html`<br/><span class="mut" style="font-size:11px">💭 ${nfmt(r.thinking_tokens)}</span>`:''}</td>
       <td><${StatusPill} status=${r.status} error=${r.error}/></td>
-      <td class="mono">${r.duration_ms??'—'}</td><td class="mono">${r.total_tokens??'—'}</td>
+      <td class="mono">${r.duration_ms??'—'}</td>
+      <td class="mono" style="font-size:12px;white-space:nowrap">${r.prompt_tokens!=null||r.completion_tokens!=null
+          ?html`${nfmt(r.prompt_tokens||0)} <span class="mut">→</span> ${nfmt(r.completion_tokens||0)}`
+          :html`<span class="mut">—</span>`}</td>
+      <td class="mono" style="font-size:12px;white-space:nowrap">${(r.cache_read>0||r.cache_write>0)
+          ?html`<span style="color:var(--grn)">${nfmt(r.cache_read||0)}</span> <span class="mut">/ ${nfmt(r.cache_write||0)}</span>`
+          :html`<span class="mut">—</span>`}</td>
+      <td class="mono" style="font-size:12px">${r.tool_count>0?html`${r.tool_count}${r.tools_kb>0?html`<span class="mut"> · ${r.tools_kb}KB</span>`:''}`:html`<span class="mut">—</span>`}</td>
       <td class="mut mono" style="font-size:11px">${r.ip||''}<br/>${(r.ua||'').slice(0,32)}</td>
     </tr>`)}
   </table></div></${Card}>
