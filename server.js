@@ -126,7 +126,15 @@ const HEADROOM_PROVIDERS = new Set(
 const PROVIDERS = ["local", "crazyrouter", "claudecode"];
 // The image provider is deliberately absent from PROVIDERS: it is not a routing target. It is picked
 // by path (`/v1/images/*`), it speaks its own shape, and it bills GPU seconds rather than tokens.
+//
+// The upstream answers to TWO ids — `imagegen` and `sd-turbo` — and every one of them must be barred
+// from the text endpoints, or it drops through the whole resolver into crazyrouter, the only provider
+// that bills per token. Listing just the first one is how `sd-turbo` kept knocking on the paid door.
+// (The service's own /health reports `stabilityai/stable-diffusion-xl-base-1.0`: the name is a
+// historical label, not the weights. Ask the upstream, don't infer from the id.)
 const IMAGE_MODEL_ID = "imagegen";
+const IMAGE_MODEL_IDS = [IMAGE_MODEL_ID, "sd-turbo"];
+const isImageModel = (m) => IMAGE_MODEL_IDS.includes(String(m || "").toLowerCase());
 const PROVIDER_SET = new Set(PROVIDERS);
 // Legacy ids → canonical. The retired wrapper's id and `anthropic` named one thing:
 // "serve this from a Claude Max subscription". They collapse into `claudecode`.
@@ -1586,7 +1594,7 @@ async function refreshClaudecodeModels(why) {
 async function mergedModels(res) {
   const local = localModelEntries();
   const { claudecode, crazyrouter } = await upstreamCatalogs();
-  const images = [{ id: IMAGE_MODEL_ID, object: "model", owned_by: "pbox" }];
+  const images = IMAGE_MODEL_IDS.map((id) => ({ id, object: "model", owned_by: "pbox" }));
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
   res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter] }));
 }
@@ -1725,9 +1733,9 @@ function resolveRoute(model, project) {
   // `imagegen` is routed by PATH, not by model id. Asking for it on a text endpoint used to fall all
   // the way through to crazyrouter — the one provider that bills per token — and come back as their
   // 404. Reject it here, next to the id it names, rather than 200 miles downstream at someone's till.
-  if (key === IMAGE_MODEL_ID)
-    return { provider: "blocked", blocked: true, why: `'${IMAGE_MODEL_ID}' is an image model — POST it to /v1/images/generations, not a chat endpoint`,
-             reason: "imagegen on a text endpoint" };
+  if (isImageModel(key))
+    return { provider: "blocked", blocked: true, why: `'${key}' is an image model — POST it to /v1/images/generations, not a chat endpoint`,
+             reason: "image model on a text endpoint" };
   if (pkey && CFG.projectRoutes && CFG.projectRoutes[pkey])
     return projectRule(CFG.projectRoutes[pkey], m, `project ${pkey}`);
   if (pkey) {
