@@ -63,6 +63,70 @@ These are load-bearing decisions, not oversights. Each one was a bug once.
    breaks Claude Code's prompt cache.
 6. **Model ids are config, never code** (`claudecodeModels`). Anthropic ships new ids without asking.
 
+## Identity — consumers, jobs, keys
+
+**A consumer is WHO calls.** Exactly two kinds, and they are not the same thing:
+
+| kind | what it is | has an owner? |
+|---|---|---|
+| `dev` | a person's machine, or a daemon on it (`pmac-claude`, `lprod-autofix`) | **yes** — a human |
+| `app` | code we deployed (`promopilot`, `redbut`) | **no** — an app is not a person |
+
+Giving an app an owner is how "what do my developers cost" quietly starts including cron jobs.
+`POST` an owner for an app and you get a 400, not a silent drop.
+
+**Identity is a path: `<consumer>[:<job>]`.** `promopilot:generatetext` is consumer `promopilot`,
+job `generatetext`. This convention already existed in the data; nothing parsed it, so `promopilot`
+read as *4 calls* while its three workloads had ~30k between them. Split on the **first** colon only.
+
+**Only the consumer is registered. Jobs are free.** A new workload needs no config change — that is
+the property that keeps this sustainable. `accountFor()` resolves an exact-path pin first, then the
+consumer's pin, so pinning `promopilot` covers every job while one greedy job can still be split out.
+
+**Issuing a key IS registering.** One call, `POST /admin/api/consumers/keys {name,kind,owner?}`,
+creates the consumer if absent and returns the only copy of the secret. Two steps — register a name,
+then separately authenticate — is precisely what let a self-asserted header masquerade as identity.
+
+Wire format `sk-llm-<id>-<secret>`. `id` is public (an 8-char handle, so lookup is a map hit, not a
+scan over every hash); `secret` is never stored, only its sha256. The consumer name is deliberately
+**not** in the key: it would leak who we are, and a name containing `-` (`pmac-claude`) makes the key
+unparseable. Accepted as `Authorization: Bearer` (OpenAI clients) **or** `x-api-key` (Anthropic SDK on
+native `/v1/messages`). The caller's inbound `authorization` was always discarded by `buildHeaders()`,
+so the field was free.
+
+**A valid key outranks anything the caller says about itself.** The consumer comes from the key; only
+the *job* half of `X-Project` (or an `X-Job` header) is still taken on trust — a job is a label inside
+an already-authenticated consumer, so it cannot bill someone else. Verified: a request bearing acme's
+key and `X-Project: victim` logs as `acme`.
+
+### Two gates, and what each one is for
+
+- **`auth.mode`** (`off` | `optional` | `required`) — the lock.
+  `optional` is migration mode: a valid key wins, no key falls back to the header, and a key that is
+  *presented and bad* is always a 401 (otherwise a revoked key silently keeps working under its old
+  name). `required` is the only mode that closes the hole. **Ships `optional`.**
+- **`requireRegisteredConsumer`** — a spelling check, not a lock. Only applies to calls with no key;
+  refuses an unknown consumer with `403 unknown_consumer` so a typo can't become a new consumer with
+  its own bill. Redundant once auth is `required`. **Ships off**; currently **on** in prod.
+
+Both are flipped through their own logged endpoints (`POST /admin/api/auth`,
+`POST /admin/api/consumers/enforce`), never through `POST config`, because turning either one on with
+an unseeded registry is an instant outage. The panel refuses to do it blind: it names the consumers
+that would start failing (`keyless` in the `consumers` payload).
+
+### Gotchas
+
+- **`POST /admin/api/config` does not touch `consumers`** — deliberately. It assigns its fields
+  wholesale, and a panel save built from a payload with no hashes would wipe every key.
+- **`adminState` redacts.** The registry entry carries key hashes; `/admin/api/state` and
+  `/admin/api/consumers` return `activeKeys` and the public `id`, never `hash`.
+- **`reindexKeys()` is called from `persistConfig()`**, so no writer has to remember to, and a stale
+  index can never authenticate a revoked key. `KEY_INDEX` is declared near the top of the file, far
+  from its own functions, because `loadConfig()` reindexes at module scope — a `let` beside
+  `authenticate()` is still in its temporal dead zone when that call runs, and the process dies on boot.
+- **`lastUsed` is approximate.** Persisting it inline would mean a disk write per inference, so it is
+  flushed on a 5-minute timer. Never treat it as an audit trail.
+
 ## Translation
 
 `translate.js` — pure functions, no I/O, so it is unit-testable in isolation. It handles seven traps
@@ -130,10 +194,11 @@ dependency, the lockfile must be committed or the build fails.
   `/var/lib/docker/volumes/d11s05nc130l2kjzr6anpebr-config-data/_data/calls.db` on hostbun (64,208
   rows). It is the only backup of the pre-cutover log. Read it with
   `docker exec <container> node -e '…require("node:sqlite")…'` — the host has no `sqlite3`.
-- **There is no auth on the inference endpoints.** Anyone who can reach `llm.hostbun.cc` can spend the
-  Max subscriptions. Only `/admin` is gated. This is the largest open risk. Note that `X-Project` is
-  **attribution, not authentication** — it is a self-asserted string, and `extractProject()` also
-  accepts the OpenAI `user` field, so any caller can name any project.
+- **Auth is staged, and until `auth.mode = "required"` the inference endpoints are still open.**
+  Anyone who can reach `llm.hostbun.cc` and names a registered consumer can spend the Max
+  subscriptions. `X-Project` is **attribution, not authentication** — a self-asserted string, and
+  `extractProject()` also accepts the OpenAI `user` field. An API key is what makes the name mean
+  something. See "Identity" below.
 - **`local` is a reasoning model.** `qwen3.5-9b` returns its thinking in `reasoning_content` and
   leaves `content` empty until it finishes. With a normal token budget it never finishes → callers get
   `''` and `finish_reason: length`, having paid for every token. The router now defaults it off
@@ -185,9 +250,11 @@ dependency, the lockfile must be committed or the build fails.
 ~~2. Accounts + project-pin admin API and UI panel.~~ **Done 2026-07-09** — `POST /admin/api/pins`
    plus a pin editor in the panel. `promopilot` is pinned and serving.
 
-1. **Per-project API keys.** `Authorization: Bearer sk-llm-<project>-…` becomes the identity *and*
-   the lock, in the one field every OpenAI client already sends. Closes the auth hole and removes the
-   `X-Project` header entirely. Store a sha256 hash; plaintext lives in keyvault.
+~~1. Per-project API keys.~~ **Built 2026-07-09** — `sk-llm-<id>-<secret>`, sha256 at rest, issued by
+   `POST /admin/api/consumers/keys`. **Not yet closed**: `auth.mode` is `optional` until every caller
+   holds a key. Migration = issue a key per consumer → store in keyvault → update the caller → flip
+   `auth.mode` to `required`. The panel lists who still has no key.
+
 2. **Accounts + project-pin admin API and UI panel.** Unblocks pinning `promopilot`, and unblocks
    `claudectl`'s account tools (below).
 3. ~~**`local` thinking default.**~~ **Done 2026-07-09** — `applyLocalThinkingDefault()`.

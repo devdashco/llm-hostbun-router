@@ -78,6 +78,10 @@ const UI_ROUTES = new Set(["/overview", "/calls", "/consumers", "/stats", "/acco
   "/models", "/crazyrouter", "/secrets"].map((s) => s));
 const PRICES_FILE = process.env.PRICES_FILE || "/srv/prices.json";
 const CONFIG_FILE = process.env.CONFIG_FILE || "/data/config.json";
+// API-key lookup: key id -> {consumer, rec}. Declared here, far from reindexKeys()/authenticate()
+// below, because loadConfig() reindexes at module scope — a `let` beside those functions would still
+// be in its temporal dead zone when that first call runs, and the process dies on boot.
+let KEY_INDEX = new Map();
 // Call log lives in the `llmrouter` Postgres, NOT on the container's volume. Unset ⇒ logging off;
 // the router still proxies. Set in Coolify env, never in git — it carries the DB password.
 const DATABASE_URL = process.env.DATABASE_URL || "";
@@ -268,13 +272,21 @@ function envDefaults() {
     // Identity is a path: `<consumer>[:<job>]`. `promopilot:generatetext` is consumer promopilot,
     // job generatetext. Only the CONSUMER is registered — jobs are free, so a new workload needs no
     // config change. That is what keeps this sustainable.
-    //   consumers[name] = { kind: "dev"|"app", owner?: "philip", note?: "..." }
+    //   consumers[name] = { kind, owner?, note?, keys: [{id, hash, created, lastUsed, revoked}] }
     consumers: {},
     // When on, an inference call whose consumer is not in the registry is refused 403. Ships OFF so
     // that merely deploying this code cannot black out an unregistered caller; turn it on once the
     // registry is seeded. `requireProject` only checks a name was SUPPLIED — this checks it is a name
-    // we agreed on. Neither is authentication: the name is still self-asserted (see "Open work").
+    // we agreed on. Neither is authentication: the name is still self-asserted.
     requireRegisteredConsumer: (process.env.REQUIRE_REGISTERED_CONSUMER || "0") === "1",
+    // API-key auth. THIS is what makes a name mean something, and it is ONE artifact instead of two:
+    // the key is the identity AND the credential, carried in the field every OpenAI client already
+    // sends. Issuing a key IS registering the consumer — there is no separate "register" step.
+    //   off      — keys ignored; the self-asserted X-Project header is the only identity.
+    //   optional — a valid key wins and is trusted; no key falls back to X-Project. Migration mode.
+    //   required — no valid key, no service (401). A self-asserted header stops being an identity.
+    // Ships "optional": going straight to "required" would 401 every caller not yet handed a key.
+    auth: { mode: process.env.AUTH_MODE || "optional" },
     // Admin password (HMAC secret + login check). Weak default per request — rotate via the UI.
     adminPassword: process.env.ADMIN_PASSWORD || "ddash",
     // Call logging → the `llmrouter` Postgres (DATABASE_URL). enabled: record any call metadata at all;
@@ -343,6 +355,8 @@ function mergeConfig(base, saved) {
     c.jsonMaxRetries = saved.jsonMaxRetries;
   if (typeof saved.requireProject === "boolean") c.requireProject = saved.requireProject;
   if (typeof saved.requireRegisteredConsumer === "boolean") c.requireRegisteredConsumer = saved.requireRegisteredConsumer;
+  if (saved.auth && typeof saved.auth === "object" && ["off", "optional", "required"].includes(saved.auth.mode))
+    c.auth = { mode: saved.auth.mode };
   if (saved.consumers && typeof saved.consumers === "object" && !Array.isArray(saved.consumers)) {
     c.consumers = {};
     for (const [k, v] of Object.entries(saved.consumers)) {
@@ -354,6 +368,11 @@ function mergeConfig(base, saved) {
       // "what do my developers cost" quietly starts including cron jobs.
       if (kind === "dev" && typeof v.owner === "string" && v.owner.trim()) e.owner = v.owner.trim().toLowerCase();
       if (typeof v.note === "string" && v.note.trim()) e.note = v.note.trim();
+      // Only the hash is ever stored. A `keys` entry without one is not a key, it is a way to lock
+      // yourself out of a consumer while believing it is authenticated — drop it.
+      e.keys = Array.isArray(v.keys) ? v.keys.filter((x) => x && typeof x.id === "string" && typeof x.hash === "string")
+        .map((x) => ({ id: x.id, hash: x.hash, created: Number(x.created) || 0,
+          lastUsed: Number(x.lastUsed) || 0, revoked: !!x.revoked, note: x.note || undefined })) : [];
       c.consumers[name] = e;
     }
   }
@@ -472,6 +491,9 @@ function persistConfig() {
   try {
     fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(CFG, null, 2));
+    // Every write is a potential key change (issue, revoke, delete a consumer). Rebuilding the index
+    // here means no caller has to remember to, and a stale index can never authenticate a dead key.
+    reindexKeys();
     return true;
   } catch (e) {
     console.error(`[cfg] persist failed: ${e.message}`);
@@ -480,6 +502,7 @@ function persistConfig() {
 }
 
 loadConfig();
+reindexKeys();   // loadConfig() replaces CFG wholesale, so the key index must be rebuilt after it
 
 // ── pricing (for usage cost estimates in the admin stats view) ──────────────
 // PRICES_FILE is the crazyrouter pricing snapshot ({models:[{model,input_per_1m,
@@ -716,6 +739,69 @@ function consumerEntry(project) {
   const reg = CFG.consumers || {};
   return consumer && Object.prototype.hasOwnProperty.call(reg, consumer) ? { name: consumer, ...reg[consumer] } : null;
 }
+
+// ── API keys ───────────────────────────────────────────────────────────────
+// Wire format: sk-llm-<id>-<secret>.  `id` is a public, non-secret handle so a lookup is a map hit
+// rather than a scan over every hash; `secret` is never stored, only its sha256. The consumer name
+// is deliberately NOT in the key: it would leak who we are to anyone who sees a truncated key, and
+// a name containing '-' (pmac-claude) makes the key unparseable.
+const KEY_PREFIX = "sk-llm-";
+const sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
+
+function mintKey() {
+  const id = crypto.randomBytes(4).toString("hex");        // 8 chars, public
+  const secret = crypto.randomBytes(24).toString("base64url"); // 32 chars, shown once
+  return { id, secret, raw: `${KEY_PREFIX}${id}-${secret}` };
+}
+
+function reindexKeys() {
+  const ix = new Map();
+  for (const [consumer, e] of Object.entries(CFG.consumers || {})) {
+    for (const k of (e.keys || [])) if (!k.revoked) ix.set(k.id, { consumer, rec: k });
+  }
+  KEY_INDEX = ix;
+}
+
+// Read the key from either dialect: OpenAI clients send `Authorization: Bearer`, the Anthropic SDK
+// sends `x-api-key`. Both reach us on native /v1/messages, so both must work.
+function rawApiKey(req) {
+  const a = req.headers["authorization"];
+  if (a && /^bearer\s+/i.test(a)) {
+    const t = a.replace(/^bearer\s+/i, "").trim();
+    if (t.startsWith(KEY_PREFIX)) return t;
+  }
+  const x = req.headers["x-api-key"];
+  if (x && String(x).startsWith(KEY_PREFIX)) return String(x).trim();
+  return null;
+}
+
+// null           → no key presented
+// {ok:false,…}   → a key was presented and is bad (unknown id, wrong secret, revoked, orphaned)
+// {ok:true,…}    → authenticated; `consumer` is now asserted by us, not by the caller
+function authenticate(req) {
+  const raw = rawApiKey(req);
+  if (!raw) return null;
+  const rest = raw.slice(KEY_PREFIX.length);
+  const dash = rest.indexOf("-");
+  if (dash < 0) return { ok: false, why: "malformed key" };
+  const id = rest.slice(0, dash), secret = rest.slice(dash + 1);
+  const hit = KEY_INDEX.get(id);
+  if (!hit) return { ok: false, why: "unknown or revoked key" };
+  const want = Buffer.from(hit.rec.hash, "hex");
+  const got = Buffer.from(sha256(secret), "hex");
+  // Length is fixed (sha256), so timingSafeEqual cannot throw here — but compare in constant time
+  // regardless: a fast-fail on the first differing byte leaks the hash a byte at a time.
+  if (want.length !== got.length || !crypto.timingSafeEqual(want, got)) return { ok: false, why: "bad key" };
+  const e = (CFG.consumers || {})[hit.consumer];
+  if (!e) return { ok: false, why: "key belongs to a deleted consumer" };
+  hit.rec.lastUsed = Date.now(); KEY_USE_DIRTY = true;   // flushed to disk lazily, see below
+  return { ok: true, consumer: hit.consumer, entry: e, keyId: id };
+}
+
+// lastUsed changes on every request. Persisting it inline would mean a disk write per inference, so
+// it is flushed on a timer and is therefore approximate — never treat it as an audit trail.
+let KEY_USE_DIRTY = false;
+setInterval(() => { if (KEY_USE_DIRTY) { KEY_USE_DIRTY = false; persistConfig(); } }, 300000).unref();
 
 // Pull the model-behaviour knobs out of a request body so the call log shows HOW a
 // call was asked to run, not just which model. Covers both dialects:
@@ -1742,7 +1828,12 @@ function adminState() {
     jsonMaxRetries: CFG.jsonMaxRetries,
     requireProject: CFG.requireProject,
     requireRegisteredConsumer: CFG.requireRegisteredConsumer,
-    consumers: CFG.consumers || {},
+    // Redacted: the entry carries key HASHES, and adminState is the broadest thing this API returns.
+    // A sha256 of 32 random bytes is not worth cracking, but it is a credential derivative and it has
+    // no business in a dashboard payload. `activeKeys` is all the UI needs from here.
+    consumers: Object.fromEntries(Object.entries(CFG.consumers || {}).map(([n, e]) =>
+      [n, { kind: e.kind, owner: e.owner, note: e.note, activeKeys: (e.keys || []).filter((k) => !k.revoked).length }])),
+    authMode: (CFG.auth && CFG.auth.mode) || "optional",
     logging: CFG.logging,
     loggingDbReady: dbUp(),
     // secrets — never returned in clear
@@ -2035,13 +2126,21 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     const known = new Set(Object.keys(reg));
     const registered = Object.entries(reg).map(([name, e]) => {
       const s = seen.find((r) => r.consumer === name);
-      return { name, ...e, calls: s ? s.calls : 0, tokens: s ? Number(s.tokens) : 0,
+      // Never ship the hash. `id` is public by design — it is the half of the key that is not secret.
+      const keys = (e.keys || []).map((k) => ({ id: k.id, created: k.created, lastUsed: k.lastUsed, revoked: !!k.revoked, note: k.note }));
+      return { name, kind: e.kind, owner: e.owner, note: e.note, keys,
+        activeKeys: keys.filter((k) => !k.revoked).length,
+        calls: s ? s.calls : 0, tokens: s ? Number(s.tokens) : 0,
         jobs: s ? s.jobs : 0, lastTs: s ? Number(s.last_ts) : 0 };
     }).sort((a, b) => b.calls - a.calls);
     const unregistered = seen.filter((r) => r.consumer && !known.has(r.consumer))
       .map((r) => ({ name: r.consumer, calls: r.calls, tokens: Number(r.tokens), jobs: r.jobs, lastTs: Number(r.last_ts) }));
     return sendJson(res, 200, {
       registered, unregistered, enforcing: !!CFG.requireRegisteredConsumer,
+      authMode: (CFG.auth && CFG.auth.mode) || "optional",
+      // Flipping auth to "required" 401s every consumer holding no key. Name them, so the panel can
+      // refuse to do it blind rather than discovering it from the error rate.
+      keyless: registered.filter((c) => !c.activeKeys).map((c) => c.name),
       owners: [...new Set(Object.values(reg).filter((e) => e.owner).map((e) => e.owner))].sort(),
     });
   }
@@ -2075,6 +2174,69 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     const persisted = persistConfig();
     console.log(`[admin] consumer ${name} -> ${p.remove ? "(removed)" : reg[name].kind + (reg[name].owner ? "/" + reg[name].owner : "")} ip=${ip} persisted=${persisted}`);
     return sendJson(res, 200, { ok: true, persisted, consumers: reg });
+  }
+
+  // Issue a key. This IS the registration step: one call creates the consumer if it does not exist
+  // and hands back the only copy of the secret. Two steps (register, then separately authenticate)
+  // is what let a self-asserted header masquerade as identity in the first place.
+  // The plaintext is returned ONCE and never stored — only its sha256 lands in config.json.
+  if (sub === "consumers/keys" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const name = String(p.name || "").trim().toLowerCase();
+    if (!name) return sendJson(res, 400, { error: "name required" });
+    if (name.includes(":")) return sendJson(res, 400, { error: "keys belong to a consumer, not a job — drop everything after the ':'" });
+    const reg = { ...(CFG.consumers || {}) };
+    let e = reg[name];
+    if (!e) {
+      if (p.kind !== "dev" && p.kind !== "app") return sendJson(res, 400, { error: `"${name}" is new — say kind:"dev" or kind:"app" to create it`, kinds: ["dev", "app"] });
+      if (p.kind === "dev" && !String(p.owner || "").trim()) return sendJson(res, 400, { error: "a dev consumer is someone's machine — owner required" });
+      if (p.kind === "app" && String(p.owner || "").trim()) return sendJson(res, 400, { error: "an app has no owner" });
+      e = { kind: p.kind, keys: [] };
+      if (p.kind === "dev") e.owner = String(p.owner).trim().toLowerCase();
+    }
+    const k = mintKey();
+    e.keys = [...(e.keys || []), { id: k.id, hash: sha256(k.secret), created: Date.now(), lastUsed: 0, revoked: false, note: (p.note || "").trim() || undefined }];
+    reg[name] = e;
+    CFG.consumers = reg;
+    const persisted = persistConfig();   // also reindexes
+    console.log(`[admin] key issued ${name} id=${k.id} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, {
+      ok: true, persisted, consumer: name, kind: e.kind, keyId: k.id, key: k.raw,
+      warning: "this is the only time the key is shown — store it in keyvault now",
+    });
+  }
+
+  // Revoke one key. The consumer, its pins and its history survive; only this credential dies.
+  if (sub === "consumers/keys/revoke" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const name = String(p.name || "").trim().toLowerCase(), id = String(p.id || "").trim();
+    const reg = { ...(CFG.consumers || {}) };
+    const e = reg[name];
+    if (!e) return sendJson(res, 404, { error: `unknown consumer '${name}'` });
+    const k = (e.keys || []).find((x) => x.id === id);
+    if (!k) return sendJson(res, 404, { error: `unknown key '${id}'` });
+    k.revoked = true; k.revokedAt = Date.now();
+    CFG.consumers = reg;
+    const persisted = persistConfig();
+    console.warn(`[admin] key REVOKED ${name} id=${id} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, { ok: true, persisted });
+  }
+
+  // Auth mode. Separate + logged, like `consumers/enforce`: going to "required" 401s every caller
+  // that has not been issued a key, so the panel refuses to do it blind.
+  if (sub === "auth" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    if (!["off", "optional", "required"].includes(p.mode)) return sendJson(res, 400, { error: "mode must be off | optional | required" });
+    CFG.auth = { mode: p.mode };
+    const persisted = persistConfig();
+    console.warn(`[admin] auth.mode=${p.mode} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, { ok: true, persisted, mode: p.mode });
   }
 
   // Turn the gate on/off. Separate from `config` so it is a deliberate, logged act — flipping it on
@@ -2479,13 +2641,43 @@ const server = http.createServer(async (req, res) => {
   let model = null;
   if (bodyBuf.length) { try { model = JSON.parse(bodyBuf.toString()).model; } catch { /* not json */ } }
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
-  const project = extractProject(req, bodyBuf);
+  // Identity. A valid key OUTRANKS anything the caller says about itself: the consumer comes from
+  // the key, and only the job half of X-Project (or an X-Job header) is still taken on trust — a job
+  // is a label inside an already-authenticated consumer, so it cannot be used to bill someone else.
+  const authMode = (CFG.auth && CFG.auth.mode) || "optional";
+  const auth = authMode === "off" ? null : authenticate(req);
+  let project;
+  if (auth && auth.ok) {
+    const job = String(req.headers["x-job"] || "").trim().toLowerCase() || parseConsumer(extractProject(req, bodyBuf)).job;
+    project = job ? `${auth.consumer}:${job}` : auth.consumer;
+  } else {
+    project = extractProject(req, bodyBuf);
+  }
   const route = resolveRoute(model, project);
   const provider = route.provider;
   console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${provider}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} project=${project || "-"} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
 
-  // Project attribution gate: when on, inference POSTs must declare a project.
   const isInference = req.method === "POST" && bodyBuf.length && /\/(chat\/completions|responses|completions|messages|chat)$/.test(path);
+
+  // A key that was PRESENTED and is bad is always an error, in every mode above "off". Falling back
+  // to the header there would mean a revoked key silently keeps working under its old name.
+  const keyFail = (why) => {
+    console.error(`[err] 401 ${why} ip=${ip} model=${model || "-"}`);
+    recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
+      reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 401, ms: 0,
+      error: why, reqContent: extractRequestContent(bodyBuf), project: null });
+    res.writeHead(401, { "content-type": "application/json", "www-authenticate": `Bearer realm="llm.hostbun.cc"` });
+    return res.end(JSON.stringify({ error: {
+      type: "invalid_api_key", code: "invalid_api_key", message: why,
+      hint: "send `Authorization: Bearer sk-llm-…` (or `x-api-key`). Issue one in /admin → Consumers.",
+    } }));
+  };
+  if (auth && !auth.ok && isInference) return keyFail(auth.why);
+  // `required`: no key, no service. This is the mode where the self-asserted X-Project header stops
+  // being an identity and becomes a mere label.
+  if (authMode === "required" && isInference && !(auth && auth.ok)) return keyFail("missing API key");
+
+  // Project attribution gate: when on, inference POSTs must declare a project.
   if (CFG.requireProject && isInference && !project) {
     console.error(`[err] 400 missing project ip=${ip} model=${model || "-"}`);
     recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
