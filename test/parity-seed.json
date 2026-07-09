@@ -1,0 +1,18 @@
+{
+  "bases": { "local": "https://pbox.llm.hostbun.cc" },
+  "localMap": { "local": "qwen3.5-9b", "qwen3.5-9b": "qwen3.5-9b" },
+  "modelRoutes": {},
+  "projectRoutes": {
+    "promopilot": { "provider": "claudecode", "model": "claude-haiku-4-5" },
+    "seoul": { "allowProviders": ["local"] },
+    "redbut": { "allowModels": ["claude-haiku-4-5", "qwen3.5-9b"] },
+    "fb-bot": { "block": true }
+  },
+  "consumers": {
+    "promopilot": { "kind": "app" },
+    "seoul": { "kind": "app" },
+    "redbut": { "kind": "app" },
+    "fb-bot": { "kind": "app" }
+  },
+  "cloudPolicy": "open"
+}

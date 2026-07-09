@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node translate.test.js"
+    "test": "node translate.test.js && node test/router.test.mjs",
+    "test:translate": "node translate.test.js",
+    "test:router": "node test/router.test.mjs"
   },
   "dependencies": {
     "pg": "^8.13.1"
