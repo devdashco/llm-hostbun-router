@@ -432,7 +432,11 @@ function priceMap() {
 }
 // Cost in USD for one (sentModel, provider, ptok, ctok) aggregate. claudecode/local = flat → 0.
 function costUsd(prices, sentModel, provider, ptok, ctok) {
-  if (provider === "claudecode" || provider === "local") return 0;   // Max subscription / local GPU = flat cost
+  // Allowlist, not denylist. crazyrouter is the ONLY metered provider, so it is the only one that can
+  // cost anything. Naming the free providers instead meant a NULL or legacy provider value fell
+  // through and got priced from the crazyrouter feed — a Claude model id matches that feed, so rows
+  // written on a Max subscription reported real dollars. Unknown provider ⇒ $0, never a guess.
+  if (provider !== "crazyrouter") return 0;   // Max subscription / local GPU / unknown = no metered cost
   const p = prices[sentModel]; if (!p) return 0;
   return (ptok || 0) / 1e6 * p.in + (ctok || 0) / 1e6 * p.out;
 }
@@ -492,18 +496,8 @@ function initDb() {
     // Add the column, then backfill it from `lane` so old rows keep their provider attribution
     // (retention prunes by provider name, so an unbackfilled row would look like a NULL provider).
     try { db.exec("ALTER TABLE calls ADD COLUMN provider TEXT;"); } catch { /* already there */ }
-    // Backfill only when there is something to backfill: a full-table UPDATE on a large prod log is
-    // an expensive write to run on every single boot. Skipped entirely once `lane` is gone or drained.
-    try {
-      const hasLane = db.prepare("SELECT COUNT(*) n FROM pragma_table_info('calls') WHERE name='lane'").get().n > 0;
-      if (hasLane) {
-        const stale = db.prepare("SELECT COUNT(*) n FROM calls WHERE provider IS NULL AND lane IS NOT NULL").get().n;
-        if (stale > 0) {
-          db.exec("UPDATE calls SET provider = lane WHERE provider IS NULL;");
-          console.log(`[log] migrated ${stale} pre-rename row(s): lane → provider`);
-        }
-      }
-    } catch (e) { console.warn(`[log] provider backfill skipped: ${e.message}`); }
+    // Backfill runs out of band (see backfillProviders): on a rolling deploy the outgoing container
+    // still holds a write lock, and a full-table UPDATE loses that race. Boot must not block on it.
     // Index creation must never be fatal. An index is an optimisation; losing one is a slow query,
     // but letting it throw here costs the entire call log.
     for (const ix of [
@@ -546,6 +540,29 @@ function initDb() {
   }
 }
 initDb();
+
+// One-time `lane` → `provider` backfill for rows written before the rename, retried out of band.
+// It cannot run inline at boot: a Coolify rolling deploy keeps the OLD container serving (and
+// writing) until the new one is healthy, so a full-table UPDATE hits SQLITE_BUSY and loses. Retry
+// until the old process exits. Rows left NULL are not merely cosmetic — the conversations view
+// filters on provider, and the retention prune's `provider NOT IN (...)` is never true for NULL.
+function backfillProviders(attempt = 0) {
+  if (!db) return;
+  try {
+    const hasLane = db.prepare("SELECT COUNT(*) n FROM pragma_table_info('calls') WHERE name='lane'").get().n > 0;
+    if (!hasLane) return;                       // fresh DB, or `lane` already dropped — nothing to do
+    const stale = db.prepare("SELECT COUNT(*) n FROM calls WHERE provider IS NULL AND lane IS NOT NULL").get().n;
+    if (!stale) return;                         // already drained; do not rewrite the table every boot
+    db.exec("UPDATE calls SET provider = lane WHERE provider IS NULL AND lane IS NOT NULL;");
+    console.log(`[log] migrated ${stale} pre-rename row(s): lane → provider`);
+  } catch (e) {
+    if (attempt >= 10) { console.error(`[log] provider backfill GAVE UP after ${attempt} tries: ${e.message}`); return; }
+    const wait = Math.min(60000, 5000 * (attempt + 1));
+    console.warn(`[log] provider backfill busy (${e.message}); retrying in ${wait / 1000}s`);
+    setTimeout(() => backfillProviders(attempt + 1), wait).unref();
+  }
+}
+setTimeout(() => backfillProviders(0), 5000).unref();
 
 const clip = (s) => { const t = s == null ? "" : String(s); return (CONTENT_CAP > 0 && t.length > CONTENT_CAP) ? t.slice(0, CONTENT_CAP) : t; };
 
