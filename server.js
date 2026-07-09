@@ -2333,7 +2333,10 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
         calls: s ? s.calls : 0, tokens: s ? Number(s.tokens) : 0,
         jobs: s ? s.jobs : 0, lastTs: s ? Number(s.last_ts) : 0 };
     }).sort((a, b) => b.calls - a.calls);
-    const unregistered = seen.filter((r) => r.consumer && !known.has(r.consumer))
+    // An aliased name is not unregistered — it resolves to a registered consumer at the door. The log
+    // still holds its historical rows, so without this every alias would nag here forever.
+    const aliased = new Set(Object.keys(CFG.consumerAliases || {}));
+    const unregistered = seen.filter((r) => r.consumer && !known.has(r.consumer) && !aliased.has(r.consumer))
       .map((r) => ({ name: r.consumer, calls: r.calls, tokens: Number(r.tokens), jobs: r.jobs, lastTs: Number(r.last_ts) }));
     return sendJson(res, 200, {
       registered, unregistered, enforcing: !!CFG.requireRegisteredConsumer,
