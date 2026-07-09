@@ -73,7 +73,7 @@ tr.click{cursor:pointer} tr.click:hover td{background:#1a212b}
 .kv .n{font-size:12px;color:var(--mut)} .kv .v{font:600 19px ui-monospace,monospace;margin-top:3px}
 .pill{display:inline-block;font:12px ui-monospace,monospace;padding:2px 9px;border-radius:8px;border:1px solid var(--bd);font-weight:600}
 .up{color:var(--grn);border-color:var(--grn)} .down{color:var(--red);border-color:var(--red)} .warnp{color:var(--amb);border-color:var(--amb)}
-.crazyrouter,.cloud{color:var(--acc);border-color:var(--acc)} .local{color:var(--grn);border-color:var(--grn)} .wrappy,.claude{color:var(--clr);border-color:var(--clr)} .blocked{color:var(--red);border-color:var(--red)}
+.crazyrouter,.cloud{color:var(--acc);border-color:var(--acc)} .local{color:var(--grn);border-color:var(--grn)} .claudecode,.claude{color:var(--clr);border-color:var(--clr)} .blocked{color:var(--red);border-color:var(--red)} .images{color:#a855f7;border-color:#a855f7}
 .chip{font:11px ui-monospace,monospace;padding:1px 6px;border-radius:10px;border:1px solid var(--bd);color:var(--mut)}
 .seg{display:inline-flex;border:1px solid var(--bd);border-radius:8px;overflow:hidden}
 .seg button{background:transparent;color:var(--mut);border:0;border-radius:0;padding:5px 11px;font:600 12px -apple-system,sans-serif}
@@ -158,10 +158,12 @@ const ago = ts => { if(!ts)return '—'; const s=(Date.now()-ts)/1000; if(s<60)r
 const fmtMs = ms => { if(ms==null)return '—'; return ms>=1000?(ms/1000).toFixed(ms>=10000?0:1)+'s':Math.round(ms)+'ms'; };
 const fmtTime = ts => new Date(ts).toISOString().replace('T',' ').slice(5,19);
 const SLOW_MS = 30000;
-const laneCls = {local:'local',crazyrouter:'crazyrouter',wrappy:'wrappy',cloud:'crazyrouter',claude:'wrappy',blocked:'down'};
+// Legacy provider names still present in old call-log rows (wrappy/claude/anthropic → claudecode,
+// cloud → crazyrouter) map onto the canonical pill so history renders the same as new traffic.
+const providerCls = {local:'local',crazyrouter:'crazyrouter',claudecode:'claudecode',cloud:'crazyrouter',claude:'claudecode',anthropic:'claudecode',wrappy:'claudecode',blocked:'down',images:'images'};
 const PALETTE = ['#3b82f6','#22c55e','#f97316','#f59e0b','#a855f7','#ef4444','#06b6d4','#eab308','#84cc16','#ec4899'];
-const LANE_COLOR = {local:'#22c55e',crazyrouter:'#3b82f6',wrappy:'#f97316',blocked:'#ef4444',images:'#a855f7'};
-const seriesColor = (name,i) => LANE_COLOR[name]||PALETTE[i%PALETTE.length];
+const PROVIDER_COLOR = {local:'#22c55e',crazyrouter:'#3b82f6',claudecode:'#f97316',anthropic:'#f97316',blocked:'#ef4444',images:'#a855f7'};
+const seriesColor = (name,i) => PROVIDER_COLOR[name]||PALETTE[i%PALETTE.length];
 
 /* ───────── icons ───────── */
 const ICON = {
@@ -195,7 +197,7 @@ const nameFor = s => (NAV.find(x=>x.slug===s)||{}).name||'Overview';
 
 /* ───────── shared UI atoms ───────── */
 const Pill = ({cls,children}) => html`<span class="pill ${cls||''}">${children}</span>`;
-const LanePill = ({lane}) => html`<${Pill} cls=${laneCls[lane]||''}>${lane||'?'}<//>`;
+const ProviderPill = ({provider}) => html`<${Pill} cls=${providerCls[provider]||''}>${provider||'?'}<//>`;
 const StatusPill = ({status,error}) => {
   const refusal = status>=400 && /^json_validation_failed/.test(error||'');
   if(refusal) return html`<${Pill} cls="warnp">🙅 ${status}<//>`;
@@ -276,35 +278,35 @@ function Overview(){
     try{ setRecent((await api('calls?limit=18')).rows||[]); }catch(e){}
   },[]);
   useEffect(()=>{load();},[load]);
-  useEffect(()=>{ (async()=>{ try{ setSeries(await api('series?window='+ovWin+'&by=lane')); }catch(e){} })(); },[ovWin]);
+  useEffect(()=>{ (async()=>{ try{ setSeries(await api('series?window='+ovWin+'&by=provider')); }catch(e){} })(); },[ovWin]);
   if(!health) return html`<${PageHead} title="Overview" onRefresh=${load}/><div class="mut">loading…</div>`;
-  const laneStat={}; ((st1h&&st1h.byLane)||[]).forEach(r=>laneStat[r.lane]=r);
-  const lanes=[['local',state.bases.local,health.local],['wrappy',state.bases.wrappy,health.wrappy],['crazyrouter',state.bases.crazyrouter,health.crazyrouter]];
-  const up=[health.local,health.wrappy,health.crazyrouter].filter(x=>x&&x.up).length;
+  const providerStat={}; ((st1h&&st1h.byProvider)||[]).forEach(r=>providerStat[r.provider]=r);
+  const providers=[['local',state.bases.local,health.local],['claudecode',state.bases.claudecode,health.claudecode],['crazyrouter',state.bases.crazyrouter,health.crazyrouter]];
+  const up=[health.local,health.claudecode,health.crazyrouter].filter(x=>x&&x.up).length;
   const fm=state.forceModel||{};
   return html`
   <${PageHead} title="Overview" onRefresh=${load}/>
   <${Issues} health=${health} st=${st1h} state=${state}/>
   <${Card}>
     <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0">Activity <small class="hint">— when, by lane</small></h3>
+      <h3 style="margin:0">Activity <small class="hint">— when, by provider</small></h3>
       <div class="flex" style="gap:6px;flex-wrap:wrap">
         <${Seg} val=${ovMetric} onChange=${setOvMetric} items=${[['n','Calls'],['tok','Tokens'],['err','Errors']]}/>
         <${Seg} val=${ovWin} onChange=${setOvWin} items=${[['15m','15m'],['1h','1h'],['6h','6h'],['24h','24h']]}/>
       </div>
     </div>
-    <div style="margin-top:12px">${series?html`<${Chart} data=${series} metric=${ovMetric} by="lane" H=${200}/>`:html`<span class="mut">loading…</span>`}</div>
+    <div style="margin-top:12px">${series?html`<${Chart} data=${series} metric=${ovMetric} by="provider" H=${200}/>`:html`<span class="mut">loading…</span>`}</div>
   </${Card}>
   <${Card}>
     <div class="flex" style="justify-content:space-between"><h3 style="margin:0">Recent calls <small class="hint">— newest first · click to open</small></h3><button class="ghost sm" onClick=${()=>load()}>↻</button></div>
     <div style="overflow:auto"><table>
-      <tr><th>when</th><th>project</th><th>model</th><th>lane</th><th>status</th><th>lat · tok</th><th>ip</th></tr>
+      <tr><th>when</th><th>project</th><th>model</th><th>provider</th><th>status</th><th>lat · tok</th><th>ip</th></tr>
       ${(recent||[]).length? (recent||[]).map(r=>html`
         <tr class="click" onClick=${()=>openCall(r.id)}>
           <td class="mono mut" style="font-size:12px;white-space:nowrap" title=${fmtTime(r.ts)}>${ago(r.ts)} ago</td>
           <td style="font-size:12px">${r.project?html`<span class="chip" style="color:#8bc88b">${r.project}</span>`:html`<span class="mut" style="font-size:11px">(none)</span>`}</td>
           <td class="mono" style="font-size:12px">${r.req_model||'-'}</td>
-          <td><${LanePill} lane=${r.lane}/></td>
+          <td><${ProviderPill} provider=${r.provider}/></td>
           <td><${StatusPill} status=${r.status} error=${r.error}/></td>
           <td class="mono" style="font-size:12px">${fmtMs(r.duration_ms)} · ${r.total_tokens??'—'}t</td>
           <td class="mono mut" style="font-size:11px;white-space:nowrap" title=${(r.ua||'')}>${r.ip||'—'}</td>
@@ -312,20 +314,20 @@ function Overview(){
     </table></div>
   </${Card}>
   <div class="grid">
-    <${KV} n="Lanes up">${up<3?html`<span class="down">${up} / 3</span>`:up+' / 3'}<//>
-    <${KV} n="Force model">${fm.enabled?html`<span class="warnp">${fm.lane}/${fm.model}</span>`:'off'}<//>
-    <${KV} n="Wrappy failover">${(state.wrappyFallback&&state.wrappyFallback.enabled)?'→ crazyrouter':html`<span class="warnp">off</span>`}<//>
+    <${KV} n="Providers up">${up<3?html`<span class="down">${up} / 3</span>`:up+' / 3'}<//>
+    <${KV} n="Force model">${fm.enabled?html`<span class="warnp">${fm.provider}/${fm.model}</span>`:'off'}<//>
+    <${KV} n="Accounts">${(()=>{const n=(state.claudecodeAccountPool||[]).length; return n?n+' pinned pool':html`<span class="down">none</span>`;})()}<//>
     <${KV} n="Cloud policy">${state.cloudPolicy||'open'}<//>
     <${KV} n="JSON enforce">${state.jsonEnforce?'ON':'OFF'}<//>
     <${KV} n="Config">${state.configPersisted?'file-backed':'env defaults'}<//>
   </div>
   <${Card}>
-    <h3>Lane health <small class="hint">— live probe + last-hour traffic</small></h3>
+    <h3>Provider health <small class="hint">— live probe + last-hour traffic</small></h3>
     <div style="overflow:auto"><table>
-      <tr><th>Lane</th><th>Target</th><th>Probe</th><th>RTT</th><th>Models</th><th>Calls 1h</th><th>Avg</th><th>Err</th></tr>
-      ${lanes.map(([lane,base,r])=>{ const ls=laneStat[lane]||{}; const slow=ls.avg_ms>SLOW_MS, errd=ls.errors>0;
+      <tr><th>Provider</th><th>Target</th><th>Probe</th><th>RTT</th><th>Models</th><th>Calls 1h</th><th>Avg</th><th>Err</th></tr>
+      ${providers.map(([provider,base,r])=>{ const ls=providerStat[provider]||{}; const slow=ls.avg_ms>SLOW_MS, errd=ls.errors>0;
         return html`<tr>
-          <td><${Pill} cls=${lane}>${lane}<//></td>
+          <td><${Pill} cls=${provider}>${provider}<//></td>
           <td class="mono" style="font-size:12px">${base}</td>
           <td>${r.up?html`<${Pill} cls="up">UP ${r.status}<//>`:html`<${Pill} cls="down">DOWN ${r.status||''}<//>`}</td>
           <td class="mono">${r.ms}ms</td><td>${r.count??'—'}</td>
@@ -341,16 +343,16 @@ function Overview(){
 }
 function Issues({health,st,state}){
   const probs=[];
-  ['local','wrappy','crazyrouter'].forEach(l=>{ const r=health[l]; if(r&&!r.up) probs.push(['down',`Lane ${l} is DOWN (status ${r.status||'—'}). Traffic to it will fail.`]); });
-  if(st&&st.byLane){
-    st.byLane.forEach(r=>{ if(r.avg_ms>SLOW_MS) probs.push(['slow',`Lane ${r.lane} is slow — avg ${fmtMs(r.avg_ms)} over the last hour (${r.n} calls).`]); });
+  ['local','claudecode','crazyrouter'].forEach(l=>{ const r=health[l]; if(r&&!r.up) probs.push(['down',`Provider ${l} is DOWN (status ${r.status||'—'}). Traffic to it will fail.`]); });
+  if(st&&st.byProvider){
+    st.byProvider.forEach(r=>{ if(r.avg_ms>SLOW_MS) probs.push(['slow',`Provider ${r.provider} is slow — avg ${fmtMs(r.avg_ms)} over the last hour (${r.n} calls).`]); });
     if(st.windowJsonFails>0) probs.push(['refusal',`${st.windowJsonFails} JSON-enforce failure(s) in the last hour — usually a prose refusal, surfaced as 422. Not a proxy bug.`]);
     const otherErr=st.windowErrors-(st.windowJsonFails||0); const rate=st.windowCalls>0?otherErr/st.windowCalls:0;
     if(rate>0.05 && st.windowCalls>=20) probs.push(['err',`Non-refusal error rate ${(rate*100).toFixed(0)}% over the last hour (${otherErr}/${st.windowCalls}).`]);
   }
-  if(state.forceModel&&state.forceModel.enabled) probs.push(['force',`Force-model is ON → every request rewritten to ${state.forceModel.lane}/${state.forceModel.model}.`]);
+  if(state.forceModel&&state.forceModel.enabled) probs.push(['force',`Force-model is ON → every request rewritten to ${state.forceModel.provider}/${state.forceModel.model}.`]);
   const ic={down:'⛔',slow:'🐢',refusal:'🙅',err:'⚠️',force:'⏻'};
-  if(!probs.length) return html`<div class="banner ok"><b style="color:var(--grn)">✓ All healthy</b> <span class="mut">— lanes up, no slow lanes or elevated errors in the last hour.</span></div>`;
+  if(!probs.length) return html`<div class="banner ok"><b style="color:var(--grn)">✓ All healthy</b> <span class="mut">— providers up, no slow providers or elevated errors in the last hour.</span></div>`;
   return html`<div class="banner bad"><b style="color:var(--amb)">${probs.length} thing${probs.length>1?'s':''} to look at</b>
     <ul style="margin:8px 0 0;padding-left:20px;list-style:none">${probs.map(([k,m])=>html`<li style="margin:5px 0">${ic[k]||'•'} ${m}</li>`)}</ul></div>`;
 }
@@ -360,7 +362,7 @@ function Calls(){
   const {state,openCall,reload} = useApp();
   const [rows,setRows]=useState([]); const [total,setTotal]=useState(0); const [dbReady,setDbReady]=useState(true);
   const [pageSize,setPageSize]=useState(200); const [offset,setOffset]=useState(0);
-  const [f,setF]=useState({q:'',model:'',project:'',lane:'',status:''});
+  const [f,setF]=useState({q:'',model:'',project:'',provider:'',status:''});
   const [lg,setLg]=useState(()=>clone(state.logging));
   const [exporting,setExporting]=useState(false);
   useEffect(()=>{ setLg(clone(state.logging)); },[state.logging]);
@@ -398,7 +400,7 @@ function Calls(){
       <input placeholder="search model / ip / ua / prompt / reply…" style="flex:3" value=${f.q} onInput=${e=>upd('q',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load(0)}/>
       <input placeholder="exact model" style="flex:1" value=${f.model} onInput=${e=>upd('model',e.target.value)}/>
       <input placeholder="project" style="flex:1" value=${f.project} onInput=${e=>upd('project',e.target.value)} onKeyDown=${e=>e.key==='Enter'&&load(0)}/>
-      <select style="flex:0 0 130px" value=${f.lane} onChange=${e=>upd('lane',e.target.value)}><option value="">any lane</option><option>local</option><option>crazyrouter</option><option>wrappy</option><option>blocked</option></select>
+      <select style="flex:0 0 130px" value=${f.provider} onChange=${e=>upd('provider',e.target.value)}><option value="">any provider</option><option>local</option><option>crazyrouter</option><option>claudecode</option><option>blocked</option></select>
       <select style="flex:0 0 110px" value=${f.status} onChange=${e=>upd('status',e.target.value)}><option value="">any status</option><option value="ok">ok (&lt;400)</option><option value="error">error (≥400)</option></select>
       <button class="ghost sm" style="flex:0 0 auto" onClick=${()=>load(0)}>↻ Load</button>
     </div>
@@ -415,12 +417,12 @@ function Calls(){
     </div>
   </${Card}>
   <${Card}><div style="overflow:auto"><table>
-    <tr><th>time</th><th>project</th><th>model → sent</th><th>lane</th><th>key</th><th>status</th><th>ms</th><th>tok</th><th>ip / ua</th></tr>
+    <tr><th>time</th><th>project</th><th>model → sent</th><th>provider</th><th>key</th><th>status</th><th>ms</th><th>tok</th><th>ip / ua</th></tr>
     ${rows.map(r=>html`<tr class="click" onClick=${()=>openCall(r.id)}>
       <td class="mono" style="font-size:12px;white-space:nowrap">${fmtTime(r.ts)}</td>
       <td style="font-size:12px">${r.project?html`<span class="pill" style="background:#2a3a2a;color:#8bc88b">${r.project}</span>`:html`<span class="mut" style="font-size:11px">(none)</span>`}</td>
       <td class="mono" style="font-size:12px">${r.req_model||'-'}${r.sent_model&&r.sent_model!==r.req_model?html` <span class="mut">→ ${r.sent_model}</span>`:''}${r.stream?html` <span class="mut">≈stream</span>`:''}<${ParamBadges} r=${r}/></td>
-      <td><${LanePill} lane=${r.lane}/></td>
+      <td><${ProviderPill} provider=${r.provider}/></td>
       <td class="mono" style="font-size:12px">${r.key_label||''}</td>
       <td><${StatusPill} status=${r.status} error=${r.error}/></td>
       <td class="mono">${r.duration_ms??'—'}</td><td class="mono">${r.total_tokens??'—'}</td>
@@ -446,7 +448,7 @@ function Stats(){
   const [win,setWin]=useState('24h');
   const [s,setS]=useState(null);
   const [series,setSeries]=useState(null);
-  const [metric,setMetric]=useState('tok'); const [by,setBy]=useState('lane');
+  const [metric,setMetric]=useState('tok'); const [by,setBy]=useState('provider');
   const [sort,setSort]=useState({key:'tok',dir:-1});
   const load=useCallback(async()=>{ try{ setS(await api('stats?window='+encodeURIComponent(win))); }catch(e){} },[win]);
   useEffect(()=>{load();},[load]);
@@ -471,16 +473,16 @@ function Stats(){
       <h3 style="margin:0">History</h3>
       <div class="flex" style="gap:6px;flex-wrap:wrap">
         <${Seg} val=${metric} onChange=${setMetric} items=${[['tok','Tokens'],['n','Calls'],['err','Errors']]}/>
-        <${Seg} val=${by} onChange=${setBy} items=${[['lane','by lane'],['project','by project'],['model','by model']]}/>
+        <${Seg} val=${by} onChange=${setBy} items=${[['provider','by provider'],['project','by project'],['model','by model']]}/>
       </div>
     </div>
     <div style="margin-top:12px">${series?html`<${Chart} data=${series} metric=${metric} by=${by} H=${240}/>`:html`<span class="mut">loading…</span>`}</div>
   </${Card}>
   <${Card}>
-    <h3>Routing — where traffic & tokens go <small class="hint">— share by lane</small></h3>
-    ${(()=>{ const lanes=s.byLane||[]; const totN=lanes.reduce((a,r)=>a+r.n,0)||1, totT=lanes.reduce((a,r)=>a+r.tok,0)||1;
-      return lanes.length?lanes.map((r,i)=>{ const c=seriesColor(r.lane,i),cp=r.n/totN*100,tp=r.tok/totT*100;
-        return html`<div class="lblrow"><span class="nm"><span class="swatch" style="background:${c}"></span>${r.lane}</span>
+    <h3>Routing — where traffic & tokens go <small class="hint">— share by provider</small></h3>
+    ${(()=>{ const providers=s.byProvider||[]; const totN=providers.reduce((a,r)=>a+r.n,0)||1, totT=providers.reduce((a,r)=>a+r.tok,0)||1;
+      return providers.length?providers.map((r,i)=>{ const c=seriesColor(r.provider,i),cp=r.n/totN*100,tp=r.tok/totT*100;
+        return html`<div class="lblrow"><span class="nm"><span class="swatch" style="background:${c}"></span>${r.provider}</span>
           <span class="bar"><i style="width:${cp.toFixed(1)}%;background:${c}"></i></span>
           <span class="vv">${r.n} calls (${cp.toFixed(0)}%) · ${nfmt(r.tok)} tok (${tp.toFixed(0)}%)</span></div>`;
       }):html`<span class="mut">no traffic in window</span>`; })()}
@@ -492,12 +494,12 @@ function Stats(){
   <${Card}>
     <h3>By client <small class="hint">— who's calling (user-agent). <b style="color:var(--amb)">🧠 thinkers</b> = calls that used reasoning effort / extended thinking. Claude Code shows up as <code>claude-cli/…</code>. Click a row to filter the call log.</small></h3>
     <div style="overflow:auto"><table>
-      <tr><th>client · user-agent</th><th>calls</th><th>tokens</th><th>🧠 thinkers</th><th>IPs</th><th>lanes</th><th>last</th></tr>
+      <tr><th>client · user-agent</th><th>calls</th><th>tokens</th><th>🧠 thinkers</th><th>IPs</th><th>providers</th><th>last</th></tr>
       ${(s.byClient||[]).map(r=>html`<tr class="click" onClick=${()=>gotoCalls({q:r.ua})}>
         <td class="mono" style="font-size:12px">${r.ua}</td>
         <td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td>
         <td class="mono" style=${r.thinkers>0?'color:var(--amb);font-weight:700':'color:var(--mut)'}>${r.thinkers||0}</td>
-        <td class="mono">${r.ips}</td><td style="font-size:11px">${String(r.lanes||'').split(',').join(' ')}</td>
+        <td class="mono">${r.ips}</td><td style="font-size:11px">${String(r.providers||'').split(',').join(' ')}</td>
         <td class="mono mut" style="font-size:11px">${ago(r.last)}</td>
       </tr>`)}
     </table></div>
@@ -505,13 +507,13 @@ function Stats(){
   <${Card}>
     <h3>By model</h3>
     <div style="overflow:auto"><table>
-      <tr><th>requested model</th><th>lane</th><th>calls</th><th>tokens</th><th>in → out</th><th>est $</th><th>avg</th></tr>
-      ${(s.byModel||[]).map(r=>html`<tr><td class="mono" style="font-size:12px">${r.req_model||'-'}</td><td><${LanePill} lane=${r.lane}/></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td><td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td></tr>`)}
+      <tr><th>requested model</th><th>provider</th><th>calls</th><th>tokens</th><th>in → out</th><th>est $</th><th>avg</th></tr>
+      ${(s.byModel||[]).map(r=>html`<tr><td class="mono" style="font-size:12px">${r.req_model||'-'}</td><td><${ProviderPill} provider=${r.provider}/></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td><td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td></tr>`)}
     </table></div>
   </${Card}>
   <div class="row">
-    <${Card}><h3>By lane</h3><table><tr><th>lane</th><th>calls</th><th>tokens</th><th>avg</th><th>err</th></tr>
-      ${(s.byLane||[]).map(r=>html`<tr><td><${LanePill} lane=${r.lane}/></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono">${fmtMs(r.avg_ms)}</td><td class="mono" style=${r.errors>0?'color:var(--red)':''}>${r.errors??'—'}</td></tr>`)}
+    <${Card}><h3>By provider</h3><table><tr><th>provider</th><th>calls</th><th>tokens</th><th>avg</th><th>err</th></tr>
+      ${(s.byProvider||[]).map(r=>html`<tr><td><${ProviderPill} provider=${r.provider}/></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono">${fmtMs(r.avg_ms)}</td><td class="mono" style=${r.errors>0?'color:var(--red)':''}>${r.errors??'—'}</td></tr>`)}
     </table></${Card}>
     <${Card}><h3>By key</h3><table><tr><th>key</th><th>calls</th></tr>
       ${(s.byKey||[]).map(r=>html`<tr><td class="mono" style="font-size:12px">${r.key_label||''}</td><td class="mono">${r.n}</td></tr>`)}
@@ -527,7 +529,7 @@ function ProjectTable({s,sort,setSort,gotoCalls}){
     if(k==='io'){x=a.ptok||0;y=b.ptok||0;} else if(k==='errors'){x=a.n?a.errors/a.n:0;y=b.n?b.errors/b.n:0;} else {x=a[k]||0;y=b[k]||0;}
     return d*((x>y?1:x<y?-1:0));
   });
-  const cols=[['project','project'],['n','calls'],['tok','tokens'],['io','in → out'],['usd','est $'],['avg_ms','avg'],['errors','err%'],[null,'lanes'],['last','last seen'],[null,'share']];
+  const cols=[['project','project'],['n','calls'],['tok','tokens'],['io','in → out'],['usd','est $'],['avg_ms','avg'],['errors','err%'],[null,'providers'],['last','last seen'],[null,'share']];
   const onSort=key=>{ if(!key)return; setSort(sort.key===key?{key,dir:-sort.dir}:{key,dir:(key==='project'?1:-1)}); };
   return html`<table>
     <tr>${cols.map(([key,lbl])=>html`<th class=${key?'sortable '+(key===k?'on':''):''} onClick=${()=>onSort(key)}>${lbl}${key===k?(d<0?' ▾':' ▴'):''}</th>`)}</tr>
@@ -540,7 +542,7 @@ function ProjectTable({s,sort,setSort,gotoCalls}){
         <td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td>
         <td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td>
         <td class="mono" style=${r.errors>0?'color:var(--red);font-weight:700':'color:var(--mut)'}>${errPct.toFixed(errPct&&errPct<10?1:0)}%</td>
-        <td style="font-size:11px">${String(r.lanes||'').split(',').join(' ')}</td>
+        <td style="font-size:11px">${String(r.providers||'').split(',').join(' ')}</td>
         <td class="mono mut" style="font-size:11px">${ago(r.last)}</td>
         <td><span class="bar"><i style="width:${share.toFixed(1)}%;background:var(--acc)"></i></span></td>
       </tr>`; })}
@@ -549,21 +551,21 @@ function ProjectTable({s,sort,setSort,gotoCalls}){
 
 /* ───────── ROUTING ───────── */
 const PROJ_MODELS=[
-  {lane:'wrappy',model:'claude-sonnet-4-6'},{lane:'wrappy',model:'claude-opus-4-8'},{lane:'wrappy',model:'claude-haiku-4-5-20251001'},
-  {lane:'crazyrouter',model:'gemini-2.5-flash-lite'},{lane:'crazyrouter',model:'gemini-2.5-flash'},{lane:'crazyrouter',model:'gemini-2.5-pro'},
-  {lane:'local',model:'gemma-4-e4b-it-obliterated'},{lane:'local',model:'google/gemma-4-26b-a4b'},
+  {provider:'claudecode',model:'claude-sonnet-4-6'},{provider:'claudecode',model:'claude-opus-4-8'},{provider:'claudecode',model:'claude-haiku-4-5-20251001'},
+  {provider:'crazyrouter',model:'gemini-2.5-flash-lite'},{provider:'crazyrouter',model:'gemini-2.5-flash'},{provider:'crazyrouter',model:'gemini-2.5-pro'},
+  {provider:'local',model:'gemma-4-e4b-it-obliterated'},{provider:'local',model:'google/gemma-4-26b-a4b'},
 ];
 const BLOCK_VAL='__block__';
-const valToRule=v=>{ if(!v)return null; if(v===BLOCK_VAL)return{block:true}; const [lane,...rest]=v.split('|'); return{lane,model:rest.join('|')}; };
-const ruleToVal=cur=>(cur&&!cur.block)?`${cur.lane}|${cur.model}`:(cur&&cur.block?BLOCK_VAL:'');
-function RulePill({cur}){ if(cur&&cur.block)return html`<${Pill} cls="down">🚫 blocked<//>`; if(cur)return html`<${LanePill} lane=${cur.lane}/>`; return html`<span class="pill mut" style="opacity:.5">auto</span>`; }
+const valToRule=v=>{ if(!v)return null; if(v===BLOCK_VAL)return{block:true}; const [provider,...rest]=v.split('|'); return{provider,model:rest.join('|')}; };
+const ruleToVal=cur=>(cur&&!cur.block)?`${cur.provider}|${cur.model}`:(cur&&cur.block?BLOCK_VAL:'');
+function RulePill({cur}){ if(cur&&cur.block)return html`<${Pill} cls="down">🚫 blocked<//>`; if(cur)return html`<${ProviderPill} provider=${cur.provider}/>`; return html`<span class="pill mut" style="opacity:.5">auto</span>`; }
 function RuleSelect({cur,onChange}){
-  const sel=ruleToVal(cur); const extra=(cur&&!cur.block&&!PROJ_MODELS.some(p=>p.lane===cur.lane&&p.model===cur.model));
+  const sel=ruleToVal(cur); const extra=(cur&&!cur.block&&!PROJ_MODELS.some(p=>p.provider===cur.provider&&p.model===cur.model));
   return html`<select value=${sel} onChange=${e=>onChange(valToRule(e.target.value))} style="flex:1">
     <option value="">— auto (normal routing) —</option>
     <option value=${BLOCK_VAL}>🚫 block — reject (0 tokens)</option>
-    ${extra&&html`<option value=${sel}>${cur.lane}: ${cur.model||"(keep caller's)"}</option>`}
-    ${PROJ_MODELS.map(p=>{const v=`${p.lane}|${p.model}`; return html`<option value=${v}>${p.lane}: ${p.model}</option>`;})}
+    ${extra&&html`<option value=${sel}>${cur.provider}: ${cur.model||"(keep caller's)"}</option>`}
+    ${PROJ_MODELS.map(p=>{const v=`${p.provider}|${p.model}`; return html`<option value=${v}>${p.provider}: ${p.model}</option>`;})}
   </select>`;
 }
 const LIM_WINDOWS=['1h','6h','24h','7d','30d'];
@@ -574,13 +576,13 @@ function Routing(){
   const [known,setKnown]=useState([]);
   const [resolveOut,setResolveOut]=useState(null);
   const [resIn,setResIn]=useState(''); const [resProj,setResProj]=useState('');
-  const [na,setNa]=useState({alias:'',target:''}), [nr,setNr]=useState({in:'',lane:'wrappy',model:''}), [ng,setNg]=useState({name:'',prefix:''}), [nl,setNl]=useState('');
+  const [na,setNa]=useState({alias:'',target:''}), [nr,setNr]=useState({in:'',provider:'claudecode',model:''}), [ng,setNg]=useState({name:'',prefix:''}), [nl,setNl]=useState('');
   useEffect(()=>{ setD(seed(state)); },[state]);
   useEffect(()=>{ (async()=>{ try{ const s=await api('stats?window=all'); setKnown((s.byProject||[]).map(r=>r.project).filter(Boolean)); }catch(e){} })(); },[]);
-  function seed(s){ return { bases:clone(s.bases), wrappyPrefix:s.wrappyPrefix, jsonEnforce:!!s.jsonEnforce, jsonMaxRetries:s.jsonMaxRetries,
+  function seed(s){ return { bases:clone(s.bases), claudePrefix:s.claudePrefix, jsonEnforce:!!s.jsonEnforce, jsonMaxRetries:s.jsonMaxRetries,
     gatedModels:(s.gatedModels||[]).slice(), localMap:clone(s.localMap), modelRoutes:clone(s.modelRoutes), projectRoutes:clone(s.projectRoutes),
     projectGroups:clone(s.projectGroups||[]), projectLimits:clone(s.projectLimits), projectLimitDefault:clone(s.projectLimitDefault||{window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'}),
-    forceModel:clone(s.forceModel), wrappyFallback:clone(s.wrappyFallback), cloudPolicy:s.cloudPolicy||'open', cloudAllowlist:(s.cloudAllowlist||[]).slice(),
+    forceModel:clone(s.forceModel), cloudPolicy:s.cloudPolicy||'open', cloudAllowlist:(s.cloudAllowlist||[]).slice(),
     defaultRoute:clone(s.defaultRoute) }; }
   const set=(k,v)=>setD(x=>({...x,[k]:v}));
   const matchGroup=pkey=>{ const p=String(pkey||'').toLowerCase(); for(const g of d.projectGroups||[]) for(const pre of g.prefixes||[]) if(p===pre||p.startsWith(pre)) return g; return null; };
@@ -588,10 +590,9 @@ function Routing(){
 
   async function save(){
     const patch={ bases:d.bases, localMap:d.localMap, modelRoutes:d.modelRoutes, projectRoutes:d.projectRoutes, projectGroups:d.projectGroups,
-      forceModel:{enabled:d.forceModel.enabled,lane:d.forceModel.lane||'wrappy',model:(d.forceModel.model||'').trim()},
-      wrappyFallback:{enabled:d.wrappyFallback.enabled,model:(d.wrappyFallback.model||'').trim()},
-      cloudPolicy:d.cloudPolicy, cloudAllowlist:d.cloudAllowlist, defaultRoute:{lane:d.defaultRoute.lane||'none',model:(d.defaultRoute.model||'').trim()},
-      wrappyPrefix:(d.wrappyPrefix||'').trim()||'claude', jsonEnforce:d.jsonEnforce, jsonMaxRetries:parseInt(d.jsonMaxRetries||2,10),
+      forceModel:{enabled:d.forceModel.enabled,provider:d.forceModel.provider||'claudecode',model:(d.forceModel.model||'').trim()},
+      cloudPolicy:d.cloudPolicy, cloudAllowlist:d.cloudAllowlist, defaultRoute:{provider:d.defaultRoute.provider||'none',model:(d.defaultRoute.model||'').trim()},
+      claudePrefix:(d.claudePrefix||'').trim()||'claude', jsonEnforce:d.jsonEnforce, jsonMaxRetries:parseInt(d.jsonMaxRetries||2,10),
       gatedModels:d.gatedModels };
     if(patch.forceModel.enabled && !patch.forceModel.model){toast('force model is on but no model id set',true);return;}
     try{ const r=await api('config',{method:'POST',body:JSON.stringify(patch)}); reload(r.state); toast('saved'+(r.persisted?' & persisted':' (NOT persisted!)'),!r.persisted); }catch(e){toast(e.message,true);}
@@ -601,7 +602,7 @@ function Routing(){
     try{ const r=await api('config',{method:'POST',body:JSON.stringify({projectLimits,projectLimitDefault:d.projectLimitDefault})}); reload(r.state); toast('usage limits saved'+(r.persisted?' & persisted':' (NOT persisted!)'),!r.persisted); }catch(e){toast(e.message,true);}
   }
   async function doResolve(){ setResolveOut('…'); try{ const r=await api('resolve',{method:'POST',body:JSON.stringify({model:resIn.trim(),project:resProj.trim()})});
-    setResolveOut((r.blocked?`❌ BLOCKED — ${r.why}\n`:`✅ ${r.input||'(empty)'}${r.project?'  [project='+r.project+']':''}  →  lane=${r.lane}  model=${r.sentModel}${r.gated?'  🔒gated':''}\n`)+`reason: ${r.reason}\nupstream: ${r.base}`);
+    setResolveOut((r.blocked?`❌ BLOCKED — ${r.why}\n`:`✅ ${r.input||'(empty)'}${r.project?'  [project='+r.project+']':''}  →  provider=${r.provider}  model=${r.sentModel}${r.gated?'  🔒gated':''}\n`)+`reason: ${r.reason}\nupstream: ${r.base}`);
   }catch(e){ setResolveOut('error: '+e.message); } }
   async function resetCfg(){ if(!confirm('Reset all routing/secrets to env defaults? This deletes the saved config file.'))return; try{ const r=await api('reset',{method:'POST'}); reload(r.state); toast('reset to env defaults'); }catch(e){toast(e.message,true);} }
 
@@ -612,7 +613,7 @@ function Routing(){
     <h3 style="font-size:16px">🎯 Per-project model <small class="hint">— pick a model per app. <b>Auto</b> = normal routing. <b>🚫 Block</b> = reject. Beats groups + everything below.</small></h3>
     <table><tr><th style="width:40%">Project</th><th>Model</th></tr>
       ${projNames.length?projNames.map(k=>{ const cur=d.projectRoutes[k]; const grp=cur?null:matchGroup(k);
-        const pill=cur?html`<${RulePill} cur=${cur}/>`:(grp?html`<span class="pill ${grp.block?'down':(laneCls[grp.lane]||'')}" title=${'from group '+grp.name}>${grp.block?'🚫':grp.lane} ·grp</span>`:html`<${RulePill} cur=${null}/>`);
+        const pill=cur?html`<${RulePill} cur=${cur}/>`:(grp?html`<span class="pill ${grp.block?'down':(providerCls[grp.provider]||'')}" title=${'from group '+grp.name}>${grp.block?'🚫':grp.provider} ·grp</span>`:html`<${RulePill} cur=${null}/>`);
         return html`<tr><td class="mono">${k}</td><td><div class="flex"><span style="flex:0 0 96px">${pill}</span>
           <${RuleSelect} cur=${cur} onChange=${rule=>{ const pr=clone(d.projectRoutes); if(!rule)delete pr[k]; else pr[k]=rule; set('projectRoutes',pr); }}/></div></td></tr>`;
       }):html`<tr><td colspan="2" class="mut">no projects seen yet — they appear once apps send an X-Project header</td></tr>`}
@@ -625,8 +626,8 @@ function Routing(){
       ${(d.projectGroups||[]).length?(d.projectGroups||[]).map((g,i)=>html`<tr>
         <td class="mono">${g.name}</td>
         <td><input class="mono" style="width:100%" value=${(g.prefixes||[]).join(', ')} onChange=${e=>{ const gs=clone(d.projectGroups); gs[i].prefixes=e.target.value.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean); set('projectGroups',gs); }}/></td>
-        <td><div class="flex"><span style="flex:0 0 96px"><${RulePill} cur=${g.block?{block:true}:(g.lane?{lane:g.lane,model:g.model}:null)}/></span>
-          <${RuleSelect} cur=${g.block?{block:true}:(g.lane?{lane:g.lane,model:g.model}:null)} onChange=${rule=>{ const gs=clone(d.projectGroups); const {name,prefixes}=gs[i]; gs[i]=rule?Object.assign({name,prefixes},rule):{name,prefixes,block:false,lane:'',model:''}; set('projectGroups',gs); }}/></div></td>
+        <td><div class="flex"><span style="flex:0 0 96px"><${RulePill} cur=${g.block?{block:true}:(g.provider?{provider:g.provider,model:g.model}:null)}/></span>
+          <${RuleSelect} cur=${g.block?{block:true}:(g.provider?{provider:g.provider,model:g.model}:null)} onChange=${rule=>{ const gs=clone(d.projectGroups); const {name,prefixes}=gs[i]; gs[i]=rule?Object.assign({name,prefixes},rule):{name,prefixes,block:false,provider:'',model:''}; set('projectGroups',gs); }}/></div></td>
         <td><button class="ghost" onClick=${()=>{ const gs=clone(d.projectGroups); gs.splice(i,1); set('projectGroups',gs); }}>✕</button></td>
       </tr>`):html`<tr><td colspan="4" class="mut">no groups — add one below</td></tr>`}
     </table>
@@ -658,18 +659,16 @@ function Routing(){
     <h3 style="color:var(--amb)">⏻ Force model <small class="hint">— override EVERY request, ignore what the caller asks for</small></h3>
     <div class="row">
       <label class="flex" style="flex:0 0 auto"><input type="checkbox" checked=${!!d.forceModel.enabled} onChange=${e=>set('forceModel',{...d.forceModel,enabled:e.target.checked})} style="width:auto;margin-right:8px"/> force enabled</label>
-      <select style="flex:0 0 140px" value=${d.forceModel.lane||'wrappy'} onChange=${e=>set('forceModel',{...d.forceModel,lane:e.target.value})}><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
-      <input style="flex:2" placeholder="model id sent to that lane" value=${d.forceModel.model||''} onInput=${e=>set('forceModel',{...d.forceModel,model:e.target.value})}/>
+      <select style="flex:0 0 140px" value=${d.forceModel.provider||'claudecode'} onChange=${e=>set('forceModel',{...d.forceModel,provider:e.target.value})}><option>claudecode</option><option>local</option><option>crazyrouter</option></select>
+      <input style="flex:2" placeholder="model id sent to that provider" value=${d.forceModel.model||''} onInput=${e=>set('forceModel',{...d.forceModel,model:e.target.value})}/>
     </div>
   </${Card}>
 
   <${Card}>
-    <h3>🛟 Wrappy failover <small class="hint">— if claudebox dies, auto-retry on crazyrouter</small></h3>
-    <div class="row">
-      <label class="flex" style="flex:0 0 auto"><input type="checkbox" checked=${!!d.wrappyFallback.enabled} onChange=${e=>set('wrappyFallback',{...d.wrappyFallback,enabled:e.target.checked})} style="width:auto;margin-right:8px"/> fallback enabled</label>
-      <input style="flex:2" placeholder="crazyrouter model (blank = resend caller's model)" value=${d.wrappyFallback.model||''} onInput=${e=>set('wrappyFallback',{...d.wrappyFallback,model:e.target.value})}/>
-    </div>
-    <small class="hint">Triggers on wrappy fetch-failure / HTTP ≥500 / 429 / 401 / 403. One retry per request.</small>
+    <h3>🚫 No fallback <small class="hint">— by design, not by omission</small></h3>
+    <small class="hint">A 429 means the project's pinned account is out of quota; a 5xx means the upstream failed.
+    Both reach the caller unchanged. The gateway never re-answers on a different account or provider —
+    doing so blows the per-org prompt cache (~12× cost) and hides who spent what. Re-pin the project instead.</small>
   </${Card}>
 
   <div style="margin:14px 0 4px"><button onClick=${save}>Save routing</button></div>
@@ -685,15 +684,15 @@ function Routing(){
       ${resolveOut!=null&&html`<pre>${resolveOut}</pre>`}
     </${Card}>
     <${Card}>
-      <h3>↪ Model overrides <small class="hint">— force a specific incoming model to ANY lane + model</small></h3>
-      <table><tr><th>Incoming model</th><th>→ lane</th><th>→ sent model</th><th></th></tr>
-        ${Object.entries(d.modelRoutes||{}).map(([k,v])=>html`<tr><td class="mono">${k}</td><td><${LanePill} lane=${v.lane}/></td><td class="mono">${v.model||'(unchanged)'}</td><td style="width:34px"><span class="x" onClick=${()=>{ const mr=clone(d.modelRoutes); delete mr[k]; set('modelRoutes',mr); }}>✕</span></td></tr>`)}
+      <h3>↪ Model overrides <small class="hint">— force a specific incoming model to ANY provider + model</small></h3>
+      <table><tr><th>Incoming model</th><th>→ provider</th><th>→ sent model</th><th></th></tr>
+        ${Object.entries(d.modelRoutes||{}).map(([k,v])=>html`<tr><td class="mono">${k}</td><td><${ProviderPill} provider=${v.provider}/></td><td class="mono">${v.model||'(unchanged)'}</td><td style="width:34px"><span class="x" onClick=${()=>{ const mr=clone(d.modelRoutes); delete mr[k]; set('modelRoutes',mr); }}>✕</span></td></tr>`)}
       </table>
       <div class="row" style="margin-top:8px">
         <input placeholder="incoming e.g. deepseek-v3" value=${nr.in} onInput=${e=>setNr({...nr,in:e.target.value})}/>
-        <select style="flex:0 0 130px" value=${nr.lane} onChange=${e=>setNr({...nr,lane:e.target.value})}><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
+        <select style="flex:0 0 130px" value=${nr.provider} onChange=${e=>setNr({...nr,provider:e.target.value})}><option>claudecode</option><option>local</option><option>crazyrouter</option></select>
         <input placeholder="sent model id" value=${nr.model} onInput=${e=>setNr({...nr,model:e.target.value})}/>
-        <button class="ghost sm" style="flex:0 0 auto" onClick=${()=>{ const k=nr.in.trim().toLowerCase(); if(!k){toast('incoming model required',true);return;} const mr=clone(d.modelRoutes); mr[k]={lane:nr.lane,model:nr.model.trim()}; set('modelRoutes',mr); setNr({in:'',lane:nr.lane,model:''}); }}>+ Add</button>
+        <button class="ghost sm" style="flex:0 0 auto" onClick=${()=>{ const k=nr.in.trim().toLowerCase(); if(!k){toast('incoming model required',true);return;} const mr=clone(d.modelRoutes); mr[k]={provider:nr.provider,model:nr.model.trim()}; set('modelRoutes',mr); setNr({in:'',provider:nr.provider,model:''}); }}>+ Add</button>
       </div>
     </${Card}>
     <${Card}>
@@ -703,14 +702,14 @@ function Routing(){
       </div>
       <label>crazyrouter allowlist <small class="hint">(comma-separated model ids)</small></label>
       <input placeholder="gemini-2.5-flash-lite, gpt-5.5, …" value=${(d.cloudAllowlist||[]).join(', ')} onInput=${e=>set('cloudAllowlist',e.target.value.split(',').map(x=>x.trim()).filter(Boolean))}/>
-      <h3 style="margin-top:14px">Default route <small class="hint">— for unknown/empty/blocked models. lane <code>none</code> = reject 400.</small></h3>
+      <h3 style="margin-top:14px">Default route <small class="hint">— for unknown/empty/blocked models. provider <code>none</code> = reject 400.</small></h3>
       <div class="row">
-        <select style="flex:0 0 140px" value=${d.defaultRoute.lane||'none'} onChange=${e=>set('defaultRoute',{...d.defaultRoute,lane:e.target.value})}><option>none</option><option>wrappy</option><option>local</option><option>crazyrouter</option></select>
-        <input placeholder="default model id (when lane ≠ none)" value=${d.defaultRoute.model||''} onInput=${e=>set('defaultRoute',{...d.defaultRoute,model:e.target.value})}/>
+        <select style="flex:0 0 140px" value=${d.defaultRoute.provider||'none'} onChange=${e=>set('defaultRoute',{...d.defaultRoute,provider:e.target.value})}><option>none</option><option>claudecode</option><option>local</option><option>crazyrouter</option></select>
+        <input placeholder="default model id (when provider ≠ none)" value=${d.defaultRoute.model||''} onInput=${e=>set('defaultRoute',{...d.defaultRoute,model:e.target.value})}/>
       </div>
     </${Card}>
     <${Card}>
-      <h3>Local model aliases <small class="hint">— caller <code>model</code> → exact id sent to LM Studio</small></h3>
+      <h3>Local model aliases <small class="hint">— caller <code>model</code> → exact id sent to the local llama.cpp server</small></h3>
       <table><tr><th>Alias</th><th>→ Upstream id</th><th>gated?</th><th></th></tr>
         ${Object.entries(d.localMap||{}).map(([a,tg])=>html`<tr><td class="mono">${a}</td><td class="mono">${tg}</td><td>${(d.gatedModels||[]).includes(tg)?html`<${Pill} cls="warnp">🔒<//>`:''}</td><td style="width:34px"><span class="x" onClick=${()=>{ const lm=clone(d.localMap); delete lm[a]; set('localMap',lm); }}>✕</span></td></tr>`)}
       </table>
@@ -722,11 +721,11 @@ function Routing(){
       <small class="hint">Known local ids: e4b <code>${stg.e4b}</code> · gemma <code>${stg.gemma}</code> · obliterated <code>${stg.obliterated}</code></small>
     </${Card}>
     <${Card}>
-      <h3>Lane base URLs</h3>
-      <label>local lane (llama.cpp @ pbox GPU)</label><input value=${d.bases.local} onInput=${e=>set('bases',{...d.bases,local:e.target.value})}/>
-      <label>crazyrouter lane</label><input value=${d.bases.crazyrouter} onInput=${e=>set('bases',{...d.bases,crazyrouter:e.target.value})}/>
-      <label>wrappy lane (claudebox @ claude.hostbun.cc)</label><input value=${d.bases.wrappy} onInput=${e=>set('bases',{...d.bases,wrappy:e.target.value})}/>
-      <label>wrappy prefix <small class="hint">— models starting with this route to wrappy (default <code>claude</code>)</small></label><input value=${d.wrappyPrefix||''} onInput=${e=>set('wrappyPrefix',e.target.value)}/>
+      <h3>Provider base URLs</h3>
+      <label>local provider (llama.cpp @ pbox GPU)</label><input value=${d.bases.local} onInput=${e=>set('bases',{...d.bases,local:e.target.value})}/>
+      <label>crazyrouter provider</label><input value=${d.bases.crazyrouter} onInput=${e=>set('bases',{...d.bases,crazyrouter:e.target.value})}/>
+      <label>claudecode provider (real Anthropic API — account token injected per project)</label><input value=${d.bases.claudecode} onInput=${e=>set('bases',{...d.bases,claudecode:e.target.value})}/>
+      <label>claudecode prefix <small class="hint">— models starting with this route to claudecode (default <code>claude</code>)</small></label><input value=${d.claudePrefix||''} onInput=${e=>set('claudePrefix',e.target.value)}/>
     </${Card}>
     <${Card}>
       <h3>Structured / JSON output enforcement</h3>
@@ -763,9 +762,9 @@ function Models(){
   const [out,setOut]=useState(null);
   useEffect(()=>{ (async()=>{ try{ setModels(await api('models')); }catch(e){} })(); },[]);
   async function runTest(){ const model=tm.trim(); if(!model){toast('enter a model',true);return;} setOut('running…');
-    try{ const r=await api('test',{method:'POST',body:JSON.stringify({model,prompt:tp})}); setOut(`lane=${r.lane} sent=${r.sentModel} status=${r.status} ${r.ms}ms\n`+(r.content!=null?('\n'+r.content):('\n[no content]\n'+(r.error||r.raw||'')))); }
+    try{ const r=await api('test',{method:'POST',body:JSON.stringify({model,prompt:tp})}); setOut(`provider=${r.provider} sent=${r.sentModel} status=${r.status} ${r.ms}ms\n`+(r.content!=null?('\n'+r.content):('\n[no content]\n'+(r.error||r.raw||'')))); }
     catch(e){ setOut('error: '+e.message); } }
-  const all=models?[...models.local,...models.wrappy,...models.crazyrouter]:[];
+  const all=models?[...models.local,...models.claudecode,...models.crazyrouter]:[];
   const sec=(title,cls,arr)=>{ const items=(arr||[]).filter(m=>!filter||m.id.toLowerCase().includes(filter.toLowerCase())); if(!items.length)return '';
     return html`<div style="margin:10px 0 4px"><${Pill} cls=${cls}>${title}<//> <span class="mut">${items.length}</span></div>${items.map(m=>html`<div style="padding:3px 0">${m.id} <span class="mut">· ${m.owned_by||''}</span></div>`)}`; };
   return html`
@@ -781,9 +780,9 @@ function Models(){
     ${out!=null&&html`<pre>${out}</pre>`}
   </${Card}>
   <${Card}>
-    <h3>Available models ${models?html`<span class="mut">(local ${models.local.length} · wrappy ${models.wrappy.length} · crazyrouter ${models.crazyrouter.length})</span>`:''}</h3>
+    <h3>Available models ${models?html`<span class="mut">(local ${models.local.length} · claudecode ${models.claudecode.length} · crazyrouter ${models.crazyrouter.length})</span>`:''}</h3>
     <input placeholder="filter…" value=${filter} onInput=${e=>setFilter(e.target.value)} style="margin-bottom:8px"/>
-    <div class="mono" style="max-height:420px;overflow:auto">${models?html`${sec('local','local',models.local)}${sec('wrappy','wrappy',models.wrappy)}${sec('crazyrouter','crazyrouter',models.crazyrouter)}`:html`<span class="mut">loading…</span>`}</div>
+    <div class="mono" style="max-height:420px;overflow:auto">${models?html`${sec('local','local',models.local)}${sec('claudecode','claudecode',models.claudecode)}${sec('crazyrouter','crazyrouter',models.crazyrouter)}`:html`<span class="mut">loading…</span>`}</div>
   </${Card}>`;
 }
 
@@ -797,7 +796,7 @@ function Crazyrouter(){
     try{ const r=await api('crazyrouter/test',{method:'POST',body:JSON.stringify({key})}); setTest(JSON.stringify(r,null,2)); toast(r.keyValid?'key is VALID — click Save key':'key is INVALID',!r.keyValid); }catch(e){ setTest('error: '+e.message); } }
   async function saveKey(){ const key=nk.trim(); if(!key){toast('paste a key',true);return;} try{ const r=await api('config',{method:'POST',body:JSON.stringify({crazyrouterKey:key})}); reload(r.state); setNk(''); toast('key saved (live)'); load(); }catch(e){toast(e.message,true);} }
   return html`
-  <${PageHead} title="Crazyrouter (cloud lane)" onRefresh=${load}/>
+  <${PageHead} title="Crazyrouter (cloud provider)" onRefresh=${load}/>
   <${Card}>
     ${c==='loading'||c==null?html`<div class="mut">${c==null?'unavailable':'checking…'}</div>`:html`
     <div class="grid">
@@ -821,7 +820,7 @@ function Crazyrouter(){
 /* ───────── SECRETS ───────── */
 function Secrets(){
   const {state,reload}=useApp();
-  const [v,setV]=useState({claude:'',oblit:'',admin:''});
+  const [v,setV]=useState({oblit:'',admin:''});
   async function setSecret(field,val){ if(!val){toast('enter a value',true);return;} try{ const r=await api('config',{method:'POST',body:JSON.stringify({[field]:val})}); reload(r.state); toast(field+' updated'); }catch(e){toast(e.message,true);} }
   async function disableGate(){ if(!confirm('Disable the gate? Gated models become open to anyone.'))return; try{ const r=await api('config',{method:'POST',body:JSON.stringify({oblitToken:''})}); reload(r.state); toast('gate disabled'); }catch(e){toast(e.message,true);} }
   async function changePw(){ if(v.admin.length<3){toast('min 3 chars',true);return;} if(!confirm('Change admin password? You may need to sign in again.'))return; try{ await api('config',{method:'POST',body:JSON.stringify({adminPassword:v.admin})}); setV({...v,admin:''}); toast('password changed — re-login if prompted'); }catch(e){toast(e.message,true);} }
@@ -829,8 +828,9 @@ function Secrets(){
   <${PageHead} title="Secrets & gate"/>
   <div class="warn">Live, file-backed overrides (<code>${state.configFile}</code>). Leaving a field blank keeps the current value.</div>
   <${Card}>
-    <h3>Wrappy lane token <small class="hint">(claudebox @ claude.hostbun.cc)</small> <span class="mut">(current: ${state.wrappyTokenMasked||'(none)'})</span></h3>
-    <div class="flex"><input type="password" placeholder="new wrappy token" value=${v.claude} onInput=${e=>setV({...v,claude:e.target.value})}/><button class="sm" style="flex:0 0 auto" onClick=${()=>{setSecret('wrappyToken',v.claude);setV({...v,claude:''});}}>Update</button></div>
+    <h3>claudecode account tokens <span class="mut">(${(state.claudecodeAccountPool||[]).length} in pool)</span></h3>
+    <small class="hint">Max account tokens live in <code>claudecodeAccountPool</code> inside the config file above — the only
+    copy anywhere. They are never returned to this UI. Edit them on the volume, and back it up before touching the app.</small>
   </${Card}>
   <${Card}>
     <h3>Obliterated / uncensored gate <span class="mut">(token: ${state.oblitTokenSet?state.oblitTokenMasked:'(open — no gate)'})</span></h3>
@@ -861,7 +861,7 @@ function CallDrawer({id,onClose}){
   <div class=${'dov'+(open?' open':'')} onClick=${onClose}></div>
   <aside class=${'drawer'+(open?' open':'')} aria-hidden=${!open}>
     <div class="drawer-hd">
-      <div style="font-weight:600">${c&&c.id?html`Call #${c.id} <${StatusPill} status=${c.status} error=${c.error}/> <${LanePill} lane=${c.lane}/>`:'Call'}</div>
+      <div style="font-weight:600">${c&&c.id?html`Call #${c.id} <${StatusPill} status=${c.status} error=${c.error}/> <${ProviderPill} provider=${c.provider}/>`:'Call'}</div>
       <span style="flex:1"></span>
       <button class="ghost sm" onClick=${copy}>Copy JSON</button>
       <button class="ghost sm" onClick=${onClose}>✕</button>
@@ -906,7 +906,7 @@ function Accounts(){
   return html`
   <${PageHead} title="Accounts — live limits"/>
   <div class="card">
-    <p class="hint" style="margin:0 0 12px">Per-account Anthropic <b>5h</b> / <b>7d</b> headroom, harvested for free off the rate-limit headers of real <span class="pill wrappy">anthropic</span>-lane traffic — <b>zero probe tokens</b>. Keyed by organization id; refreshes every 15s and on each call.</p>
+    <p class="hint" style="margin:0 0 12px">Per-account Anthropic <b>5h</b> / <b>7d</b> headroom, harvested for free off the rate-limit headers of real <span class="pill claudecode">anthropic</span>-provider traffic — <b>zero probe tokens</b>. Keyed by organization id; refreshes every 15s and on each call.</p>
     ${err?html`<p class="down">${err}</p>`:''}
     <div style="overflow:auto"><table>
       <tr><th>project</th><th>org</th><th>5h</th><th>7d</th><th>status</th><th>7d resets in</th><th>model</th><th>last seen</th></tr>
@@ -919,7 +919,7 @@ function Accounts(){
         <td class="mono">${rel(r.reset7)}</td>
         <td class="mono hint">${r.model||''}</td>
         <td class="hint">${ago(r.ts)}</td>
-      </tr>`): html`<tr><td colspan="8" class="hint">No anthropic-lane traffic yet — a row appears on the first real call routed to a local-dev project.</td></tr>`}
+      </tr>`): html`<tr><td colspan="8" class="hint">No anthropic-provider traffic yet — a row appears on the first real call routed to a local-dev project.</td></tr>`}
     </table></div>
   </div>`;
 }
@@ -951,7 +951,7 @@ function Conversations(){
         <td class="mono">${nfmt(r.tokens)||0}</td>
         <td class="mono ${r.errors>0?'down':'hint'}">${r.errors||0}</td>
         <td class="hint">${ago(r.last_ts)}</td>
-      </tr>`): html`<tr><td colspan="12" class="hint">No conversations yet — a row appears once an anthropic-lane session logs a call.</td></tr>`}
+      </tr>`): html`<tr><td colspan="12" class="hint">No conversations yet — a row appears once an anthropic-provider session logs a call.</td></tr>`}
     </table></div>
   </div>`;
 }

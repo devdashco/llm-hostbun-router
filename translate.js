@@ -2,7 +2,7 @@
 //
 // WHY THIS EXISTS
 // The gateway talks to api.anthropic.com natively (`/v1/messages`). Most of our apps talk OpenAI
-// (`/v1/chat/completions`). Until now that gap was filled by the claudebox wrapper, which flattened
+// (`/v1/chat/completions`). Until now that gap was filled by the retired subprocess wrapper, which flattened
 // the whole conversation into one "Human:/Assistant:" string, never emitted tool_call deltas, and
 // replaced output images with "[Image: Content not supported]". This module replaces it properly:
 // structured content blocks in, real tool_calls out, faithful SSE.

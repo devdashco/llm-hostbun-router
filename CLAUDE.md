@@ -4,8 +4,8 @@ Node router (zero deps) behind `https://llm.hostbun.cc`. **The only middleman be
 code and a model.** One OpenAI-compatible base URL — `/v1` — picks the provider from the model id.
 Deployed on hostbun Coolify from `devdashco/llm-hostbun-router`, branch `master`.
 
-Renamed from `llm-hostbun-proxy` (2026-07-09). Old refs may linger in sibling repos; the Coolify
-app's `git_repository` still says the old name and works only because GitHub redirects renames.
+Renamed from `llm-hostbun-proxy` (2026-07-09). The Coolify app already points at the new name; old
+refs may still linger in sibling repos.
 
 ## Layout
 
@@ -28,9 +28,15 @@ still spell it that way.)
 | `claudecode` | the **claudecode-account-pool** (our Claude Max logins) → `api.anthropic.com` | Anthropic | flat (subscription) |
 | `crazyrouter` | `crazyrouter.com` cloud relay (gemini etc), key injected | OpenAI | **per token** |
 
-Legacy ids still migrate on read: `cloud`→`crazyrouter`; `claude`/`anthropic`/the old wrapper's
-id→`claudecode`. The claudebox subprocess wrapper at `claude.hostbun.cc` is **deleted** — the
-router now calls the real Anthropic API with a pinned account's `sk-ant-oat…` token.
+Legacy ids still migrate on read: `cloud`→`crazyrouter`; `claude`/`anthropic`/`wrappy`→`claudecode`.
+The old subprocess wrapper is **deleted** — the router now calls the real Anthropic API with a pinned
+account's `sk-ant-oat…` token. Don't reintroduce the old name; the only place it survives is the
+`LEGACY_PROVIDER` key map, which must keep it so pre-rename `config.json` files still load.
+
+The field is `provider` everywhere. `lane` was the old word and is **still read** on input
+(`providerOf()` accepts `{lane}` or `{provider}`), because `/data/config.json` on the volume predates
+the rename. Old call-log rows carry `provider='anthropic'`; new ones carry `'claudecode'` — queries
+and the retention prune must match **both**.
 
 Routing lives in a mutable `CFG` seeded from env, overlaid with `/data/config.json` on a persistent
 volume, editable live from `/admin`. Changes apply without a redeploy.
@@ -68,11 +74,15 @@ Run `node translate.test.js` before touching it. 14 tests, no deps.
 
 ## Deploy
 
-Pushing does **not** reliably auto-build. Trigger the Coolify deploy for app uuid
+Pushing does **not** reliably auto-build — the app's `watch_paths` lists `server.js`, `Dockerfile`,
+`entrypoint.sh`, `gen-prices.sh`, `README.md`, `admin/**`, `docs/**`, and **not `translate.js`**, so a
+push that only touches the translator is silently ignored. Trigger the Coolify deploy for app uuid
 `d11s05nc130l2kjzr6anpebr` (token in keyvault), then **verify — never stop at `git push`**: wait for
 `running:healthy`, read the boot line in the logs (`llm-gateway on :80 | providers: …`), then curl a
 real request. The headroom sidecar is app `i7pfies89s3maf390ye3rllk`. Both live in Coolify project
-`llm-hostbun-router`, alongside the `llm-proxy-archive` service (which runs on the pbox server).
+`llm-hostbun-router`, alongside the `llm-proxy-archive` service (uuid `ysjpmznhdq1auwk9f3lqv8hk`).
+**That archive service is now orphaned** — `ops/nas-shipper/`, the only thing that fed it, was deleted
+(2026-07-09). Stop or delete the service; `GET /admin/api/export` is left in place but has no caller.
 
 `Dockerfile` copies files individually. **If you add a new `require`d file, add a `COPY` line** or
 the container crash-loops on boot.
@@ -83,15 +93,21 @@ the container crash-loops on boot.
   `/data/config.json` on the app's volume. Not in env, not in git, no backup. Lose the volume, lose
   the subscriptions. Back it up before touching the app, the server, or the volume.
 - **There is no auth on the inference endpoints.** Anyone who can reach `llm.hostbun.cc` can spend the
-  Max subscriptions. Only `/admin` is gated. This is the largest open risk.
+  Max subscriptions. Only `/admin` is gated. This is the largest open risk. Note that `X-Project` is
+  **attribution, not authentication** — it is a self-asserted string, and `extractProject()` also
+  accepts the OpenAI `user` field, so any caller can name any project.
 - **`local` is a reasoning model.** `qwen3.5-9b` returns its thinking in `reasoning_content` and
   leaves `content` empty until it finishes. With a normal token budget it never finishes → callers get
   `''` and `finish_reason: length`, having paid for every token. `enable_thinking: false` fixes it.
+- **`defaultAccount` quietly voids the "never bill a guess" invariant.** `accountFor()` is
+  `pins[project] || defaultAccount`, so an unpinned *or misspelled* project bills the default instead
+  of 403'ing. The 403 works today only because `defaultAccount` is empty in prod. Leave it empty.
 - **The admin UI has no accounts or project-pin panel.** You cannot pin a project from `/admin` today,
-  which is why `promopilot` is stuck at 403. It also still renders two dead fields (`wrappyPrefix`,
-  `wrappyFallback`) the server no longer sends.
-- **Retention prunes by provider name.** Old call-log rows carry `lane='anthropic'`; new ones carry
-  `claudecode`. Check both when querying history.
+  which is why `promopilot` is stuck at 403.
+- **Renaming a field renames it in SQL too.** The `lane`→`provider` rename needed an
+  `ALTER TABLE calls ADD COLUMN provider` + backfill from `lane`; without it `CREATE TABLE IF NOT
+  EXISTS` no-ops on the existing prod table, the provider index throws, `initDb()` catches, and
+  **call logging silently turns itself off while boot still looks clean**.
 
 ## Open work
 

@@ -12,7 +12,7 @@
 //   GET /v1/models                              -> local + claudecode + crazyrouter (merged)
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
-//   /local/*                                   -> back-compat: strips /local, proxies to the local lane (pbox)
+//   /local/*                                   -> back-compat: strips /local, proxies to the local provider (pbox)
 //   /admin, /admin/api/*                       -> password-gated admin UI (edit routing/models/keys live)
 //
 // Routing is driven by a live, mutable CFG object. CFG is seeded from env defaults and then
@@ -21,9 +21,9 @@
 // redeploy to change routing.
 //
 // NAMING: canonical provider ids are `local`, `crazyrouter`, `claudecode`. The legacy ids `cloud`
-// (=crazyrouter), `claude`, `anthropic`, and the retired claudebox wrapper's id all normalize to
+// (=crazyrouter), `claude`, `anthropic`, and the retired wrapper's id all normalize to
 // one of those on input, so older /data/config.json files and call-log rows keep working without a
-// reset. A few internals still spell the field `lane`; it means provider.
+// reset. A few internals still spell the field `provider`; it means provider.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -37,7 +37,7 @@ const TR = require("./translate");   // OpenAI <-> Anthropic
 // log it and keep serving every other provider. (Root cause this guards: the retired
 // quota-sniff consumes up.body via arrayBuffer(); on a failover path that left
 // up.body locked, Readable.fromWeb(up.body) threw ERR_INVALID_STATE and
-// crash-looped the container ~150x, 308/502'ing every lane incl. funnel-articles.)
+// crash-looped the container ~150x, 308/502'ing every provider incl. funnel-articles.)
 process.on("uncaughtException", (err) => {
   console.error(`[fatal-guard] uncaughtException: ${err && err.stack ? err.stack : err}`);
 });
@@ -74,8 +74,8 @@ const HEADROOM_MIN_CHARS = parseInt(process.env.HEADROOM_MIN_CHARS || "2000", 10
 // Compression NEVER applies to claudecode: it rewrites the prompt, which misses the prompt cache
 // (a cache read is ~10x cheaper than a fresh input token). Compressing to save tokens there costs
 // more than it saves. Hard-coded out of the default; adding it back via env is a mistake.
-const HEADROOM_LANES = new Set(
-  (process.env.HEADROOM_LANES || "local,crazyrouter").split(",").map((s) => s.trim()).filter(Boolean)
+const HEADROOM_PROVIDERS = new Set(
+  (process.env.HEADROOM_PROVIDERS || "local,crazyrouter").split(",").map((s) => s.trim()).filter(Boolean)
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -91,17 +91,18 @@ const HEADROOM_LANES = new Set(
 // on input so existing /data/config.json keeps working.
 const PROVIDERS = ["local", "crazyrouter", "claudecode"];
 const PROVIDER_SET = new Set(PROVIDERS);
-// Legacy ids → canonical. The claudebox wrapper's id and `anthropic` named one thing:
+// Legacy ids → canonical. The retired wrapper's id and `anthropic` named one thing:
 // "serve this from a Claude Max subscription". They collapse into `claudecode`.
-const LEGACY_LANE = { cloud: "crazyrouter", claude: "claudecode", wrappy: "claudecode", anthropic: "claudecode" };
+const LEGACY_PROVIDER = { cloud: "crazyrouter", claude: "claudecode", wrappy: "claudecode", anthropic: "claudecode" };
 // Normalize any provider id (legacy or canonical); returns "" if unrecognized.
-function normLane(l) {
+function normProvider(l) {
   const s = String(l || "").trim().toLowerCase();
-  const c = LEGACY_LANE[s] || s;
+  const c = LEGACY_PROVIDER[s] || s;
   return PROVIDER_SET.has(c) ? c : "";
 }
-const LANES = PROVIDERS;              // back-compat alias for existing references
-const LANE_SET = PROVIDER_SET;
+// A saved route is `{provider, model}` today and `{lane, model}` in every config.json written before
+// the rename. Read both — dropping the legacy key silently empties modelRoutes/projectRoutes on boot.
+const providerOf = (v) => normProvider(v && (v.provider || v.lane));
 
 const LIMIT_WINDOWS = ["1h", "6h", "24h", "7d", "30d"];
 const WINDOW_MS = { "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000 };
@@ -127,14 +128,14 @@ function sanitizeLimit(v) {
 function envDefaults() {
   return {
     bases: {
-      // local llama.cpp lane on the pbox GPU. The live base is supplied by config.json in prod
-      // (the old LM Studio backend is gone) — default empty so a bare deploy points at nothing.
+      // local llama.cpp provider on the pbox GPU. The live base is supplied by config.json in prod
+      // (the old hosted backend is gone) — default empty so a bare deploy points at nothing.
       local: (process.env.LOCAL_BASE || "").replace(/\/$/, ""),
       crazyrouter: (process.env.CRAZYROUTER_BASE || process.env.CRAZY_BASE || "https://crazyrouter.com").replace(/\/$/, ""),
       // claudecode → the real Anthropic API, called with a pinned account's Max token. The old
-      // old claude.hostbun.cc base (the claudebox subprocess wrapper) is GONE.
+      // old subprocess-wrapper base is GONE.
       claudecode: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
-      // image generation lane (SD-Turbo on the pbox GPU). Routed by path, not model name.
+      // image generation provider (SD-Turbo on the pbox GPU). Routed by path, not model name.
       images: (process.env.IMAGE_BASE || "https://sdturbo.bofrid.dev").replace(/\/$/, ""),
     },
     crazyrouterKey: process.env.CRAZYROUTER_KEY || "",
@@ -155,30 +156,30 @@ function envDefaults() {
     // token = open. gemma + crazyrouter stay open so fb-bot/promopilot are unaffected.
     oblitToken: process.env.OBLIT_TOKEN || "",
     gatedModels: [OBLIT],
-    // localMap: alias -> local-model-id (resolves the local lane). The old LM Studio backend is
-    // gone; the env seed ships this EMPTY (local lane off by default) and the legacy ids
+    // localMap: alias -> local-model-id (resolves the local provider). The old hosted backend is
+    // gone; the env seed ships this EMPTY (local provider off by default) and the legacy ids
     // ("local"/"gemma"/"obliterated"/...) fall through to claudecode via modelRoutes below. Production
-    // re-enables the lane via config.json — it points bases.local at the live llama.cpp server on
+    // re-enables the provider via config.json — it points bases.local at the live llama.cpp server on
     // the pbox GPU and maps e.g. "local"/"qwen3.5-9b" -> qwen3.5-9b there.
     localMap: {},
     // ── flow control (admin-editable) ──
-    // forceModel: when enabled, EVERY request is rewritten to this lane+model regardless of what
+    // forceModel: when enabled, EVERY request is rewritten to this provider+model regardless of what
     // the caller asked for. The big red switch.
-    forceModel: { enabled: false, lane: "claudecode", model: "" },
-    // modelRoutes: explicit per-incoming-model overrides to ANY lane (highest priority after
-    // forceModel). key = incoming model name (lowercased). value = { lane, model }.
+    forceModel: { enabled: false, provider: "claudecode", model: "" },
+    // modelRoutes: explicit per-incoming-model overrides to ANY provider (highest priority after
+    // forceModel). key = incoming model name (lowercased). value = { provider, model }.
     // The legacy local model ids are redirected here to claudecode (claude-sonnet-4-6 is multimodal),
     // so requests that still ask for "local"/"gemma"/"obliterated" — including image analysis —
-    // are served by Claude instead of the retired LM Studio backend.
+    // are served by Claude instead of the retired hosted backend.
     modelRoutes: Object.fromEntries(
       ["local", "gemma", "gemma-4-e4b-it-obliterated", "google/gemma-4-26b-a4b",
        "obliterated", "obliteratus", "qwen3.6-27b-obliterated"]
-        .map((id) => [id, { lane: "claudecode", model: "claude-sonnet-4-6" }])
+        .map((id) => [id, { provider: "claudecode", model: "claude-sonnet-4-6" }])
     ),
-    // projectRoutes: per-PROJECT overrides to ANY lane (highest priority of all — beats forceModel
+    // projectRoutes: per-PROJECT overrides to ANY provider (highest priority of all — beats forceModel
     // and modelRoutes). Lets you steer a single app (e.g. promopilot) off gemini onto claudecode without
-    // touching anyone else. key = project name (lowercased). value = { lane, model } (model "" = keep
-    // the caller's model id, just switch lane) — OR { block: true } to reject every call from that
+    // touching anyone else. key = project name (lowercased). value = { provider, model } (model "" = keep
+    // the caller's model id, just switch provider) — OR { block: true } to reject every call from that
     // project so it consumes zero tokens.
     projectRoutes: {},
     // projectAccounts: the server-side PIN, project → Max account name. This is the ONLY way an
@@ -190,10 +191,10 @@ function envDefaults() {
     // defaultAccount: the one named account unpinned projects fall back to. "" = refuse instead.
     // Explicit by design — an empty default means a misconfigured caller fails loudly, not silently.
     defaultAccount: process.env.DEFAULT_ACCOUNT || "",
-    // projectGroups: bundle many projects (e.g. all seoul:* lanes) under one rule. Each entry is
-    // { name, prefixes:[...], lane?, model?, block? }. A project matches when its slug equals or
+    // projectGroups: bundle many projects (e.g. all seoul:* providers) under one rule. Each entry is
+    // { name, prefixes:[...], provider?, model?, block? }. A project matches when its slug equals or
     // starts with any prefix (so "seoul:" catches seoul:probe, seoul:l1_metadata, …). block:true
-    // rejects all matching calls (zero tokens); otherwise lane/model reroute them. An exact
+    // rejects all matching calls (zero tokens); otherwise provider/model reroute them. An exact
     // projectRoutes entry always wins over a group (lets you exempt one project from a group block).
     projectGroups: [],
     // ── per-project usage limits (rolling-window quotas) ──
@@ -209,14 +210,14 @@ function envDefaults() {
     // tokens/calls > 0). Usage is summed from the call log over the window; nothing persisted.
     projectLimits: {},
     projectLimitDefault: { window: "24h", tokens: 0, calls: 0, warnPct: 80, slowPct: 95, slowMs: 1500, hard: "block" },
-    // cloudPolicy governs models that fall through to the crazyrouter lane:
+    // cloudPolicy governs models that fall through to the crazyrouter provider:
     //   "open"      → forward anything (legacy behaviour)
     //   "allowlist" → only ids in cloudAllowlist reach crazyrouter; everything else → defaultRoute
     //   "off"       → nothing reaches crazyrouter; everything → defaultRoute
     cloudPolicy: "open",
     cloudAllowlist: [],
-    // defaultRoute: where unknown / empty / crazyrouter-blocked models go. lane "none" = reject 400.
-    defaultRoute: { lane: "none", model: "" },
+    // defaultRoute: where unknown / empty / crazyrouter-blocked models go. provider "none" = reject 400.
+    defaultRoute: { provider: "none", model: "" },
     // JSON-output enforcement for chat completions that set response_format json_object/json_schema.
     jsonEnforce: (process.env.JSON_ENFORCE || "1") !== "0",
     jsonMaxRetries: parseInt(process.env.JSON_MAX_RETRIES || "2", 10),
@@ -258,7 +259,7 @@ function mergeConfig(base, saved) {
       if (typeof k === "string" && typeof v === "string" && k.trim() && v.trim())
         m[k.trim().toLowerCase()] = v.trim();
     }
-    c.localMap = m; // allow an explicit empty map to fully disable the local lane
+    c.localMap = m; // allow an explicit empty map to fully disable the local provider
   }
   if (Array.isArray(saved.gatedModels))
     c.gatedModels = saved.gatedModels.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
@@ -291,7 +292,7 @@ function mergeConfig(base, saved) {
     const f = saved.forceModel;
     c.forceModel = {
       enabled: !!f.enabled,
-      lane: normLane(f.lane) || "claudecode",
+      provider: providerOf(f) || "claudecode",
       model: typeof f.model === "string" ? f.model.trim() : "",
     };
   }
@@ -300,9 +301,9 @@ function mergeConfig(base, saved) {
   if (saved.modelRoutes && typeof saved.modelRoutes === "object" && !Array.isArray(saved.modelRoutes)) {
     const mr = {};
     for (const [k, v] of Object.entries(saved.modelRoutes)) {
-      const lane = v && typeof v === "object" ? normLane(v.lane) : "";
-      if (typeof k === "string" && k.trim() && lane)
-        mr[k.trim().toLowerCase()] = { lane, model: typeof v.model === "string" ? v.model.trim() : "" };
+      const provider = v && typeof v === "object" ? providerOf(v) : "";
+      if (typeof k === "string" && k.trim() && provider)
+        mr[k.trim().toLowerCase()] = { provider, model: typeof v.model === "string" ? v.model.trim() : "" };
     }
     c.modelRoutes = mr;
   }
@@ -311,8 +312,8 @@ function mergeConfig(base, saved) {
     for (const [k, v] of Object.entries(saved.projectRoutes)) {
       if (typeof k !== "string" || !k.trim() || !v || typeof v !== "object") continue;
       if (v.block) { pr[k.trim().toLowerCase()] = { block: true }; continue; }
-      const lane = normLane(v.lane);
-      if (lane) pr[k.trim().toLowerCase()] = { lane, model: typeof v.model === "string" ? v.model.trim() : "" };
+      const provider = providerOf(v);
+      if (provider) pr[k.trim().toLowerCase()] = { provider, model: typeof v.model === "string" ? v.model.trim() : "" };
     }
     c.projectRoutes = pr;
   }
@@ -344,8 +345,8 @@ function mergeConfig(base, saved) {
       seen.add(nkey);
       const limit = sanitizeLimit(g.limit);
       if (g.block) { pg.push({ name, prefixes, block: true, ...(limit ? { limit } : {}) }); continue; }
-      const lane = normLane(g.lane);
-      if (lane || limit) pg.push({ name, prefixes, ...(lane ? { lane, model: typeof g.model === "string" ? g.model.trim() : "" } : {}), ...(limit ? { limit } : {}) });
+      const provider = providerOf(g);
+      if (provider || limit) pg.push({ name, prefixes, ...(provider ? { provider, model: typeof g.model === "string" ? g.model.trim() : "" } : {}), ...(limit ? { limit } : {}) });
     }
     c.projectGroups = pg;
   }
@@ -367,9 +368,10 @@ function mergeConfig(base, saved) {
     c.cloudAllowlist = saved.cloudAllowlist.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
   if (saved.defaultRoute && typeof saved.defaultRoute === "object") {
     const d = saved.defaultRoute;
-    const dl = String(d.lane || "").toLowerCase() === "none" ? "none" : normLane(d.lane);
+    const dRaw = String((d.provider || d.lane) || "").toLowerCase();
+    const dl = dRaw === "none" ? "none" : providerOf(d);
     c.defaultRoute = {
-      lane: dl || "none",
+      provider: dl || "none",
       model: typeof d.model === "string" ? d.model.trim() : "",
     };
   }
@@ -413,7 +415,7 @@ loadConfig();
 // PRICES_FILE is the crazyrouter pricing snapshot ({models:[{model,input_per_1m,
 // output_per_1m}]}). Cached + mtime-invalidated. Returns { id -> {in,out} } in
 // USD per 1M tokens. Only crazyrouter ids are priced; claudecode (Max subscription, flat
-// subscription) and local lanes have no metered cost → treated as $0.
+// subscription) and local providers have no metered cost → treated as $0.
 let _priceCache = { mtime: 0, map: {} };
 function priceMap() {
   try {
@@ -429,15 +431,15 @@ function priceMap() {
   return _priceCache.map;
 }
 // Cost in USD for one (sentModel, provider, ptok, ctok) aggregate. claudecode/local = flat → 0.
-function costUsd(prices, sentModel, lane, ptok, ctok) {
-  if (lane === "claudecode" || lane === "local") return 0;   // Max subscription / local GPU = flat cost
+function costUsd(prices, sentModel, provider, ptok, ctok) {
+  if (provider === "claudecode" || provider === "local") return 0;   // Max subscription / local GPU = flat cost
   const p = prices[sentModel]; if (!p) return 0;
   return (ptok || 0) / 1e6 * p.in + (ctok || 0) / 1e6 * p.out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Call log → SQLite (node:sqlite, built in). One row per request that reaches a
-// lane (incl. blocked/gated/error). Lives on the /data persistent volume so it
+// provider (incl. blocked/gated/error). Lives on the /data persistent volume so it
 // survives restarts/redeploys. All DB work is wrapped so a logging failure can
 // never break proxying.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -452,7 +454,7 @@ function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts INTEGER NOT NULL,
       ip TEXT, ua TEXT, method TEXT, path TEXT,
-      req_model TEXT, lane TEXT, sent_model TEXT, key_label TEXT,
+      req_model TEXT, provider TEXT, sent_model TEXT, key_label TEXT,
       status INTEGER, duration_ms INTEGER, stream INTEGER,
       prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER,
       error TEXT, req_content TEXT, resp_content TEXT, project TEXT,
@@ -479,19 +481,29 @@ function initDb() {
     try { db.exec("ALTER TABLE calls ADD COLUMN msg_count INTEGER;"); } catch { /* already there */ }
     try { db.exec("ALTER TABLE calls ADD COLUMN system_kb INTEGER;"); } catch { /* already there */ }
     try { db.exec("ALTER TABLE calls ADD COLUMN stop_reason TEXT;"); } catch { /* already there */ }
+    // `lane` was renamed to `provider`. A DB created before that rename has the old column and,
+    // because CREATE TABLE IF NOT EXISTS no-ops, never grows the new one — every INSERT and the
+    // provider index then fail, initDb catches, and call logging silently turns itself off.
+    // Add the column, then backfill it from `lane` so old rows keep their provider attribution
+    // (retention prunes by provider name, so an unbackfilled row would look like a NULL provider).
+    try { db.exec("ALTER TABLE calls ADD COLUMN provider TEXT;"); } catch { /* already there */ }
+    try { db.exec("UPDATE calls SET provider = lane WHERE provider IS NULL;"); } catch { /* no legacy `lane` column — fresh DB */ }
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(req_model);");
-    db.exec("CREATE INDEX IF NOT EXISTS idx_calls_lane ON calls(lane);");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_calls_provider ON calls(provider);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_project ON calls(project);");
     db.exec("CREATE INDEX IF NOT EXISTS idx_calls_project_ts ON calls(project, ts);"); // per-project usage windows
     try { db.exec("CREATE INDEX IF NOT EXISTS idx_calls_user ON calls(user_id);"); } catch { /* col may not exist on very old dbs mid-migrate */ }
     insertStmt = db.prepare(`INSERT INTO calls
-      (ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,req_content,resp_content,project,effort,thinking_tokens,max_tokens,temperature,user_id,cache_read,cache_write,stop_reason,tool_count,mcp_tools,tool_servers,tools_kb,msg_count,system_kb)
+      (ts,ip,ua,method,path,req_model,provider,sent_model,key_label,status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,req_content,resp_content,project,effort,thinking_tokens,max_tokens,temperature,user_id,cache_read,cache_write,stop_reason,tool_count,mcp_tools,tool_servers,tools_kb,msg_count,system_kb)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    // Retention prunes the oldest NON-dev rows only — local-dev (anthropic lane) chats are exempt and
-    // kept forever, so a burst of prod traffic can never evict your saved Claude Code conversations.
-    // Only runs when CFG.logging.retain > 0; retain=0 (the default) keeps EVERY row on EVERY lane forever.
-    pruneStmt = db.prepare("DELETE FROM calls WHERE lane != 'anthropic' AND id NOT IN (SELECT id FROM calls WHERE lane != 'anthropic' ORDER BY id DESC LIMIT ?)");
+    // Retention prunes the oldest NON-dev rows only — Claude Code chats are exempt and kept forever,
+    // so a burst of prod traffic can never evict your saved conversations.
+    // Only runs when CFG.logging.retain > 0; retain=0 (the default) keeps EVERY row on EVERY provider forever.
+    // Match BOTH names: rows written before the rename carry provider='anthropic', rows after it carry
+    // 'claudecode'. Exempting only one of them silently makes the other prunable.
+    pruneStmt = db.prepare(`DELETE FROM calls WHERE provider NOT IN ('anthropic','claudecode')
+      AND id NOT IN (SELECT id FROM calls WHERE provider NOT IN ('anthropic','claudecode') ORDER BY id DESC LIMIT ?)`);
     // acct_limits: the LATEST Anthropic rate-limit snapshot per account, harvested for FREE off the
     // `anthropic-ratelimit-unified-*` response headers of real inference traffic (no probe / zero
     // tokens). Keyed by anthropic-organization-id (the account identity, which every /v1/messages
@@ -519,9 +531,9 @@ const clip = (s) => { const t = s == null ? "" : String(s); return (CONTENT_CAP 
 
 // Which credential a route uses (for the "which keys" view).
 function keyLabel(route) {
-  if (route.lane === "crazyrouter") return "crazyrouterKey";
-  if (route.lane === "claudecode") return "claudecode-pool";
-  if (route.lane === "local") return isGated(route.target) && CFG.oblitToken ? "oblitToken" : "none (open)";
+  if (route.provider === "crazyrouter") return "crazyrouterKey";
+  if (route.provider === "claudecode") return "claudecode-pool";
+  if (route.provider === "local") return isGated(route.target) && CFG.oblitToken ? "oblitToken" : "none (open)";
   return "—";
 }
 
@@ -529,8 +541,8 @@ function keyLabel(route) {
 // attributed at dispatch time — no need to read it back out of a wrapper's response header.)
 
 // Extract the prompt text from a request body (chat messages / responses input / prompt).
-// full=true (local-dev anthropic lane) saves the ENTIRE turn — system + tools + messages, uncapped —
-// so every chat is preserved verbatim. Other lanes keep the clipped messages-only view (prod DB size).
+// full=true (local-dev anthropic provider) saves the ENTIRE turn — system + tools + messages, uncapped —
+// so every chat is preserved verbatim. Other providers keep the clipped messages-only view (prod DB size).
 // Distinct MCP servers + counts from a tools[] array. Claude Code ships ~1000 tool
 // DEFINITIONS (name + full input_schema) on EVERY request — ~2.4 MB of mostly-identical
 // JSON. We keep the analysis signal (how many tools, which MCP servers) and DROP the schemas,
@@ -703,7 +715,7 @@ function extractResponseBody(buf, isStream) {
 // `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset,status}` + `anthropic-organization-id`
 // on every /v1/messages response — so any real call tells us that account's live 5h/7d headroom
 // at zero token cost. Upsert keyed by org-id → always the freshest per account. No-op unless the
-// headers are present (only the anthropic lane / native passthrough carries them).
+// headers are present (only the anthropic provider / native passthrough carries them).
 function recordLimits(headers, project, model) {
   if (!db || !limitsStmt || !headers) return;
   try {
@@ -729,7 +741,7 @@ function recordCall(rec) {
     const u = rec.usage || {};
     insertStmt.run(
       rec.ts || Date.now(), rec.ip || null, rec.ua || null, rec.method || null, rec.path || null,
-      rec.reqModel || null, rec.lane || null, rec.sentModel || null, rec.keyLabel || null,
+      rec.reqModel || null, rec.provider || null, rec.sentModel || null, rec.keyLabel || null,
       rec.status == null ? null : rec.status, rec.ms == null ? null : rec.ms, rec.stream ? 1 : 0,
       u.prompt_tokens ?? null, u.completion_tokens ?? null, u.total_tokens ?? null,
       rec.error || null,
@@ -751,7 +763,7 @@ function recordCall(rec) {
       rec.msgCount == null ? null : rec.msgCount,
       rec.systemKb == null ? null : rec.systemKb,
     );
-    // retain=0 → keep every row forever (no pruning on any lane).
+    // retain=0 → keep every row forever (no pruning on any provider).
     if (CFG.logging.retain > 0 && ++insertsSincePrune >= 200) { insertsSincePrune = 0; try { pruneStmt.run(CFG.logging.retain); } catch {} }
   } catch (e) { /* never let logging break a request */ }
 }
@@ -773,13 +785,13 @@ function shipError(message, attrs) {
   fetch(HDX_URL, { method: "POST", headers: { "content-type": "application/json", authorization: HDX_KEY }, body: JSON.stringify(payload) }).catch(() => {});
 }
 
-// ── lane resolution (reads live CFG) ──
+// ── provider resolution (reads live CFG) ──
 const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCase()] || null);
 // A `claude*` model id means the claudecode provider (our Max account pool → api.anthropic.com).
 const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.claudePrefix || "claude").toLowerCase());
 const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.includes(target);
 
-// ── DELETED: the entire claudebox wrapper support apparatus ───────────────
+// ── DELETED: the entire subprocess-wrapper support apparatus ───────────────
 // The wrapper spawned a `claude` CLI subprocess per request, so it needed a concurrency gate, a
 // circuit breaker, a half-open prober, a 200-with-a-quota-notice body sniffer, and a silent
 // cross-provider failover to crazyrouter. All of that existed to babysit ONE upstream.
@@ -843,14 +855,14 @@ function hasImageContent(messages) {
 // Run the request's `messages` through the headroom-compress sidecar before forwarding upstream.
 // Returns { buf, stats }. On ANY problem it returns the original bytes and stats=null, so a slow or
 // dead compressor never blocks inference. Only touches chat/messages bodies that carry a messages[].
-async function headroomCompress(bodyBuf, model, lane) {
+async function headroomCompress(bodyBuf, model, provider) {
   if (!HEADROOM_URL || !bodyBuf || bodyBuf.length < HEADROOM_MIN_CHARS) return { buf: bodyBuf, stats: null };
-  if (HEADROOM_LANES.size && lane && !HEADROOM_LANES.has(lane)) return { buf: bodyBuf, stats: null };
+  if (HEADROOM_PROVIDERS.size && provider && !HEADROOM_PROVIDERS.has(provider)) return { buf: bodyBuf, stats: null };
   // HARD GUARD — never compress cache-optimized / tool-using requests (Claude Code, agents).
   // Rewriting messages breaks the byte-identical cached prefix → a cache MISS costs ~12x
   // (cache_read 0.1x vs cache_write 1.25x), dwarfing any compression saving, and can corrupt
   // tool_use/tool_result pairing. The prompt cache is the better, lossless compression here.
-  // This is deliberately independent of HEADROOM_LANES so a misconfig can't tax agentic traffic.
+  // This is deliberately independent of HEADROOM_PROVIDERS so a misconfig can't tax agentic traffic.
   const rawStr = bodyBuf.toString();
   if (rawStr.includes('"cache_control"') || rawStr.includes('"tools"')) return { buf: bodyBuf, stats: null };
   let obj;
@@ -880,7 +892,7 @@ async function headroomCompress(bodyBuf, model, lane) {
 }
 
 async function proxy(req, res, base, opts = {}) {
-  const { bodyBuf, injectKey, authToken, rewriteModel, model, lane, project } = opts;
+  const { bodyBuf, injectKey, authToken, rewriteModel, model, provider, project } = opts;
   let target = base + req.url;
   const ip = opts.ip || req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const t0 = Date.now();
@@ -912,7 +924,7 @@ async function proxy(req, res, base, opts = {}) {
   // The claudecode provider ALWAYS gets synthesized auth headers. A Max setup-token is rejected by
   // Anthropic without `anthropic-beta: oauth-2025-04-20` + a claude-cli UA; trusting the caller to
   // supply them is exactly why only real Claude Code ever worked on this path.
-  if (lane === "claudecode" && authToken) {
+  if (provider === "claudecode" && authToken) {
     headers = {
       ...TR.anthropicHeaders(authToken, { extraBeta: req.headers["anthropic-beta"] || "" }),
       accept: stream ? "text/event-stream" : "application/json",
@@ -920,16 +932,16 @@ async function proxy(req, res, base, opts = {}) {
   }
 
   // Common fields for the call-log row. claudecode chats are saved in full (uncapped).
-  const fullContent = (lane === "claudecode");
+  const fullContent = (provider === "claudecode");
   const base_rec = {
     ts: t0, ip, ua: req.headers["user-agent"] || "", method: req.method, path: (req.url || "").split("?")[0],
-    reqModel: model || null, lane: lane || "local", sentModel: rewriteModel || model || null,
-    keyLabel: opts.account ? `claudecode:${opts.account}` : keyLabel({ lane: lane || "local", target: opts.target }), stream, full: fullContent,
+    reqModel: model || null, provider: provider || "local", sentModel: rewriteModel || model || null,
+    keyLabel: opts.account ? `claudecode:${opts.account}` : keyLabel({ provider: provider || "local", target: opts.target }), stream, full: fullContent,
     reqContent: extractRequestContent(bodyBuf, fullContent), project: project || null,
     ...extractReqParams(bodyBuf),
     ...extractReqMeta(bodyBuf),
   };
-  let curTarget = target, curLane = lane;
+  let curTarget = target, curProvider = provider;
   let curInit = { method: req.method, headers, redirect: "follow" };
   if (!["GET", "HEAD"].includes(req.method) && body && body.length) curInit.body = body;
   let up = null, threw = false, fetchErr = null;
@@ -940,24 +952,24 @@ async function proxy(req, res, base, opts = {}) {
   // project's pinned account is out of quota and the caller is told so; a 5xx means the upstream
   // failed and the caller is told so. Silently re-answering with a different model on someone
   // else's bill is what the old wrapper→crazyrouter path did, and it hid both cost and truth.
-  if (lane === "claudecode" && !threw && up && up.status === 429 && opts.account) {
+  if (provider === "claudecode" && !threw && up && up.status === 429 && opts.account) {
     recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);
     console.warn(`[account] 429 on ${opts.account} (project=${base_rec.project || "-"}) — no auto-switch, returning 429 to caller`);
   }
 
   if (threw) {
-    console.error(`[err] fetch-failed lane=${curLane || "?"} model=${model || "-"} ${curTarget}: ${fetchErr.message}`);
-    shipError(`upstream fetch failed: ${fetchErr.message}`, { model: model || "-", lane: curLane || "?", ip, target: curTarget });
+    console.error(`[err] fetch-failed provider=${curProvider || "?"} model=${model || "-"} ${curTarget}: ${fetchErr.message}`);
+    shipError(`upstream fetch failed: ${fetchErr.message}`, { model: model || "-", provider: curProvider || "?", ip, target: curTarget });
     recordCall({ ...base_rec, status: 502, ms: Date.now() - t0, error: "upstream fetch failed: " + fetchErr.message });
     res.writeHead(502, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: "upstream fetch failed: " + fetchErr.message } }));
   }
   if (up.status >= 400) {
-    console.error(`[err] upstream=${up.status} lane=${curLane || "?"} model=${model || "-"} ${curTarget}`);
-    up.clone().text().then((t) => shipError(`upstream ${up.status} ${req.method} ${req.url}`, { model: model || "-", lane: curLane || "?", ip, status: up.status, body: t })).catch(() => {});
+    console.error(`[err] upstream=${up.status} provider=${curProvider || "?"} model=${model || "-"} ${curTarget}`);
+    up.clone().text().then((t) => shipError(`upstream ${up.status} ${req.method} ${req.url}`, { model: model || "-", provider: curProvider || "?", ip, status: up.status, body: t })).catch(() => {});
   }
-  // Image lane: upstream errors arrive as bare text; convert to OpenAI JSON error envelope.
-  if (curLane === "images" && up.status >= 400) {
+  // Image provider: upstream errors arrive as bare text; convert to OpenAI JSON error envelope.
+  if (curProvider === "images" && up.status >= 400) {
     const errText = await up.text().catch(() => "");
     const msg = errText.trim() || `image generation failed (${up.status})`;
     res.writeHead(up.status, { "content-type": "application/json" });
@@ -1096,15 +1108,15 @@ function finishJson(res, wantStream, parsed, rawText) {
 }
 
 async function jsonEnforce(req, res, route) {
-  const { base, injectKey, authToken, rewriteModel, model, lane, ip, bodyBuf, project } = route;
+  const { base, injectKey, authToken, rewriteModel, model, provider, ip, bodyBuf, project } = route;
   const maxRetries = CFG.jsonMaxRetries;
   const reqObj = JSON.parse(bodyBuf.toString());           // caller already verified this parses
   const wantStream = !!reqObj.stream;
   const t0 = Date.now();
   const logRec = {
     ts: t0, ip, ua: req.headers["user-agent"] || "", method: req.method, path: (req.url || "").split("?")[0],
-    reqModel: model || null, lane, sentModel: rewriteModel || model || null,
-    keyLabel: keyLabel({ lane, target: route.target }), stream: wantStream,
+    reqModel: model || null, provider, sentModel: rewriteModel || model || null,
+    keyLabel: keyLabel({ provider, target: route.target }), stream: wantStream,
     reqContent: extractRequestContent(bodyBuf), project: project || null,
     ...extractReqParams(bodyBuf),
     ...extractReqMeta(bodyBuf),
@@ -1120,7 +1132,7 @@ async function jsonEnforce(req, res, route) {
   const rfType = typeof rf === "string" ? rf : (rf && rf.type);
   // Neither claudecode nor the local json_object mode honours `response_format` natively → strip it
   // and steer with a plain instruction instead.
-  if (lane === "claudecode" || (lane === "local" && rfType === "json_object")) {
+  if (provider === "claudecode" || (provider === "local" && rfType === "json_object")) {
     delete reqObj.response_format;
     injectJsonInstruction(messages, rf);
   }
@@ -1128,12 +1140,12 @@ async function jsonEnforce(req, res, route) {
   headers["content-type"] = "application/json";
   headers["accept"] = "application/json";
   let target = base + req.url;
-  const curLane = lane;
+  const curProvider = provider;
   // No failover. If the upstream fails, the caller is told. See proxy() for why.
 
   // One upstream round-trip. On claudecode we translate OpenAI→Anthropic on the way out and
   // Anthropic→OpenAI on the way back, so everything below this line only ever sees OpenAI shape.
-  const translating = curLane === "claudecode";
+  const translating = curProvider === "claudecode";
   async function callUpstream() {
     const url = translating ? base + "/v1/messages" : target;
     const hdrs = translating
@@ -1155,16 +1167,16 @@ async function jsonEnforce(req, res, route) {
     let up, text;
     try { ({ up, text } = await callUpstream()); }
     catch (e) {
-      console.error(`[err] json-enforce fetch-failed lane=${curLane} model=${model || "-"} ${target}: ${e.message}`);
-      shipError(`json-enforce upstream fetch failed: ${e.message}`, { model: model || "-", lane: curLane, ip, target });
+      console.error(`[err] json-enforce fetch-failed provider=${curProvider} model=${model || "-"} ${target}: ${e.message}`);
+      shipError(`json-enforce upstream fetch failed: ${e.message}`, { model: model || "-", provider: curProvider, ip, target });
       recordCall({ ...logRec, status: 502, ms: Date.now() - t0, error: "upstream fetch failed: " + e.message });
       res.writeHead(502, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: { message: "upstream fetch failed: " + e.message } }));
     }
-    if (curLane === "claudecode") recordLimits(up.headers, logRec.project, logRec.sentModel || logRec.reqModel);
+    if (curProvider === "claudecode") recordLimits(up.headers, logRec.project, logRec.sentModel || logRec.reqModel);
     if (up.status >= 400) {                                // upstream error — surfaced, never masked
-      console.error(`[err] upstream=${up.status} lane=${curLane} model=${model || "-"} ${target} (json-enforce)`);
-      shipError(`upstream ${up.status} ${req.method} ${req.url} (json-enforce)`, { model: model || "-", lane: curLane, ip, status: up.status, body: text });
+      console.error(`[err] upstream=${up.status} provider=${curProvider} model=${model || "-"} ${target} (json-enforce)`);
+      shipError(`upstream ${up.status} ${req.method} ${req.url} (json-enforce)`, { model: model || "-", provider: curProvider, ip, status: up.status, body: text });
       recordCall({ ...logRec, status: up.status, ms: Date.now() - t0, error: `upstream ${up.status}`, respContent: text });
       const rh = {}; up.headers.forEach((v, k) => { if (!HOP_RES.has(k.toLowerCase())) rh[k] = v; });
       res.writeHead(up.status, rh);
@@ -1185,7 +1197,7 @@ async function jsonEnforce(req, res, route) {
       return finishJson(res, wantStream, parsed, text);
     }
     lastErr = v.error; lastRaw = content == null ? "" : content;
-    console.error(`[err] json-invalid lane=${lane} model=${model || "-"} attempt=${attempt + 1}/${maxRetries + 1}: ${v.error}`);
+    console.error(`[err] json-invalid provider=${provider} model=${model || "-"} attempt=${attempt + 1}/${maxRetries + 1}: ${v.error}`);
     if (attempt < maxRetries) {
       // Neutral, non-accusatory wording: claude-haiku reads "your reply failed / do it again" as a
       // prompt-injection attempt and refuses harder. Just restate the format requirement plainly.
@@ -1193,7 +1205,7 @@ async function jsonEnforce(req, res, route) {
       messages.push({ role: "user", content: `Please reformat that as a single valid JSON value only — no markdown code fences and no text before or after the JSON.` });
     }
   }
-  shipError(`json enforcement failed after ${maxRetries + 1} attempts`, { model: model || "-", lane, ip, error: lastErr });
+  shipError(`json enforcement failed after ${maxRetries + 1} attempts`, { model: model || "-", provider, ip, error: lastErr });
   recordCall({ ...logRec, status: 422, ms: Date.now() - t0, error: `json_validation_failed: ${lastErr}`, respContent: lastRaw });
   res.writeHead(422, { "content-type": "application/json" });
   res.end(JSON.stringify({
@@ -1239,28 +1251,28 @@ async function mergedModels(res) {
   res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter] }));
 }
 
-// Build a concrete route for an explicit (lane, model) — used by forceModel / modelRoutes /
+// Build a concrete route for an explicit (provider, model) — used by forceModel / modelRoutes /
 // defaultRoute. `model` is the id actually sent upstream (rewriteModel).
-function laneRoute(lane, model, reason) {
-  const l = normLane(lane) || "crazyrouter";
+function providerRoute(provider, model, reason) {
+  const l = normProvider(provider) || "crazyrouter";
   // claudecode: the pinned account's token is attached later (dispatch), not here.
-  if (l === "claudecode") return { lane: "claudecode", base: CFG.bases.claudecode, rewriteModel: model || undefined, reason };
-  if (l === "local") return { lane: "local", base: CFG.bases.local, rewriteModel: model, target: model, reason };
-  return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
+  if (l === "claudecode") return { provider: "claudecode", base: CFG.bases.claudecode, rewriteModel: model || undefined, reason };
+  if (l === "local") return { provider: "local", base: CFG.bases.local, rewriteModel: model, target: model, reason };
+  return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
 }
 
-// Where unknown / empty / crazyrouter-blocked models go. lane "none" → blocked (caller gets 400).
+// Where unknown / empty / crazyrouter-blocked models go. provider "none" → blocked (caller gets 400).
 function defaultRouteResolved(why) {
-  const d = CFG.defaultRoute || { lane: "none" };
-  if (!d.lane || d.lane === "none" || !d.model) return { lane: "blocked", blocked: true, why, reason: why + "; no default route" };
-  return { ...laneRoute(d.lane, d.model, `default route (${why})`), via: "default" };
+  const d = CFG.defaultRoute || { provider: "none" };
+  if (!d.provider || d.provider === "none" || !d.model) return { provider: "blocked", blocked: true, why, reason: why + "; no default route" };
+  return { ...providerRoute(d.provider, d.model, `default route (${why})`), via: "default" };
 }
 
-// Turn a per-project / per-group rule ({lane,model} or {block:true}) into a concrete route.
+// Turn a per-project / per-group rule ({provider,model} or {block:true}) into a concrete route.
 function projectRule(rule, m, label) {
   if (rule.block)
-    return { lane: "blocked", blocked: true, why: `${label} is blocked (token spend disabled)`, reason: `blocked: ${label}` };
-  return laneRoute(rule.lane, rule.model || m, `override: ${label}`);
+    return { provider: "blocked", blocked: true, why: `${label} is blocked (token spend disabled)`, reason: `blocked: ${label}` };
+  return providerRoute(rule.provider, rule.model || m, `override: ${label}`);
 }
 // First projectGroup whose prefix matches this project slug (exact or startsWith). null if none.
 function matchProjectGroup(pkey) {
@@ -1321,7 +1333,7 @@ function usageVerdict(project) {
 // Resolve a model name into a concrete upstream route. Priority:
 //   0a. projectRoutes (exact per-project override — beats everything, incl. group rules)
 //   0b. projectGroups (prefix-matched group override)
-//   1. forceModel (global override)  2. modelRoutes (per-model, any lane)  3. local alias map
+//   1. forceModel (global override)  2. modelRoutes (per-model, any provider)  3. local alias map
 //   4. claude* prefix  5. empty model → default route  6. cloud policy (open/allowlist/off)
 // ── account selection: PINNED per project, never automatic ────────────────
 // One project → one account, decided by config alone. There is deliberately NO auto-rotation:
@@ -1367,22 +1379,22 @@ function resolveRoute(model, project) {
     if (g) return projectRule(g, m, `group ${g.name}`);
   }
   if (CFG.forceModel && CFG.forceModel.enabled && CFG.forceModel.model)
-    return laneRoute(CFG.forceModel.lane, CFG.forceModel.model, "forced (global)");
+    return providerRoute(CFG.forceModel.provider, CFG.forceModel.model, "forced (global)");
   if (CFG.modelRoutes && CFG.modelRoutes[key])
-    return laneRoute(CFG.modelRoutes[key].lane, CFG.modelRoutes[key].model || m, `override: ${key}`);
+    return providerRoute(CFG.modelRoutes[key].provider, CFG.modelRoutes[key].model || m, `override: ${key}`);
   const lt = localTarget(m);
-  if (lt) return { lane: "local", base: CFG.bases.local, rewriteModel: lt, target: lt, reason: "local alias" };
-  if (isClaudeModel(m)) return { lane: "claudecode", base: CFG.bases.claudecode, reason: "claude* model" };
+  if (lt) return { provider: "local", base: CFG.bases.local, rewriteModel: lt, target: lt, reason: "local alias" };
+  if (isClaudeModel(m)) return { provider: "claudecode", base: CFG.bases.claudecode, reason: "claude* model" };
   if (!m) return defaultRouteResolved("no model specified");
   const pol = CFG.cloudPolicy || "open";
-  if (pol === "open") return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, reason: "crazyrouter (open)" };
+  if (pol === "open") return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, reason: "crazyrouter (open)" };
   if (pol === "allowlist" && (CFG.cloudAllowlist || []).some((x) => x.toLowerCase() === key))
-    return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, reason: "crazyrouter (allowlisted)" };
-  return defaultRouteResolved(pol === "off" ? "crazyrouter lane disabled" : "not in crazyrouter allowlist");
+    return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, reason: "crazyrouter (allowlisted)" };
+  return defaultRouteResolved(pol === "off" ? "crazyrouter provider disabled" : "not in crazyrouter allowlist");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Admin (password-gated): edit routing/models/keys, check lanes + crazyrouter.
+// Admin (password-gated): edit routing/models/keys, check providers + crazyrouter.
 // ─────────────────────────────────────────────────────────────────────────────
 const COOKIE = "hb_admin";
 const sign = (payload) => crypto.createHmac("sha256", CFG.adminPassword).update(payload).digest("hex");
@@ -1438,7 +1450,7 @@ function throttled(ip) {
 
 function adminState() {
   return {
-    lanes: LANES,
+    providers: PROVIDERS,
     bases: CFG.bases,
     localMap: CFG.localMap,
     gatedModels: CFG.gatedModels,
@@ -1481,7 +1493,7 @@ function adminState() {
   };
 }
 
-// Probe one lane's /v1/models. Returns {up, status, ms, count?, error?}.
+// Probe one provider's /v1/models. Returns {up, status, ms, count?, error?}.
 async function probe(base, authToken) {
   const t0 = Date.now();
   try {
@@ -1525,8 +1537,8 @@ async function crazyCheck(key) {
 async function adminTest(model, prompt, maxTokens) {
   const route = resolveRoute(model);
   const headers = { "content-type": "application/json" };
-  if (route.lane === "crazyrouter") headers.authorization = `Bearer ${CFG.crazyrouterKey}`;
-  else if (route.lane === "local" && isGated(route.target) && CFG.oblitToken) headers.authorization = `Bearer ${CFG.oblitToken}`;
+  if (route.provider === "crazyrouter") headers.authorization = `Bearer ${CFG.crazyrouterKey}`;
+  else if (route.provider === "local" && isGated(route.target) && CFG.oblitToken) headers.authorization = `Bearer ${CFG.oblitToken}`;
   const sendModel = route.rewriteModel || model;
   const body = { model: sendModel, messages: [{ role: "user", content: prompt || "Reply with a short greeting." }], max_tokens: maxTokens || 256, stream: false };
   const t0 = Date.now();
@@ -1535,8 +1547,8 @@ async function adminTest(model, prompt, maxTokens) {
     const text = await r.text(); let j = null; try { j = JSON.parse(text); } catch {}
     const m = j && j.choices && j.choices[0] && j.choices[0].message;
     const content = (m && (m.content || m.reasoning_content)) || null;
-    return { ok: r.ok, status: r.status, lane: route.lane, sentModel: sendModel, ms: Date.now() - t0, content, raw: content == null ? text.slice(0, 2000) : undefined };
-  } catch (e) { return { ok: false, status: 0, lane: route.lane, sentModel: sendModel, ms: Date.now() - t0, error: e.message }; }
+    return { ok: r.ok, status: r.status, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, content, raw: content == null ? text.slice(0, 2000) : undefined };
+  } catch (e) { return { ok: false, status: 0, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, error: e.message }; }
 }
 
 async function handleAdminApi(req, res, path) {
@@ -1656,12 +1668,12 @@ async function handleAdminApi(req, res, path) {
     const body = await readBody(req); let p = {};
     try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "invalid JSON body" }); }
     const r = resolveRoute(p.model, p.project);
-    const sent = r.rewriteModel || (r.lane === "local" ? r.target : p.model) || p.model || "";
-    const gated = r.lane === "local" && isGated(r.target) && !!CFG.oblitToken;
+    const sent = r.rewriteModel || (r.provider === "local" ? r.target : p.model) || p.model || "";
+    const gated = r.provider === "local" && isGated(r.target) && !!CFG.oblitToken;
     return sendJson(res, 200, {
-      input: p.model || "", project: p.project || "", lane: r.lane, sentModel: sent, reason: r.reason || "",
+      input: p.model || "", project: p.project || "", provider: r.provider, sentModel: sent, reason: r.reason || "",
       blocked: !!r.blocked, why: r.why, gated,
-      base: r.base || (r.lane === "local" ? CFG.bases.local : r.lane === "claudecode" ? CFG.bases.claudecode : r.lane === "crazyrouter" ? CFG.bases.crazyrouter : ""),
+      base: r.base || (r.provider === "local" ? CFG.bases.local : r.provider === "claudecode" ? CFG.bases.claudecode : r.provider === "crazyrouter" ? CFG.bases.crazyrouter : ""),
     });
   }
 
@@ -1670,7 +1682,7 @@ async function handleAdminApi(req, res, path) {
     if (!db) return sendJson(res, 200, { rows: [], total: 0, dbReady: false });
     const q = url.parse(req.url, true).query;
     const where = [], params = [];
-    if (q.lane) { where.push("lane = ?"); params.push(String(q.lane)); }
+    if (q.provider) { where.push("provider = ?"); params.push(String(q.provider)); }
     if (q.model) { where.push("req_model = ?"); params.push(String(q.model)); }
     if (q.key) { where.push("key_label = ?"); params.push(String(q.key)); }
     if (q.project) { where.push(q.project === "(none)" ? "(project IS NULL OR project = '')" : "project = ?"); if (q.project !== "(none)") params.push(String(q.project).toLowerCase()); }
@@ -1686,7 +1698,7 @@ async function handleAdminApi(req, res, path) {
     try {
       const total = db.prepare(`SELECT COUNT(*) n FROM calls ${w}`).get(...params).n;
       // List view: omit big content blobs; send short previews instead.
-      const rows = db.prepare(`SELECT id,ts,ip,ua,method,path,req_model,lane,sent_model,key_label,status,duration_ms,stream,
+      const rows = db.prepare(`SELECT id,ts,ip,ua,method,path,req_model,provider,sent_model,key_label,status,duration_ms,stream,
         prompt_tokens,completion_tokens,total_tokens,error,project,effort,thinking_tokens,max_tokens,temperature,
         user_id,cache_read,cache_write,stop_reason,
         tool_count,mcp_tools,tool_servers,tools_kb,msg_count,system_kb,
@@ -1708,7 +1720,7 @@ async function handleAdminApi(req, res, path) {
   // Per-CONVERSATION view: group the log by Claude session_id and surface what's loaded
   // into each chat — MCP servers + tool count, the tool-schema tax (KB), conversation
   // length (messages), token spend, and the account it billed. Answers "which MCP tools
-  // is this convo carrying and how long is it". anthropic lane (Claude Code) only.
+  // is this convo carrying and how long is it". anthropic provider (Claude Code) only.
   if (sub === "conversations" && req.method === "GET") {
     if (!db) return sendJson(res, 404, { error: "no db" });
     const q = url.parse(req.url, true).query;
@@ -1727,7 +1739,7 @@ async function handleAdminApi(req, res, path) {
           MIN(ts) AS first_ts, MAX(ts) AS last_ts,
           SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) AS errors
         FROM calls
-        WHERE lane='anthropic' AND json_extract(user_id,'$.session_id') IS NOT NULL
+        WHERE provider IN ('anthropic','claudecode') AND json_extract(user_id,'$.session_id') IS NOT NULL
         GROUP BY session ORDER BY last_ts DESC LIMIT ?`).all(limit);
       // latest row per session for the fields that CHANGE over a conversation's life
       // (the current account it bills + the current MCP server set) — not a lexical MAX.
@@ -1749,7 +1761,7 @@ async function handleAdminApi(req, res, path) {
     const after = parseInt(q.after, 10) || 0;
     const limit = Math.min(parseInt(q.limit, 10) || 500, 2000);
     try {
-      const rows = db.prepare(`SELECT id,ts,ip,ua,method,path,req_model,lane,sent_model,key_label,
+      const rows = db.prepare(`SELECT id,ts,ip,ua,method,path,req_model,provider,sent_model,key_label,
         status,duration_ms,stream,prompt_tokens,completion_tokens,total_tokens,error,project,
         req_content,resp_content
         FROM calls WHERE id > ? ORDER BY id ASC LIMIT ?`).all(after, limit);
@@ -1775,9 +1787,9 @@ async function handleAdminApi(req, res, path) {
       const windowJsonFails = db.prepare(`SELECT COUNT(*) n FROM calls WHERE ${W} AND error LIKE 'json_validation_failed%'`).get(since).n;
       const windowPromptTokens = db.prepare(`SELECT COALESCE(SUM(prompt_tokens),0) t FROM calls WHERE ${W}`).get(since).t;
       const windowCompletionTokens = db.prepare(`SELECT COALESCE(SUM(completion_tokens),0) t FROM calls WHERE ${W}`).get(since).t;
-      const byLane = db.prepare(`SELECT lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok,
+      const byProvider = db.prepare(`SELECT provider, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok,
         ROUND(AVG(duration_ms)) avg_ms, SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) errors
-        FROM calls WHERE ${W} GROUP BY lane ORDER BY n DESC`).all(since);
+        FROM calls WHERE ${W} GROUP BY provider ORDER BY n DESC`).all(since);
       const byKey = db.prepare(`SELECT key_label, COUNT(*) n FROM calls WHERE ${W} GROUP BY key_label ORDER BY n DESC`).all(since);
       // By client (user-agent) — surfaces who's calling: promopilot=Bun, scripts=Python-urllib, and any
       // Claude Code / anthropic-sdk clients show up here by their UA. thinkers = calls that sent extended
@@ -1785,24 +1797,24 @@ async function handleAdminApi(req, res, path) {
       const byClient = db.prepare(`SELECT COALESCE(NULLIF(ua,''),'(none)') ua, COUNT(*) n,
         COALESCE(SUM(total_tokens),0) tok, MAX(ts) last, COUNT(DISTINCT ip) ips,
         SUM(CASE WHEN effort IS NOT NULL OR (thinking_tokens IS NOT NULL AND thinking_tokens > 0) THEN 1 ELSE 0 END) thinkers,
-        GROUP_CONCAT(DISTINCT lane) lanes
+        GROUP_CONCAT(DISTINCT provider) providers
         FROM calls WHERE ${W} GROUP BY COALESCE(NULLIF(ua,''),'(none)') ORDER BY n DESC LIMIT 40`).all(since);
-      const byModel = db.prepare(`SELECT req_model, lane, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok,
+      const byModel = db.prepare(`SELECT req_model, provider, COUNT(*) n, COALESCE(SUM(total_tokens),0) tok,
         COALESCE(SUM(prompt_tokens),0) ptok, COALESCE(SUM(completion_tokens),0) ctok, ROUND(AVG(duration_ms)) avg_ms
         FROM calls WHERE ${W} GROUP BY req_model ORDER BY tok DESC LIMIT 40`).all(since);
       const byProject = db.prepare(`SELECT COALESCE(NULLIF(project,''),'(none)') project, COUNT(*) n,
         COALESCE(SUM(total_tokens),0) tok, COALESCE(SUM(prompt_tokens),0) ptok, COALESCE(SUM(completion_tokens),0) ctok,
         ROUND(AVG(duration_ms)) avg_ms, SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END) errors,
-        MAX(ts) last, COUNT(DISTINCT req_model) models, GROUP_CONCAT(DISTINCT lane) lanes
+        MAX(ts) last, COUNT(DISTINCT req_model) models, GROUP_CONCAT(DISTINCT provider) providers
         FROM calls WHERE ${W} GROUP BY COALESCE(NULLIF(project,''),'(none)') ORDER BY tok DESC LIMIT 60`).all(since);
-      // Cost estimate: group by (project, sent_model, lane) to price each cohort, then fold into project/model.
+      // Cost estimate: group by (project, sent_model, provider) to price each cohort, then fold into project/model.
       const prices = priceMap();
-      const costRows = db.prepare(`SELECT COALESCE(NULLIF(project,''),'(none)') project, req_model, sent_model, lane,
+      const costRows = db.prepare(`SELECT COALESCE(NULLIF(project,''),'(none)') project, req_model, sent_model, provider,
         COALESCE(SUM(prompt_tokens),0) ptok, COALESCE(SUM(completion_tokens),0) ctok
-        FROM calls WHERE ${W} GROUP BY COALESCE(NULLIF(project,''),'(none)'), sent_model, req_model, lane`).all(since);
+        FROM calls WHERE ${W} GROUP BY COALESCE(NULLIF(project,''),'(none)'), sent_model, req_model, provider`).all(since);
       let windowCost = 0; const costByProject = {}, costByModel = {};
       for (const r of costRows) {
-        const c = costUsd(prices, r.sent_model, r.lane, r.ptok, r.ctok);
+        const c = costUsd(prices, r.sent_model, r.provider, r.ptok, r.ctok);
         windowCost += c;
         costByProject[r.project] = (costByProject[r.project] || 0) + c;
         costByModel[r.req_model] = (costByModel[r.req_model] || 0) + c;
@@ -1823,12 +1835,12 @@ async function handleAdminApi(req, res, path) {
       const oldest = db.prepare("SELECT MIN(ts) t FROM calls").get().t;
       return sendJson(res, 200, { dbReady: true, window: winKey, total, windowCalls, windowErrors, windowTokens,
         windowPromptTokens, windowCompletionTokens, windowJsonFails, windowCost: +windowCost.toFixed(4),
-        pricedLanes: ["crazyrouter"], byLane, byKey, byClient, byModel, byProject, oldest, retain: CFG.logging.retain });
+        pricedProviders: ["crazyrouter"], byProvider, byKey, byClient, byModel, byProject, oldest, retain: CFG.logging.retain });
     } catch (e) { return sendJson(res, 500, { error: e.message }); }
   }
 
   // ── time-series history (tokens / calls / errors over time, grouped) ──
-  // ?window=…&by=lane|project|model. Buckets auto-sized to ~60 points across the
+  // ?window=…&by=provider|project|model. Buckets auto-sized to ~60 points across the
   // window. Returns top series by total tokens (rest folded into "other").
   if (sub === "series" && req.method === "GET") {
     if (!db) return sendJson(res, 200, { dbReady: false });
@@ -1836,8 +1848,8 @@ async function handleAdminApi(req, res, path) {
       const q = url.parse(req.url, true).query;
       const WINDOWS = { "15m": 900000, "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000 };
       const winKey = (q.window in WINDOWS || q.window === "all") ? q.window : "24h";
-      const by = ["lane", "project", "model"].includes(q.by) ? q.by : "lane";
-      const groupCol = by === "lane" ? "lane" : by === "model" ? "req_model" : "COALESCE(NULLIF(project,''),'(none)')";
+      const by = ["provider", "project", "model"].includes(q.by) ? q.by : "provider";
+      const groupCol = by === "provider" ? "provider" : by === "model" ? "req_model" : "COALESCE(NULLIF(project,''),'(none)')";
       const oldest = db.prepare("SELECT MIN(ts) t FROM calls").get().t || Date.now();
       const span = winKey === "all" ? Math.max(60000, Date.now() - oldest) : WINDOWS[winKey];
       const since = winKey === "all" ? oldest : Date.now() - span;
@@ -1898,7 +1910,7 @@ const server = http.createServer(async (req, res) => {
   if (path.startsWith("/local/")) {
     const bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
     req.url = req.url.slice("/local".length);
-    return proxy(req, res, CFG.bases.local, { bodyBuf, lane: "local" });
+    return proxy(req, res, CFG.bases.local, { bodyBuf, provider: "local" });
   }
   if (req.method === "GET" && (path === "/v1/models" || path === "/api/v1/models"))
     return mergedModels(res);
@@ -1919,11 +1931,11 @@ const server = http.createServer(async (req, res) => {
         }
       }
     } catch { /* leave body as-is */ }
-    return proxy(req, res, CFG.bases.images, { bodyBuf: imgBody, lane: "images", authToken: CFG.imageToken, project: extractProject(req, imgBody) });
+    return proxy(req, res, CFG.bases.images, { bodyBuf: imgBody, provider: "images", authToken: CFG.imageToken, project: extractProject(req, imgBody) });
   }
   // Image-service catalog endpoints (templates + LoRAs) — proxy GETs straight through.
   if (req.method === "GET" && (path === "/v1/templates" || path === "/v1/loras")) {
-    return proxy(req, res, CFG.bases.images, { bodyBuf: Buffer.alloc(0), lane: "images", authToken: CFG.imageToken });
+    return proxy(req, res, CFG.bases.images, { bodyBuf: Buffer.alloc(0), provider: "images", authToken: CFG.imageToken });
   }
 
   let bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
@@ -1932,15 +1944,15 @@ const server = http.createServer(async (req, res) => {
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const project = extractProject(req, bodyBuf);
   const route = resolveRoute(model, project);
-  const lane = route.lane;
-  console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${lane}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} project=${project || "-"} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
+  const provider = route.provider;
+  console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${provider}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} project=${project || "-"} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
 
   // Project attribution gate: when on, inference POSTs must declare a project.
   const isInference = req.method === "POST" && bodyBuf.length && /\/(chat\/completions|responses|completions|messages|chat)$/.test(path);
   if (CFG.requireProject && isInference && !project) {
     console.error(`[err] 400 missing project ip=${ip} model=${model || "-"}`);
     recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
-      reqModel: model || null, lane: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
+      reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
       error: "missing project", reqContent: extractRequestContent(bodyBuf), project: null });
     res.writeHead(400, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: "missing project attribution: send an 'X-Project' header (or a 'project' body field) identifying the calling app.", type: "invalid_request_error", code: "project_required" } }));
@@ -1952,7 +1964,7 @@ const server = http.createServer(async (req, res) => {
     // Only log real inference attempts as blocked — not scanner GETs to /openapi.json, /favicon, etc.
     if (req.method === "POST" && bodyBuf.length)
       recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
-        reqModel: model || null, lane: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
+        reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
         error: `not routable: ${route.why}`, reqContent: extractRequestContent(bodyBuf), project });
     res.writeHead(400, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: `model '${model || ""}' is not routable: ${route.why}. Set a model override, crazyrouter allowlist entry, or default route in /admin.`, type: "invalid_request_error", code: "model_not_routable" } }));
@@ -1971,7 +1983,7 @@ const server = http.createServer(async (req, res) => {
         console.warn(`[usage] BLOCK ${project} ${pctI}% of ${v.lim.window} cap (${capStr})`);
         shipError("usage limit block", { from: "usage", project, pct: pctI, window: v.lim.window, ip });
         recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path, project,
-          reqModel: model || null, lane: "blocked", sentModel: null, keyLabel: "—", status: 429, ms: 0,
+          reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 429, ms: 0,
           error: `usage_limit: ${pctI}% of ${v.lim.window} cap`, reqContent: extractRequestContent(bodyBuf) });
         res.writeHead(429, { "content-type": "application/json", "retry-after": "60",
           "x-usage-percent": String(pctI), "x-usage-window": v.lim.window, "x-usage-limit": capStr });
@@ -1989,13 +2001,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Bearer gate for the uncensored local model(s).
-  if (lane === "local" && isGated(route.target) && CFG.oblitToken) {
+  if (provider === "local" && isGated(route.target) && CFG.oblitToken) {
     const auth = String(req.headers["authorization"] || "");
     const xkey = String(req.headers["x-api-key"] || "");
     if (auth !== `Bearer ${CFG.oblitToken}` && xkey !== CFG.oblitToken) {
       console.error(`[err] 401 gated model unauthorized ip=${ip} model=${route.target}`);
       recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path, project,
-        reqModel: model || null, lane: "local", sentModel: route.target, keyLabel: "oblitToken", status: 401, ms: 0,
+        reqModel: model || null, provider: "local", sentModel: route.target, keyLabel: "oblitToken", status: 401, ms: 0,
         error: "gate: missing/invalid token", reqContent: extractRequestContent(bodyBuf) });
       res.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
       return res.end(JSON.stringify({ error: { message: `model '${route.target}' requires Authorization: Bearer <token>`, type: "invalid_request_error", code: "unauthorized" } }));
@@ -2006,22 +2018,27 @@ const server = http.createServer(async (req, res) => {
   // the original body so it can never block or break inference. Runs before json-enforce/proxy so
   // both forward the compressed bytes.
   if (HEADROOM_URL && isInference) {
-    const hc = await headroomCompress(bodyBuf, model, lane);
+    const hc = await headroomCompress(bodyBuf, model, provider);
     bodyBuf = hc.buf;
     if (hc.stats && hc.stats.tokens_saved > 0)
-      console.log(`[headroom] ${path} model=${model || "-"} lane=${lane} ${hc.stats.tokens_before}->${hc.stats.tokens_after} saved=${hc.stats.tokens_saved} (${Math.round(100 * hc.stats.tokens_saved / Math.max(1, hc.stats.tokens_before))}%)`);
+      console.log(`[headroom] ${path} model=${model || "-"} provider=${provider} ${hc.stats.tokens_before}->${hc.stats.tokens_after} saved=${hc.stats.tokens_saved} (${Math.round(100 * hc.stats.tokens_saved / Math.max(1, hc.stats.tokens_before))}%)`);
   }
 
   // Max-account provider: the account is PINNED to the project, server-side (see accountFor).
   // No `X-Account` / `X-CCC-Account` / `X-Consumer` header is consulted — identity comes from the
   // project, the pin lives in /admin, and the client Bearer is overridden regardless. An unpinned
   // project is a configuration bug, so we say so loudly rather than silently billing someone.
-  if (lane === "claudecode" && CFG.claudecodeAccountPool && CFG.claudecodeAccountPool.length) {
+  if (provider === "claudecode" && CFG.claudecodeAccountPool && CFG.claudecodeAccountPool.length) {
     const acct = accountFor(project);
     if (!acct) {
       const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
       const known = Object.keys(pins).sort().join(", ") || "none";
       console.warn(`[account] REFUSED project="${project || "(none)"}" — no pin and no defaultAccount. pinned projects: ${known}`);
+      // Log the refusal. A project that is being turned away spends nothing, so it would otherwise
+      // leave no trace at all — and "why is promopilot getting nothing?" becomes unanswerable.
+      recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path, project,
+        reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 403, ms: 0,
+        error: "no_account_for_project", reqContent: extractRequestContent(bodyBuf) });
       res.writeHead(403, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: {
         type: "no_account_for_project",
@@ -2040,12 +2057,12 @@ const server = http.createServer(async (req, res) => {
       let reqObj = null;
       try { reqObj = JSON.parse(bodyBuf.toString()); } catch { /* not JSON — passthrough */ }
       if (reqObj && wantsJsonFormat(reqObj)) {
-        console.log(`[req] json-enforce model=${model || "-"} -> ${lane}`);
-        return jsonEnforce(req, res, { ...route, model, lane, ip, bodyBuf, project });
+        console.log(`[req] json-enforce model=${model || "-"} -> ${provider}`);
+        return jsonEnforce(req, res, { ...route, model, provider, ip, bodyBuf, project });
       }
     }
-    const translate = lane === "claudecode" && path.endsWith("/chat/completions");
-    return proxy(req, res, route.base, { ...route, bodyBuf, model, lane, project, translate });
+    const translate = provider === "claudecode" && path.endsWith("/chat/completions");
+    return proxy(req, res, route.base, { ...route, bodyBuf, model, provider, project, translate });
   };
 
   // No admission control: there is no subprocess to stampede. api.anthropic.com handles its own
