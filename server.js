@@ -956,6 +956,13 @@ async function proxy(req, res, base, opts = {}) {
     console.error(`[err] upstream=${up.status} lane=${curLane || "?"} model=${model || "-"} ${curTarget}`);
     up.clone().text().then((t) => shipError(`upstream ${up.status} ${req.method} ${req.url}`, { model: model || "-", lane: curLane || "?", ip, status: up.status, body: t })).catch(() => {});
   }
+  // Image lane: upstream errors arrive as bare text; convert to OpenAI JSON error envelope.
+  if (curLane === "images" && up.status >= 400) {
+    const errText = await up.text().catch(() => "");
+    const msg = errText.trim() || `image generation failed (${up.status})`;
+    res.writeHead(up.status, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: { message: msg, type: "upstream_error", param: null } }));
+  }
   // Free rate-limit harvest: snapshot this account's live 5h/7d headroom off the response headers
   // (no probe, zero tokens). Fires for any Anthropic-native reply; a no-op for other providers.
   recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);
@@ -1899,7 +1906,19 @@ const server = http.createServer(async (req, res) => {
   // Image generation → SD-Turbo (pbox GPU). Routed by path, not model name; the upstream bearer
   // is injected server-side. No project gate / model routing applies.
   if (req.method === "POST" && /\/images\/(generations|edits|variations)$/.test(path)) {
-    const imgBody = await readBody(req);
+    let imgBody = await readBody(req);
+    // SDXL VAE downsamples ×8 to latent space; non-multiples of 8 crash upstream with bare 500.
+    try {
+      const j = JSON.parse(imgBody.toString());
+      if (j.size && typeof j.size === "string") {
+        const m = j.size.match(/^(\d+)x(\d+)$/i);
+        if (m) {
+          const w = Math.floor(+m[1] / 8) * 8;
+          const h = Math.floor(+m[2] / 8) * 8;
+          if (+m[1] !== w || +m[2] !== h) { j.size = `${w}x${h}`; imgBody = Buffer.from(JSON.stringify(j)); }
+        }
+      }
+    } catch { /* leave body as-is */ }
     return proxy(req, res, CFG.bases.images, { bodyBuf: imgBody, lane: "images", authToken: CFG.imageToken, project: extractProject(req, imgBody) });
   }
   // Image-service catalog endpoints (templates + LoRAs) — proxy GETs straight through.
