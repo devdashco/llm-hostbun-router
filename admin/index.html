@@ -183,7 +183,7 @@ const NAV = [
   {sec:'Monitor'},
   {name:'Overview',slug:'overview',icon:'grid'},
   {name:'Calls',slug:'calls',icon:'list'},
-  {name:'Convos',slug:'convos',icon:'chart'},
+  {name:'Consumers',slug:'consumers',icon:'chart'},
   {name:'Stats',slug:'stats',icon:'chart'},
   {name:'Accounts',slug:'accounts',icon:'key'},
   {sec:'Control'},
@@ -1168,39 +1168,165 @@ function Accounts(){
     <small class="hint">Model-by-model probe detail lives on <a href=${'/models'} onClick=${e=>{e.preventDefault();go('models');}}>Models</a>.</small>
   </${Card}>`;
 }
-function Conversations(){
-  const [rows,setRows]=useState([]); const [now,setNow]=useState(Date.now()); const [err,setErr]=useState('');
-  const load=useCallback(async()=>{ try{ const d=await api('conversations?limit=80'); setRows(d.conversations||[]); setNow(Date.now()); setErr(''); }catch(e){ setErr(e.message||'load failed'); } },[]);
-  useEffect(()=>{ load(); const t=setInterval(load,20000); return ()=>clearInterval(t); },[load]);
-  const ago=ts=>{ if(!ts)return ''; const m=(now-ts)/60000; return m<1?'now':m<60?Math.round(m)+'m':Math.round(m/60)+'h'; };
-  const maxTax=Math.max(1,...rows.map(r=>r.tools_kb||0));
-  const bar=(v,max,color)=>html`<div style="display:inline-block;vertical-align:middle;background:#2a2a30;border-radius:3px;height:6px;width:54px;overflow:hidden;margin-right:6px"><div style="height:100%;width:${Math.round(100*Math.min(v||0,max)/max)}%;background:${color}"></div></div>`;
-  const hit=r=>{ const cr=r.cache_read||0, fi=Math.max(0,r.fresh_in||0); const tot=cr+fi; return tot?Math.round(100*cr/tot):0; };
+/* ───────── CONSUMERS: the registry, and what each one costs ─────────
+   A consumer is WHO calls. Two kinds, and they are not the same thing:
+     dev — a person's machine (or a daemon on it). Has an owner: a human.
+     app — code we deployed. Has NO owner.
+   Identity is a path, `<consumer>:<job>`. Only the consumer is registered; jobs are free. */
+const KindPill=({kind})=>{
+  const m={dev:['#2a3350','#8fa8ff','dev'],app:['#2a3a2a','#8bc88b','app'],unregistered:['#3a2a2a','#e08c8c','unregistered']}[kind]||['#2a2a30','#a1a1aa',kind];
+  return html`<span class="pill" style=${`background:${m[0]};color:${m[1]}`}>${m[2]}</span>`;
+};
+const USAGE_WINDOWS=[['1h','1h'],['24h','24h'],['7d','7d'],['30d','30d']];
+
+function Consumers(){
+  const {state,reload}=useApp();
+  const [reg,setReg]=useState(null); const [u,setU]=useState(null); const [err,setErr]=useState('');
+  const [win,setWin]=useState('24h'); const [busy,setBusy]=useState('');
+  const [nn,setNn]=useState(''); const [nk,setNk]=useState('app'); const [no,setNo]=useState('');
+  const [open,setOpen]=useState({});
+  const load=useCallback(async()=>{
+    try{ const [a,b]=await Promise.all([api('consumers'),api('usage?win='+win)]); setReg(a); setU(b); setErr(''); }
+    catch(e){ setErr(e.message||'load failed'); }
+  },[win]);
+  useEffect(()=>{ load(); },[load]);
+  async function save(name,kind,owner,note){
+    setBusy(name);
+    try{ await api('consumers',{method:'POST',body:JSON.stringify({name,kind,owner:kind==='dev'?owner:undefined,note})});
+      toast(`${name} registered as ${kind}`); await load(); reload();
+    }catch(e){ toast(e.message,true); } finally{ setBusy(''); }
+  }
+  async function remove(name){
+    if(!confirm(`Unregister "${name}"? If enforcement is on, its calls start failing with 403 unknown_consumer.`))return;
+    setBusy(name);
+    try{ await api('consumers',{method:'POST',body:JSON.stringify({name,remove:true})}); toast(`${name} unregistered`); await load(); reload(); }
+    catch(e){ toast(e.message,true); } finally{ setBusy(''); }
+  }
+  async function enforce(on){
+    const unreg=(reg&&reg.unregistered)||[];
+    if(on&&unreg.length&&!confirm(`${unreg.length} consumer(s) in the log are NOT registered:\n\n${unreg.map(x=>'  '+x.name+' ('+x.calls+' calls)').join('\n')}\n\nTurning enforcement on makes every one of them fail with 403. Continue?`))return;
+    setBusy('enforce');
+    try{ await api('consumers/enforce',{method:'POST',body:JSON.stringify({enabled:on})});
+      toast(on?'enforcing — unregistered consumers now 403':'enforcement off'); await load(); reload();
+    }catch(e){ toast(e.message,true); } finally{ setBusy(''); }
+  }
+  async function add(){
+    const n=nn.trim().toLowerCase();
+    if(!n){toast('name required',true);return;}
+    if(n.includes(':')){toast('register the consumer, not the job — drop the ":" part',true);return;}
+    if(nk==='dev'&&!no.trim()){toast('a dev is someone’s machine — owner required',true);return;}
+    await save(n,nk,no.trim(),''); setNn(''); setNo('');
+  }
+  const unreg=(reg&&reg.unregistered)||[], regd=(reg&&reg.registered)||[];
+  const kindOf=k=>(u&&u.byKind.find(x=>x.key===k))||{calls:0,tokens:0};
   return html`
-  <${PageHead} title="Conversations — per-chat MCP tools, cache & cost" onRefresh=${load}/>
-  <div class="card">
-    <p class="hint" style="margin:0 0 12px">Each Claude Code session: how many <b>MCP tools</b> it loads, the <b>tool-schema tax</b> (context KB carried every turn), <b>cache hit</b> (green = warm/cheap), <b>cache-write</b> tokens (new content cached each turn; a big spike = a full rebuild after >5-min idle), <b>fresh</b> input (real new tokens, not cached), and total spend.</p>
-    ${err?html`<p class="down">${err}</p>`:''}
+  <${PageHead} title="Consumers — who calls, and what it costs" onRefresh=${load}/>
+  ${err?html`<${Card}><p class="down">${err}</p></${Card}>`:''}
+
+  <${Card}>
+    <div class="flex" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Registration gate</h3>
+      <button class=${reg&&reg.enforcing?'':'ghost'} disabled=${busy==='enforce'} onClick=${()=>enforce(!(reg&&reg.enforcing))}>
+        ${reg&&reg.enforcing?'● Enforcing — unregistered calls 403':'○ Off — any name is accepted'}
+      </button>
+    </div>
+    <p class="hint" style="margin:8px 0 0">With the gate <b>on</b>, an inference call whose consumer is not registered is refused <code>403 unknown_consumer</code>. Without it, a typo becomes a brand-new consumer with its own usage row, and a made-up name bills whatever it resolves to.
+    <b class="warnp">This is not authentication.</b> The name is still self-asserted — anyone who knows a registered name can claim it. Per-consumer API keys are what close that hole.</p>
+    ${unreg.length?html`<p class="down" style="margin:10px 0 0"><b>⚠ ${unreg.length} consumer(s) in the call log are not registered.</b> ${reg.enforcing?'They are being refused right now.':'Register them before turning the gate on, or their traffic dies the moment you do.'}</p>`:''}
+  </${Card}>
+
+  ${unreg.length?html`<${Card}>
+    <h3>Unregistered <small class="hint">— seen in the log, not in the registry</small></h3>
     <div style="overflow:auto"><table>
-      <tr><th>session</th><th>box</th><th>account</th><th>msgs</th><th>MCP/tools</th><th>tool tax</th><th>cache hit</th><th>cache-wr</th><th>fresh</th><th>tokens</th><th>err</th><th>seen</th></tr>
-      ${rows.length? rows.map(r=>html`<tr>
-        <td class="mono hint" title=${r.session}>${(r.session||'').slice(0,8)}</td>
-        <td class="mono">${(r.consumer||'').replace('-claude','')}</td>
-        <td><span class="pill">${(r.account||'—').replace('anthropic:','')}</span></td>
-        <td class="mono">${r.msgs||0}</td>
-        <td class="mono" title="${r.mcp_tools||0} MCP of ${r.tools||0} total tools">${r.mcp_tools||0}<span class="hint">/${r.tools||0}</span></td>
-        <td>${bar(r.tools_kb,maxTax,'#f59e0b')}<span class="hint mono">${r.tools_kb||0}KB</span></td>
-        <td><span class="pill ${hit(r)>=90?'up':hit(r)>=50?'warnp':'down'}">${hit(r)}%</span></td>
-        <td class="mono hint" title="cache-creation tokens: mostly incremental (new content each turn); big spikes = full rebuild after idle">${nfmt(r.cache_write)||0}</td>
-        <td class="mono" title="fresh input tokens (not cached)">${nfmt(r.fresh_in)||0}</td>
-        <td class="mono">${nfmt(r.tokens)||0}</td>
-        <td class="mono ${r.errors>0?'down':'hint'}">${r.errors||0}</td>
-        <td class="hint">${ago(r.last_ts)}</td>
-      </tr>`): html`<tr><td colspan="12" class="hint">No conversations yet — a row appears once an anthropic-provider session logs a call.</td></tr>`}
+      <tr><th>name</th><th>calls</th><th>tokens</th><th>jobs</th><th>register as</th></tr>
+      ${unreg.map(x=>html`<tr key=${x.name}>
+        <td class="mono"><b>${x.name}</b></td>
+        <td class="mono">${nfmt(x.calls)}</td>
+        <td class="mono mut">${nfmt(x.tokens)}</td>
+        <td class="mono mut">${x.jobs||0}</td>
+        <td><div class="flex" style="gap:6px">
+          <button class="ghost sm" disabled=${busy===x.name} onClick=${()=>{ const o=prompt(`"${x.name}" is a developer machine. Who owns it? (person, e.g. philip)`); if(o&&o.trim()) save(x.name,'dev',o.trim(),''); }}>+ dev</button>
+          <button class="ghost sm" disabled=${busy===x.name} onClick=${()=>save(x.name,'app','','')}>+ app</button>
+        </div></td>
+      </tr>`)}
     </table></div>
-  </div>`;
+  </${Card}>`:''}
+
+  <${Card}>
+    <h3>Registry <small class="hint">— ${regd.length} consumer(s)${reg&&reg.owners.length?', '+reg.owners.length+' owner(s)':''}</small></h3>
+    <div style="overflow:auto"><table>
+      <tr><th>consumer</th><th>kind</th><th>owner</th><th>jobs</th><th>calls</th><th>tokens</th><th></th></tr>
+      ${regd.length?regd.map(c=>html`<tr key=${c.name}>
+        <td class="mono"><b>${c.name}</b>${c.note?html`<div class="hint" style="font-size:10px">${c.note}</div>`:''}</td>
+        <td><${KindPill} kind=${c.kind}/></td>
+        <td class="mono">${c.kind==='dev'?html`<span style="color:var(--acc)">${c.owner}</span>`:html`<span class="mut" title="an app is not a person">—</span>`}</td>
+        <td class="mono mut">${c.jobs||0}</td>
+        <td class="mono">${nfmt(c.calls)}</td>
+        <td class="mono mut">${nfmt(c.tokens)}</td>
+        <td><button class="ghost sm" disabled=${busy===c.name} onClick=${()=>remove(c.name)}>Unregister</button></td>
+      </tr>`):html`<tr><td colspan="7" class="hint">Registry is empty. Nothing is enforced until you register consumers and turn the gate on.</td></tr>`}
+    </table></div>
+    <div class="row" style="margin-top:12px">
+      <input style="flex:2" placeholder="consumer name (no ':') e.g. promopilot" value=${nn} onInput=${e=>setNn(e.target.value)} onKeyDown=${e=>e.key==='Enter'&&add()}/>
+      <select style="flex:0 0 130px" value=${nk} onChange=${e=>setNk(e.target.value)}><option value="app">app</option><option value="dev">dev</option></select>
+      <input style="flex:1" placeholder=${nk==='dev'?'owner (a person)':'apps have no owner'} disabled=${nk!=='dev'} value=${nk==='dev'?no:''} onInput=${e=>setNo(e.target.value)}/>
+      <button style="flex:0 0 auto" disabled=${!!busy} onClick=${add}>Register</button>
+    </div>
+  </${Card}>
+
+  <${Card}>
+    <div class="flex" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Consumption</h3>
+      <div class="flex" style="gap:4px">${USAGE_WINDOWS.map(([v,l])=>html`<button class=${win===v?'sm':'ghost sm'} onClick=${()=>setWin(v)}>${l}</button>`)}</div>
+    </div>
+    ${!u?html`<p class="hint">loading…</p>`:html`
+    <div class="flex" style="gap:10px;flex-wrap:wrap;margin:12px 0">
+      ${['dev','app','unregistered'].map(k=>html`<div class="card" style="flex:1;min-width:150px;margin:0">
+        <div><${KindPill} kind=${k}/></div>
+        <div class="mono" style="font-size:20px;margin-top:6px">${nfmt(kindOf(k).tokens)}<span class="mut" style="font-size:12px"> tok</span></div>
+        <div class="mut mono" style="font-size:12px">${nfmt(kindOf(k).calls)} calls</div>
+      </div>`)}
+    </div>
+
+    <h4 style="margin:16px 0 6px">By developer <small class="hint">— every machine a person owns, summed</small></h4>
+    <div style="overflow:auto"><table>
+      <tr><th>owner</th><th>calls</th><th>tokens</th><th>errors</th></tr>
+      ${u.byOwner.length?u.byOwner.map(o=>html`<tr key=${o.key}>
+        <td class="mono"><b>${o.key}</b></td><td class="mono">${nfmt(o.calls)}</td>
+        <td class="mono">${nfmt(o.tokens)}</td><td class="mono ${o.errors?'down':'mut'}">${o.errors}</td>
+      </tr>`):html`<tr><td colspan="4" class="hint">No dev traffic in this window — or no dev consumer has an owner yet.</td></tr>`}
+    </table></div>
+
+    <h4 style="margin:16px 0 6px">By consumer <small class="hint">— click a row to expand its jobs</small></h4>
+    <div style="overflow:auto"><table>
+      <tr><th>consumer</th><th>kind</th><th>owner</th><th>calls</th><th>tokens</th><th>errors</th></tr>
+      ${u.byConsumer.map(c=>html`
+        <tr key=${c.key} class=${c.jobs.length?'click':''} onClick=${()=>c.jobs.length&&setOpen(o=>({...o,[c.key]:!o[c.key]}))}>
+          <td class="mono"><b>${c.jobs.length?html`<span class="mut">${open[c.key]?'▾':'▸'} </span>`:''}${c.key}</b>${c.jobs.length?html`<span class="mut" style="font-size:11px"> ${c.jobs.length} job${c.jobs.length>1?'s':''}</span>`:''}</td>
+          <td><${KindPill} kind=${c.kind}/></td>
+          <td class="mono mut">${c.owner||'—'}</td>
+          <td class="mono">${nfmt(c.calls)}</td><td class="mono">${nfmt(c.tokens)}</td>
+          <td class="mono ${c.errors?'down':'mut'}">${c.errors}</td>
+        </tr>
+        ${open[c.key]?c.jobs.map(j=>html`<tr key=${c.key+':'+j.key} style="background:var(--card2)">
+          <td class="mono mut" style="padding-left:24px">↳ ${j.key}</td><td></td><td></td>
+          <td class="mono mut">${nfmt(j.calls)}</td><td class="mono mut">${nfmt(j.tokens)}</td>
+          <td class="mono ${j.errors?'down':'mut'}">${j.errors}</td>
+        </tr>`):''}
+      `)}
+    </table></div>
+
+    <h4 style="margin:16px 0 6px">By account, split by kind <small class="hint">— is an app starving your Claude Code?</small></h4>
+    <div style="overflow:auto"><table>
+      <tr><th>account</th><th>kind</th><th>calls</th><th>tokens</th></tr>
+      ${u.byAccountKind.length?u.byAccountKind.map(r=>html`<tr key=${r.account+r.kind}>
+        <td class="mono"><b>${r.account}</b></td><td><${KindPill} kind=${r.kind}/></td>
+        <td class="mono">${nfmt(r.calls)}</td><td class="mono">${nfmt(r.tokens)}</td>
+      </tr>`):html`<tr><td colspan="4" class="hint">No attributed traffic in this window.</td></tr>`}
+    </table></div>`}
+  </${Card}>`;
 }
-const PAGES={overview:Overview,calls:Calls,convos:Conversations,stats:Stats,accounts:Accounts,routing:Routing,models:Models,crazyrouter:Crazyrouter,secrets:Secrets};
+const PAGES={overview:Overview,calls:Calls,consumers:Consumers,stats:Stats,accounts:Accounts,routing:Routing,models:Models,crazyrouter:Crazyrouter,secrets:Secrets};
 function Shell({slug,go,children}){
   const [sbOpen,setSbOpen]=useState(false);
   return html`<div class="shell">

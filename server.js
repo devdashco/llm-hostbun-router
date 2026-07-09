@@ -74,7 +74,7 @@ const CLAUDECODE_MODEL_ALIASES = Object.freeze([
 const CLAUDECODE_MODEL_REFRESH_MS = 6 * 3600 * 1000;
 // Client-side routes of the control panel (its NAV slugs). Kept in sync with admin/index.html by
 // hand — a missing entry only costs a hard-refresh 404 on that tab, never a mis-served API path.
-const UI_ROUTES = new Set(["/overview", "/calls", "/convos", "/stats", "/accounts", "/routing",
+const UI_ROUTES = new Set(["/overview", "/calls", "/consumers", "/stats", "/accounts", "/routing",
   "/models", "/crazyrouter", "/secrets"].map((s) => s));
 const PRICES_FILE = process.env.PRICES_FILE || "/srv/prices.json";
 const CONFIG_FILE = process.env.CONFIG_FILE || "/data/config.json";
@@ -339,6 +339,21 @@ function mergeConfig(base, saved) {
   if (Number.isInteger(saved.jsonMaxRetries) && saved.jsonMaxRetries >= 0 && saved.jsonMaxRetries <= 5)
     c.jsonMaxRetries = saved.jsonMaxRetries;
   if (typeof saved.requireProject === "boolean") c.requireProject = saved.requireProject;
+  if (typeof saved.requireRegisteredConsumer === "boolean") c.requireRegisteredConsumer = saved.requireRegisteredConsumer;
+  if (saved.consumers && typeof saved.consumers === "object" && !Array.isArray(saved.consumers)) {
+    c.consumers = {};
+    for (const [k, v] of Object.entries(saved.consumers)) {
+      const name = String(k || "").trim().toLowerCase();
+      if (!name || !v || typeof v !== "object") continue;
+      const kind = v.kind === "dev" ? "dev" : "app";
+      const e = { kind };
+      // owner is a person, and only a dev has one. An app is not a person; giving it an owner is how
+      // "what do my developers cost" quietly starts including cron jobs.
+      if (kind === "dev" && typeof v.owner === "string" && v.owner.trim()) e.owner = v.owner.trim().toLowerCase();
+      if (typeof v.note === "string" && v.note.trim()) e.note = v.note.trim();
+      c.consumers[name] = e;
+    }
+  }
   // ── flow control ──
   if (saved.forceModel && typeof saved.forceModel === "object") {
     const f = saved.forceModel;
@@ -679,6 +694,24 @@ function extractProject(req, bodyBuf) {
     } catch { /* not json */ }
   }
   return String(p || "").trim().toLowerCase().slice(0, 64);
+}
+
+// A caller's identity is a path, not a flat name: `<consumer>[:<job>]`. `promopilot:generatetext`
+// has always been two levels — the router just never read it that way, so `promopilot` looked like
+// 4 calls when its three workloads had ~30k between them. Splitting on the FIRST colon only means a
+// job may itself contain colons; the consumer never can.
+function parseConsumer(project) {
+  const s = String(project || "").trim().toLowerCase();
+  if (!s) return { consumer: "", job: null };
+  const i = s.indexOf(":");
+  return i < 0 ? { consumer: s, job: null } : { consumer: s.slice(0, i), job: s.slice(i + 1) || null };
+}
+
+// Registry lookup, consumer-level. A job never needs registering.
+function consumerEntry(project) {
+  const { consumer } = parseConsumer(project);
+  const reg = CFG.consumers || {};
+  return consumer && Object.prototype.hasOwnProperty.call(reg, consumer) ? { name: consumer, ...reg[consumer] } : null;
 }
 
 // Pull the model-behaviour knobs out of a request body so the call log shows HOW a
@@ -1580,7 +1613,12 @@ function accountFor(project) {
   if (!pool.length) return null;
   const p = String(project == null ? "" : project).trim().toLowerCase();
   const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
-  const want = String((p && pins[p]) || CFG.defaultAccount || "").trim().toLowerCase();
+  // Try the exact path first, then fall back to the consumer. A pin is a property of WHO is calling,
+  // not of which workload they are running: pinning `promopilot` must cover `promopilot:l2_metadata`
+  // without pinning every job by hand. An exact-path pin still wins, so one greedy job can be moved
+  // to its own account without moving the rest.
+  const { consumer } = parseConsumer(p);
+  const want = String((p && pins[p]) || (consumer && pins[consumer]) || CFG.defaultAccount || "").trim().toLowerCase();
   if (!want) return null;
   return pool.find((a) => String(a.name).toLowerCase() === want) || null;
 }
@@ -1688,6 +1726,8 @@ function adminState() {
     jsonEnforce: CFG.jsonEnforce,
     jsonMaxRetries: CFG.jsonMaxRetries,
     requireProject: CFG.requireProject,
+    requireRegisteredConsumer: CFG.requireRegisteredConsumer,
+    consumers: CFG.consumers || {},
     logging: CFG.logging,
     loggingDbReady: dbUp(),
     // secrets — never returned in clear
@@ -1967,6 +2007,119 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     return sendJson(res, 200, { ok: true, persisted, projectAccounts: pins });
   }
 
+  // ── consumer registry ──
+  // The registry, plus every consumer the log has SEEN that is not in it. That second list is the
+  // work queue: it is what would start 403'ing the moment requireRegisteredConsumer is turned on.
+  if (sub === "consumers" && req.method === "GET") {
+    const reg = CFG.consumers || {};
+    const seen = await dbRows(
+      `SELECT split_part(project, ':', 1) AS consumer, COUNT(*)::int AS calls,
+         COALESCE(SUM(total_tokens),0)::bigint AS tokens, MAX(ts) AS last_ts,
+         COUNT(DISTINCT NULLIF(split_part(project, ':', 2), ''))::int AS jobs
+       FROM calls WHERE project IS NOT NULL AND project <> '' GROUP BY 1 ORDER BY 2 DESC`);
+    const known = new Set(Object.keys(reg));
+    const registered = Object.entries(reg).map(([name, e]) => {
+      const s = seen.find((r) => r.consumer === name);
+      return { name, ...e, calls: s ? s.calls : 0, tokens: s ? Number(s.tokens) : 0,
+        jobs: s ? s.jobs : 0, lastTs: s ? Number(s.last_ts) : 0 };
+    }).sort((a, b) => b.calls - a.calls);
+    const unregistered = seen.filter((r) => r.consumer && !known.has(r.consumer))
+      .map((r) => ({ name: r.consumer, calls: r.calls, tokens: Number(r.tokens), jobs: r.jobs, lastTs: Number(r.last_ts) }));
+    return sendJson(res, 200, {
+      registered, unregistered, enforcing: !!CFG.requireRegisteredConsumer,
+      owners: [...new Set(Object.values(reg).filter((e) => e.owner).map((e) => e.owner))].sort(),
+    });
+  }
+
+  // Merge one entry. Like `pins`, and for the same reason: `POST config` assigns `consumers`
+  // wholesale, so sending one registration from a stale render would delete every other one.
+  if (sub === "consumers" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const name = String(p.name || "").trim().toLowerCase();
+    if (!name) return sendJson(res, 400, { error: "name required" });
+    if (name.includes(":")) return sendJson(res, 400, { error: "register the consumer, not the job — drop everything after the ':'" });
+    const reg = { ...(CFG.consumers || {}) };
+    if (p.remove) {
+      delete reg[name];
+    } else {
+      if (p.kind !== "dev" && p.kind !== "app") return sendJson(res, 400, { error: "kind must be 'dev' or 'app'" });
+      const e = { kind: p.kind };
+      if (p.kind === "dev") {
+        const owner = String(p.owner || "").trim().toLowerCase();
+        if (!owner) return sendJson(res, 400, { error: "a dev consumer is someone's machine — owner required" });
+        e.owner = owner;
+      }
+      // Silently dropping an owner sent for an app would look like it saved. Say no instead.
+      if (p.kind === "app" && String(p.owner || "").trim()) return sendJson(res, 400, { error: "an app has no owner" });
+      if (typeof p.note === "string" && p.note.trim()) e.note = p.note.trim();
+      reg[name] = e;
+    }
+    CFG.consumers = reg;
+    const persisted = persistConfig();
+    console.log(`[admin] consumer ${name} -> ${p.remove ? "(removed)" : reg[name].kind + (reg[name].owner ? "/" + reg[name].owner : "")} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, { ok: true, persisted, consumers: reg });
+  }
+
+  // Turn the gate on/off. Separate from `config` so it is a deliberate, logged act — flipping it on
+  // with an unseeded registry is an instant outage for every caller not yet registered.
+  if (sub === "consumers/enforce" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    CFG.requireRegisteredConsumer = !!p.enabled;
+    const persisted = persistConfig();
+    console.warn(`[admin] requireRegisteredConsumer=${CFG.requireRegisteredConsumer} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, { ok: true, persisted, enforcing: CFG.requireRegisteredConsumer });
+  }
+
+  // ── consumption rollups: kind → owner → consumer → job, plus account×kind ──
+  // Grouping happens in JS, not SQL: the registry lives in CFG, and a 26-row group-by is cheaper to
+  // ship whole than to join against a config file.
+  if (sub === "usage" && req.method === "GET") {
+    if (!dbUp()) return sendJson(res, 200, { dbReady: false });
+    const q = url.parse(req.url, true).query;
+    const WIN = { "1h": 36e5, "24h": 864e5, "7d": 6048e5, "30d": 2592e6 };
+    const win = WIN[q.win] ? q.win : "24h";
+    const since = Date.now() - WIN[win];
+    const rows = await dbRows(
+      `SELECT project, split_part(key_label, ':', 2) AS acct, provider,
+         COUNT(*)::int AS calls, COALESCE(SUM(total_tokens),0)::bigint AS tokens,
+         COUNT(*) FILTER (WHERE status >= 400)::int AS errors
+       FROM calls WHERE ts >= $1 AND project IS NOT NULL AND project <> '' GROUP BY 1,2,3`, [since]);
+    const reg = CFG.consumers || {};
+    const add = (m, k, r) => {
+      const e = m.get(k) || { calls: 0, tokens: 0, errors: 0 };
+      e.calls += r.calls; e.tokens += Number(r.tokens); e.errors += r.errors; m.set(k, e);
+    };
+    const byKind = new Map(), byOwner = new Map(), byConsumer = new Map(), byAcctKind = new Map();
+    const jobsOf = new Map();
+    for (const r of rows) {
+      const { consumer, job } = parseConsumer(r.project);
+      const e = reg[consumer];
+      // An unregistered consumer is its own bucket. Folding it into "app" would be a guess, and the
+      // whole point of the registry is that we stop guessing.
+      const kind = e ? e.kind : "unregistered";
+      add(byKind, kind, r);
+      if (kind === "dev" && e.owner) add(byOwner, e.owner, r);
+      add(byConsumer, consumer, r);
+      if (r.acct) add(byAcctKind, `${r.acct}|${kind}`, r);
+      if (job) { if (!jobsOf.has(consumer)) jobsOf.set(consumer, new Map()); add(jobsOf.get(consumer), job, r); }
+    }
+    const out = (m) => [...m.entries()].map(([k, v]) => ({ key: k, ...v })).sort((a, b) => b.tokens - a.tokens);
+    return sendJson(res, 200, {
+      dbReady: true, win, since,
+      byKind: out(byKind), byOwner: out(byOwner),
+      byConsumer: out(byConsumer).map((c) => ({
+        ...c, kind: reg[c.key] ? reg[c.key].kind : "unregistered",
+        owner: reg[c.key] && reg[c.key].owner || null,
+        jobs: jobsOf.has(c.key) ? out(jobsOf.get(c.key)) : [],
+      })),
+      byAccountKind: out(byAcctKind).map((r) => { const [account, kind] = r.key.split("|"); return { account, kind, calls: r.calls, tokens: r.tokens, errors: r.errors }; }),
+    });
+  }
+
   if (sub === "health" && req.method === "GET") {
     const [local, crazyrouter] = await Promise.all([
       probe(CFG.bases.local), probe(CFG.bases.crazyrouter, CFG.crazyrouterKey),
@@ -2091,43 +2244,11 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     const row = await dbRow("SELECT * FROM calls WHERE id = $1", [id]);
     return row ? sendJson(res, 200, row) : sendJson(res, 404, { error: "not found" });
   }
-  // Per-CONVERSATION view: group the log by Claude session_id and surface what's loaded
-  // into each chat — MCP servers + tool count, the tool-schema tax (KB), conversation
-  // length (messages), token spend, and the account it billed. Answers "which MCP tools
-  // is this convo carrying and how long is it". anthropic provider (Claude Code) only.
-  if (sub === "conversations" && req.method === "GET") {
-    if (!dbUp()) return sendJson(res, 404, { error: "no db" });
-    const q = url.parse(req.url, true).query;
-    const limit = Math.min(parseInt(q.limit, 10) || 50, 500);
-    // `user_id` holds whatever the caller sent; Claude Code stamps a JSON blob, everyone else may
-    // send a bare string. Casting it to jsonb would throw on the first non-JSON row and kill the
-    // whole view, so pull session_id out with a regex, which simply yields NULL when it doesn't match.
-    const SESSION = `substring(user_id from '"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"')`;
-    const rows = await dbRows(`
-      SELECT ${SESSION} AS session,
-        MAX(project) AS consumer,
-        COUNT(*)::int AS calls, MAX(msg_count) AS msgs,
-        MAX(tool_count) AS tools, MAX(mcp_tools) AS mcp_tools,
-        MAX(tools_kb) AS tools_kb, MAX(system_kb) AS system_kb,
-        SUM(total_tokens) AS tokens, SUM(cache_read) AS cache_read,
-        SUM(cache_write) AS cache_write,
-        SUM(prompt_tokens - COALESCE(cache_read,0)) AS fresh_in,
-        SUM(completion_tokens) AS out,
-        MIN(ts) AS first_ts, MAX(ts) AS last_ts,
-        SUM(CASE WHEN status>=400 THEN 1 ELSE 0 END)::int AS errors
-      FROM calls
-      WHERE provider IN ('anthropic','claudecode') AND ${SESSION} IS NOT NULL
-      GROUP BY session ORDER BY last_ts DESC LIMIT $1`, [limit]);
-    // latest row per session for the fields that CHANGE over a conversation's life
-    // (the current account it bills + the current MCP server set) — not a lexical MAX.
-    for (const r of rows) {
-      const l = await dbRow(`SELECT key_label, tool_servers FROM calls
-        WHERE ${SESSION} = $1 ORDER BY id DESC LIMIT 1`, [r.session]);
-      r.account = l ? l.key_label : null;
-      r.servers = l ? l.tool_servers : null;
-    }
-    return sendJson(res, 200, { conversations: rows, count: rows.length });
-  }
+  // (Removed 2026-07-09: the per-conversation view. It grouped the log by Claude session_id, which
+  // only ever existed for Claude Code traffic, and answered a question nobody asked. The columns it
+  // read — msg_count, tool_count, tools_kb, cache_read — are still recorded and still surfaced per
+  // call in the Calls tab. Consumption now rolls up by consumer, not by chat: see `usage`.)
+
   // Full-content export. Cursor by id, ascending: page id>after until fewer than `limit` return.
   // Returns FULL req_content/resp_content (unlike `calls`, which previews). SELECT * on purpose —
   // an explicit column list silently drops whatever was added to the table since it was written.
@@ -2357,6 +2478,27 @@ const server = http.createServer(async (req, res) => {
       error: "missing project", reqContent: extractRequestContent(bodyBuf), project: null });
     res.writeHead(400, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: "missing project attribution: send an 'X-Project' header (or a 'project' body field) identifying the calling app.", type: "invalid_request_error", code: "project_required" } }));
+  }
+
+  // Registration gate: a name must be one we agreed on, not one the caller invented. Without this
+  // a typo becomes a new "consumer" with its own usage row, and `totally-made-up-xyz` bills whoever
+  // it happens to resolve to. Registration is by CONSUMER — the job half of the path is free.
+  // NOTE: this is still not authentication. The name remains self-asserted; a caller who knows a
+  // registered name can claim it. Per-consumer API keys are what close that (see "Open work").
+  if (CFG.requireRegisteredConsumer && isInference && project && !consumerEntry(project)) {
+    const { consumer } = parseConsumer(project);
+    const known = Object.keys(CFG.consumers || {}).sort();
+    console.error(`[err] 403 unknown consumer "${consumer}" ip=${ip} model=${model || "-"}`);
+    recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
+      reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 403, ms: 0,
+      error: "unknown_consumer", reqContent: extractRequestContent(bodyBuf), project });
+    res.writeHead(403, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: {
+      type: "unknown_consumer",
+      message: `consumer "${consumer}" is not registered`,
+      hint: "register it in /admin (Consumers), as kind 'dev' (a person's machine) or 'app' (deployed code)",
+      registered: known,
+    } }));
   }
 
   // Flow policy blocked this model (crazyrouter off / not allowlisted / unknown with no default route).
