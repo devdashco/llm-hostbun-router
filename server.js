@@ -53,7 +53,7 @@ const PRICES_FILE = process.env.PRICES_FILE || "/srv/prices.json";
 const CONFIG_FILE = process.env.CONFIG_FILE || "/data/config.json";
 const CALLS_DB = process.env.CALLS_DB || "/data/calls.db";
 // Max bytes of prompt / reply text stored per call (protects the DB from huge payloads).
-const CONTENT_CAP = parseInt(process.env.CALL_CONTENT_CAP || "262144", 10); // 256 KiB
+const CONTENT_CAP = parseInt(process.env.CALL_CONTENT_CAP || "0", 10); // 0 = uncapped (store full prompt+reply)
 
 // Default local model ids (env-overridable). "local" -> small multimodal E4B; "gemma" -> 26B MoE;
 // "obliterated" -> Qwen3.6-27B abliterated.
@@ -226,12 +226,12 @@ function envDefaults() {
     // Admin password (HMAC secret + login check). Weak default per request — rotate via the UI.
     adminPassword: process.env.ADMIN_PASSWORD || "ddash",
     // Call logging → SQLite at CALLS_DB. enabled: record any call metadata at all;
-    // content: also store the prompt + the model's reply text (capped at CONTENT_CAP);
-    // retain: keep at most this many rows (oldest pruned).
+    // content: also store the prompt + the model's reply text (uncapped unless CONTENT_CAP > 0);
+    // retain: keep at most this many rows (oldest pruned). 0 = keep every row forever, no pruning.
     logging: {
       enabled: (process.env.LOG_CALLS || "1") !== "0",
       content: (process.env.LOG_CONTENT || "1") !== "0",
-      retain: parseInt(process.env.LOG_RETAIN || "50000", 10),
+      retain: parseInt(process.env.LOG_RETAIN || "0", 10),
     },
   };
 }
@@ -370,7 +370,7 @@ function mergeConfig(base, saved) {
     const l = saved.logging;
     if (typeof l.enabled === "boolean") c.logging.enabled = l.enabled;
     if (typeof l.content === "boolean") c.logging.content = l.content;
-    if (Number.isInteger(l.retain) && l.retain >= 100 && l.retain <= 1000000) c.logging.retain = l.retain;
+    if (Number.isInteger(l.retain) && (l.retain === 0 || (l.retain >= 100 && l.retain <= 1000000))) c.logging.retain = l.retain;
   }
   if (!c.wrappyPrefix) c.wrappyPrefix = "claude";
   if (!c.adminPassword) c.adminPassword = "ddash";
@@ -483,6 +483,7 @@ function initDb() {
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     // Retention prunes the oldest NON-dev rows only — local-dev (anthropic lane) chats are exempt and
     // kept forever, so a burst of prod traffic can never evict your saved Claude Code conversations.
+    // Only runs when CFG.logging.retain > 0; retain=0 (the default) keeps EVERY row on EVERY lane forever.
     pruneStmt = db.prepare("DELETE FROM calls WHERE lane != 'anthropic' AND id NOT IN (SELECT id FROM calls WHERE lane != 'anthropic' ORDER BY id DESC LIMIT ?)");
     // acct_limits: the LATEST Anthropic rate-limit snapshot per account, harvested for FREE off the
     // `anthropic-ratelimit-unified-*` response headers of real inference traffic (no probe / zero
@@ -507,7 +508,7 @@ function initDb() {
 }
 initDb();
 
-const clip = (s) => { const t = s == null ? "" : String(s); return t.length > CONTENT_CAP ? t.slice(0, CONTENT_CAP) : t; };
+const clip = (s) => { const t = s == null ? "" : String(s); return (CONTENT_CAP > 0 && t.length > CONTENT_CAP) ? t.slice(0, CONTENT_CAP) : t; };
 
 // Which credential a route uses (for the "which keys" view).
 function keyLabel(route) {
@@ -752,7 +753,8 @@ function recordCall(rec) {
       rec.msgCount == null ? null : rec.msgCount,
       rec.systemKb == null ? null : rec.systemKb,
     );
-    if (++insertsSincePrune >= 200) { insertsSincePrune = 0; try { pruneStmt.run(CFG.logging.retain); } catch {} }
+    // retain=0 → keep every row forever (no pruning on any lane).
+    if (CFG.logging.retain > 0 && ++insertsSincePrune >= 200) { insertsSincePrune = 0; try { pruneStmt.run(CFG.logging.retain); } catch {} }
   } catch (e) { /* never let logging break a request */ }
 }
 
