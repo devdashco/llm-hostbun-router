@@ -120,6 +120,9 @@ const HEADROOM_PROVIDERS = new Set(
 // `provider` is the field name. `lane` was the old word for the same thing and is still accepted
 // on input so existing /data/config.json keeps working.
 const PROVIDERS = ["local", "crazyrouter", "claudecode"];
+// The image provider is deliberately absent from PROVIDERS: it is not a routing target. It is picked
+// by path (`/v1/images/*`), it speaks its own shape, and it bills GPU seconds rather than tokens.
+const IMAGE_MODEL_ID = "imagegen";
 const PROVIDER_SET = new Set(PROVIDERS);
 // Legacy ids → canonical. The retired wrapper's id and `anthropic` named one thing:
 // "serve this from a Claude Max subscription". They collapse into `claudecode`.
@@ -1135,7 +1138,9 @@ async function proxy(req, res, base, opts = {}) {
   const isStream = (up.headers.get("content-type") || "").includes("text/event-stream");
   // Only chat/responses/completions calls carry content worth recording; for those we tee the
   // body (capped) to pull tokens + reply. /v1/models etc. are skipped to keep the log signal high.
-  const recordThis = CFG.logging.enabled && req.method === "POST" && /\/(chat\/completions|responses|completions|messages|chat)$/.test(base_rec.path);
+  // Image generation is billed in GPU time, not tokens, so it carries no `usage` — but an unlogged
+  // call is an unattributable one, and `imagegen` went 100% invisible in the call log until 2026-07-09.
+  const recordThis = CFG.logging.enabled && req.method === "POST" && /\/(chat\/completions|responses|completions|messages|chat|images\/(generations|edits|variations))$/.test(base_rec.path);
 
   // ── translated responses (OpenAI caller, claudecode provider) ──
   // The upstream spoke Anthropic; the caller expects OpenAI. Rewrite the body, and DON'T forward
@@ -1185,11 +1190,15 @@ async function proxy(req, res, base, opts = {}) {
   if (up.body && !up.bodyUsed) {
     const r = Readable.fromWeb(up.body);
     if (recordThis) {
+      // An image reply is multi-MB of base64 with no `usage` and nothing worth reading back. Buffer
+      // none of it (cap 0) — the row is worth having, the payload is not.
+      const isImage = provider === "images";
       const chunks = []; let size = 0;
-      const cap = base_rec.full ? Infinity : CONTENT_CAP + 8192;   // local-dev keeps the full streamed reply
+      const cap = isImage ? 0 : (base_rec.full ? Infinity : CONTENT_CAP + 8192); // local-dev keeps the full streamed reply
       r.on("data", (d) => { if (size < cap) { chunks.push(Buffer.from(d)); size += d.length; } });
       const done = () => {
-        const ex = extractResponseBody(Buffer.concat(chunks), isStream);
+        const ex = isImage ? { usage: null, content: null, stopReason: null }
+                           : extractResponseBody(Buffer.concat(chunks), isStream);
         recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0, usage: ex.usage, respContent: ex.content,
           stopReason: ex.stopReason, error: up.status >= 400 ? `upstream ${up.status}` : null });
       };
@@ -1491,7 +1500,7 @@ async function refreshClaudecodeModels(why) {
 async function mergedModels(res) {
   const local = localModelEntries();
   const { claudecode, crazyrouter } = await upstreamCatalogs();
-  const images = [{ id: "imagegen", object: "model", owned_by: "pbox" }];
+  const images = [{ id: IMAGE_MODEL_ID, object: "model", owned_by: "pbox" }];
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
   res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter] }));
 }
@@ -1627,6 +1636,12 @@ function resolveRoute(model, project) {
   const m = model == null ? "" : String(model);
   const key = m.toLowerCase();
   const pkey = project == null ? "" : String(project).trim().toLowerCase();
+  // `imagegen` is routed by PATH, not by model id. Asking for it on a text endpoint used to fall all
+  // the way through to crazyrouter — the one provider that bills per token — and come back as their
+  // 404. Reject it here, next to the id it names, rather than 200 miles downstream at someone's till.
+  if (key === IMAGE_MODEL_ID)
+    return { provider: "blocked", blocked: true, why: `'${IMAGE_MODEL_ID}' is an image model — POST it to /v1/images/generations, not a chat endpoint`,
+             reason: "imagegen on a text endpoint" };
   if (pkey && CFG.projectRoutes && CFG.projectRoutes[pkey])
     return projectRule(CFG.projectRoutes[pkey], m, `project ${pkey}`);
   if (pkey) {
