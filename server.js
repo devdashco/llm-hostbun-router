@@ -2121,6 +2121,31 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     return sendJson(res, 200, { ok: true, persisted, projectAccounts: pins });
   }
 
+  // Replace ONE account's token. `POST config` assigns claudecodeAccountPool wholesale, so rotating
+  // a single expired token through it means resending every other account's secret — and the panel
+  // never has them, because adminState masks them. This merges, and never echoes the token back.
+  // The pool in /data/config.json is the only copy of these credentials anywhere; there is no backup.
+  if (sub === "accounts/token" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const name = String(p.account || "").trim();
+    const token = String(p.token || "").trim();
+    if (!name || !token) return sendJson(res, 400, { error: "account and token required" });
+    if (!/^sk-ant-oat/.test(token)) return sendJson(res, 400, { error: "expected a Max setup-token (sk-ant-oat…)" });
+    const pool = [...(CFG.claudecodeAccountPool || [])];
+    const i = pool.findIndex((a) => String(a.name).toLowerCase() === name.toLowerCase());
+    if (i < 0) return sendJson(res, 400, { error: `unknown account '${name}'`, accounts: pool.map((a) => a.name) });
+    pool[i] = { ...pool[i], token };
+    CFG.claudecodeAccountPool = pool;
+    CFG.anthropicPool = pool;   // legacy name, kept in sync so a rollback still boots
+    const persisted = persistConfig();
+    // A rotated token means a new session with the org; the cached catalog for it is now suspect.
+    PROBE_CACHE.delete(pool[i].name);
+    console.warn(`[admin] token rotated for account=${pool[i].name} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, { ok: true, persisted, account: pool[i].name });
+  }
+
   // ── consumer registry ──
   // The registry, plus every consumer the log has SEEN that is not in it. That second list is the
   // work queue: it is what would start 403'ing the moment requireRegisteredConsumer is turned on.
