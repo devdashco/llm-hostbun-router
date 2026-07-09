@@ -157,7 +157,18 @@ dependency, the lockfile must be committed or the build fails.
   learns nothing from an exhausted account and keeps reporting its last good reading — usually `0% ·
   allowed`, harvested off a cheap model that still answers. `/admin/api/limits` is a floor, not a
   verdict. `POST /admin/api/claudecode/probe {account}` pings every advertised model and is the only
-  honest source. As of 2026-07-09 **every account serves `claude-haiku-4-5` and 429s everything else.**
+  honest source; `{all:true}` sweeps the pool and the panel's Accounts tab has a button for it.
+  As of 2026-07-09 the pool is nearly dry: **`william`, `kontaktemhpx` and `cmejl3` serve only
+  `claude-haiku-4-5`; `philip`, `emphyx`, `claudemejlto` and `claude2mejlto` serve nothing at all.**
+- **`acct_limits` is keyed by Anthropic org-id, which says nothing about which login it is.** The
+  `account` column (added 2026-07-09 by an idempotent `ALTER` in `initDb`) fixes that, but it is only
+  stamped by live traffic. A cold-started router learns org→account from the
+  `anthropic-organization-id` header on the `fetchAccountModels()` catalog sweep — the one request it
+  makes for an account with no traffic. Break that and every account reports `limits: null` until it
+  happens to serve a call. **`limits: null` is "no reading", not `0%`** — never render them alike.
+- **Per-account spend must join on the name after the colon in `key_label`.** Pre-rename rows say
+  `anthropic:philip` / `wrappy:philip`, current ones say `claudecode:philip`. `GET /admin/api/accounts`
+  uses `split_part(key_label,':',2)` for exactly this reason.
 - **`POST /admin/api/config` REPLACES `projectAccounts`.** Sending one pin deletes the rest. Use
   `POST /admin/api/pins {project,account}` — it merges, and rejects an unknown account name.
 - **Renaming a field renames it in SQL too.** The `lane`→`provider` rename needed an
