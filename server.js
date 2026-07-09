@@ -43,7 +43,7 @@ const { CFG, loadConfig, UI_ROUTES } = require("./src/config");
 const { initDb, primeAcctCacheSoon, recordCall } = require("./src/db");
 const { extractProject, parseConsumer, authenticate, consumerEntry, startKeyUseFlush } = require("./src/identity");
 const { resolveRoute, accountFor, usageVerdict, sleep } = require("./src/routing");
-const { readBody, sendFile, proxy } = require("./src/http");
+const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL } = require("./src/http");
 const { mergedModels, refreshClaudecodeModels, CLAUDECODE_MODEL_REFRESH_MS } = require("./src/claudecode");
 const { handleAdminApi } = require("./src/admin");
 const { PRICES_FILE } = require("./src/pricing");
@@ -71,6 +71,13 @@ const UI_DIR = nodePath.join(nodePath.dirname(ADMIN_FILE), "ui");
 // Config first: every module below reads CFG, and the key index must exist before the first request.
 loadConfig();
 initDb();
+// The identity registry (developers → machines, and projects) lives in Postgres and is projected
+// into CFG. Boot must not BLOCK on a cross-internet DB, so this runs in the background: until it
+// lands, CFG holds the /data/config.json mirror, which is a valid — if possibly stale — registry.
+// A DB that never answers therefore degrades to "last known good", not to "nobody can authenticate".
+require("./src/registry").initRegistry()
+  .then(() => console.log(`[registry] ${Object.keys(CFG.consumers || {}).length} consumer(s) loaded`))
+  .catch((e) => console.error(`[registry] init failed, serving the config mirror: ${e.message}`));
 primeAcctCacheSoon();
 startKeyUseFlush();
 
@@ -115,8 +122,28 @@ const server = http.createServer(async (req, res) => {
       return sendFile(res, ADMIN_FILE, "text/html; charset=utf-8", false);
   }
 
-  if (host.startsWith("docs.") || path === "/docs" || path.startsWith("/docs/") || path === "/docs/")
-    return sendFile(res, DOCS_FILE, "text/html; charset=utf-8", false);
+  // Docs. A docsify site: one shell plus markdown, both served out of DOCS_DIR. It is reachable two
+  // ways — docs.<host> at the root, and /docs/ on the router — so the shell's asset paths are
+  // RELATIVE, and /docs must redirect to /docs/ or `vendor/docsify.js` resolves to /vendor/docsify.js
+  // and the page renders "loading…" forever.
+  if (path === "/docs") {
+    res.writeHead(301, { location: "/docs/" });
+    return res.end();
+  }
+  if (host.startsWith("docs.") || path.startsWith("/docs/")) {
+    const rel = (host.startsWith("docs.") ? path : path.slice("/docs".length)).replace(/^\/+/, "");
+    if (!rel) return sendFile(res, DOCS_FILE, "text/html; charset=utf-8", false);
+    // Allowlisted by extension and shape. `_sidebar.md` needs the leading underscore; nothing here
+    // needs "..", an absolute path, or any other extension.
+    if (!/^[a-z0-9_-]+(\/[a-z0-9_.-]+)?\.(md|js|css)$/i.test(rel)) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      return res.end("not found");
+    }
+    const type = rel.endsWith(".css") ? "text/css; charset=utf-8"
+      : rel.endsWith(".js") ? "text/javascript; charset=utf-8"
+      : "text/markdown; charset=utf-8";
+    return sendFile(res, nodePath.join(DOCS_DIR, rel), type, false);
+  }
   if (path === "/prices.json" || path === "/prices")
     return sendFile(res, PRICES_FILE, "application/json", true);
   if (req.method === "OPTIONS") {

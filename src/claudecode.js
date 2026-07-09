@@ -6,7 +6,7 @@
 // not a verdict. probeAccount() pings every advertised id: 404 = the model does not exist, 429 = it
 // exists and the subscription is exhausted.
 const TR = require("../translate");
-const { CFG, persistConfig, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
+const { CFG, persistConfig, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
 const { ORG_OF_ACCOUNT, PROBE_CACHE } = require("./db");
 const { localTarget } = require("./routing");
 

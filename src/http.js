@@ -11,8 +11,15 @@ const fs = require("node:fs");
 const { Readable } = require("node:stream");
 const TR = require("../translate");
 const { CFG } = require("./config");
-const { clip, recordCall, recordLimits } = require("./db");
+const { clip, recordCall, recordLimits, CONTENT_CAP } = require("./db");
 const { accountFor, isGated, resolveRoute } = require("./routing");
+
+// Hop-by-hop headers: meaningful to ONE connection, never forwarded. Dropped by the split; without
+// them buildHeaders() throws ReferenceError and every proxied request 502s.
+const HOP_REQ = new Set(["host", "connection", "content-length", "accept-encoding",
+  "keep-alive", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
+const HOP_RES = new Set(["connection", "content-length", "content-encoding",
+  "transfer-encoding", "keep-alive", "te", "trailer", "upgrade"]);
 const {
   keyLabel, extractReqMeta, extractRequestContent, extractReqParams,
   normalizeUsage, extractResponseBody, shipError, applyLocalThinkingDefault, isChatCompletions,
@@ -458,5 +465,5 @@ const mask = (s) => { const t = String(s || ""); return !t ? "" : t.length <= 6 
 
 module.exports = {
   readBody, sendFile, sendJson, mask, buildHeaders, proxy, jsonEnforce, wantsJsonFormat,
-  hasImageContent, headroomCompress,
+  hasImageContent, headroomCompress, HEADROOM_URL,
 };

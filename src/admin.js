@@ -269,8 +269,8 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     if (req.method === "POST") await refreshClaudecodeModels(`admin ip=${ip}`);
     return sendJson(res, 200, {
       advertised: CFG.claudecodeModels,
-      seed: [...CLAUDECODE_MODEL_SEED],
-      aliases: [...CLAUDECODE_MODEL_ALIASES],
+      seed: [...C.CLAUDECODE_MODEL_SEED],
+      aliases: [...C.CLAUDECODE_MODEL_ALIASES],
       source: claudecodeCatalog.source,
       checkedAt: claudecodeCatalog.ts || null,
       sweptAccounts: claudecodeCatalog.accounts || [],
@@ -872,7 +872,7 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
         // attach the effective limit + live usage% over the limit's own window (not the stats window)
         const lim = r.project && r.project !== "(none)" ? limitFor(r.project) : null;
         if (lim) {
-          const u = await projectUsage(r.project, WINDOW_MS[lim.window] || WINDOW_MS["24h"]);
+          const u = await projectUsage(r.project, C.WINDOW_MS[lim.window] || C.WINDOW_MS["24h"]);
           const pt = lim.tokens > 0 ? u.tokens / lim.tokens : 0, pc = lim.calls > 0 ? u.calls / lim.calls : 0;
           r.limit = { window: lim.window, tokens: lim.tokens, calls: lim.calls, hard: lim.hard, warnPct: lim.warnPct, slowPct: lim.slowPct };
           r.limitUsed = { tokens: u.tokens, calls: u.calls };

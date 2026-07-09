@@ -5,7 +5,7 @@
 //     different provider hides both the cost and the truth.
 //   • One project, one account. accountFor() never rotates: rotation blows the per-org prompt
 //     cache (~12x cost) and makes "who spent this?" unanswerable after the fact.
-const { CFG, normProvider, isImageModel } = require("./config");
+const { CFG, normProvider, isImageModel, WINDOW_MS } = require("./config");
 const { parseConsumer } = require("./identity");
 const { dbRows, ACCT_CACHE } = require("./db");
 
