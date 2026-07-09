@@ -25,7 +25,8 @@ billed to a guess. There is no fallback: a 429 or a 5xx reaches the caller uncha
 ## Live config
 
 Routing is driven by a mutable `CFG` seeded from env and overlaid with `/data/config.json`
-(persistent volume). Edit everything live from the password-gated **`/admin`** UI — force a
+(persistent volume). Edit everything live from the password-gated panel at the site **root `/`** (the old `/admin`
+path 308s there) — force a
 model globally, override any incoming model to any provider, set a crazyrouter policy
 (open / allowlist / off), default route, JSON enforcement, swap keys, view the SQLite call
 log + usage stats. Changes apply instantly (no redeploy) and survive restarts.
@@ -38,8 +39,9 @@ migrated, so old `config.json` files keep working.
 
 - `CRAZYROUTER_KEY` — crazyrouter cloud key (required; never committed)
 - `ANTHROPIC_BASE` — claudecode upstream, default `https://api.anthropic.com`
-- `ANTHROPIC_POOL` — JSON seed for the account pool `[{name,org,token}]` (normally set in `/admin`)
-- `CLAUDECODE_MODELS` — comma-separated model ids to advertise for `claudecode` (else set in `/admin`)
+- `ANTHROPIC_POOL` — JSON seed for the account pool `[{name,org,token}]` (normally set in the panel)
+- `CLAUDECODE_MODELS` — comma-separated ids to advertise for `claudecode`. Rarely needed: the router
+  seeds a known-good list and self-heals from `api.anthropic.com/v1/models` at boot + every 6h.
 - `DEFAULT_ACCOUNT` — account for projects with no pin. Empty (default) = refuse with 403
 - `CRAZYROUTER_BASE` (or `CRAZY_BASE`) — default `https://crazyrouter.com`
 - `LOCAL_BASE` — the pbox llama.cpp server

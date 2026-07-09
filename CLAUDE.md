@@ -11,7 +11,9 @@ refs may still linger in sibling repos.
 
 - `server.js` — the whole router: routing, live `CFG`, admin API, Postgres call log.
 - `translate.js` — OpenAI ↔ Anthropic translation. `translate.test.js` (`node translate.test.js`).
-- `admin/` — password-gated SPA (Preact + htm, vendored inline, no CDN). pw `ddash`.
+- `admin/` — password-gated SPA (Preact + htm, vendored inline, no CDN). pw `ddash`. Served at the
+  site **root** `/` — there is no `/admin` page (it 308s to `/`). The JSON API keeps the
+  `/admin/api/*` prefix because `claudectl` hardcodes it; `/api/*` is the alias the SPA itself uses.
 - `docs/` — static docs, served at `docs.llm.hostbun.cc`.
 - `headroom-svc/` — optional Python compression sidecar. Separate Coolify app, **same repo**
   (base dir `headroom-svc`). OFF unless `HEADROOM_URL` is set. **Never** applied to `claudecode` —
@@ -39,7 +41,7 @@ the rename. Old call-log rows carry `provider='anthropic'`; new ones carry `'cla
 and the retention prune must match **both**.
 
 Routing lives in a mutable `CFG` seeded from env, overlaid with `/data/config.json` on a persistent
-volume, editable live from `/admin`. Changes apply without a redeploy.
+volume, editable live from the panel at `/`. Changes apply without a redeploy.
 
 ## Invariants — do not "improve" these away
 
@@ -130,14 +132,26 @@ dependency, the lockfile must be committed or the build fails.
 - **`defaultAccount` quietly voids the "never bill a guess" invariant.** `accountFor()` is
   `pins[project] || defaultAccount`, so an unpinned *or misspelled* project bills the default instead
   of 403'ing. The 403 works today only because `defaultAccount` is empty in prod. Leave it empty.
-- **The admin UI has no accounts or project-pin panel.** You cannot pin a project from `/admin` today,
-  which is why `promopilot` is stuck at 403.
+- **`claudecodeModels` is no longer hand-typed.** `CLAUDECODE_MODEL_SEED` in `server.js` is a floor;
+  `refreshClaudecodeModels()` reconciles it against `api.anthropic.com/v1/models` at boot and every 6h,
+  and the config load *unions* rather than overwrites. **The catalog is per-account** — `philip` lists
+  `claude-opus-4-1`, `cmejl3` 404s it — so an advertised id can still be absent on the pinned account.
+- **A 429 from Anthropic carries no `anthropic-ratelimit-*` headers.** The headroom harvest therefore
+  learns nothing from an exhausted account and keeps reporting its last good reading — usually `0% ·
+  allowed`, harvested off a cheap model that still answers. `/admin/api/limits` is a floor, not a
+  verdict. `POST /admin/api/claudecode/probe {account}` pings every advertised model and is the only
+  honest source. As of 2026-07-09 **every account serves `claude-haiku-4-5` and 429s everything else.**
+- **`POST /admin/api/config` REPLACES `projectAccounts`.** Sending one pin deletes the rest. Use
+  `POST /admin/api/pins {project,account}` — it merges, and rejects an unknown account name.
 - **Renaming a field renames it in SQL too.** The `lane`→`provider` rename needed an
   `ALTER TABLE calls ADD COLUMN provider` + backfill from `lane`; without it `CREATE TABLE IF NOT
   EXISTS` no-ops on the existing prod table, the provider index throws, `initDb()` catches, and
   **call logging silently turns itself off while boot still looks clean**.
 
 ## Open work
+
+~~2. Accounts + project-pin admin API and UI panel.~~ **Done 2026-07-09** — `POST /admin/api/pins`
+   plus a pin editor in the panel. `promopilot` is pinned and serving.
 
 1. **Per-project API keys.** `Authorization: Bearer sk-llm-<project>-…` becomes the identity *and*
    the lock, in the one field every OpenAI client already sends. Closes the auth hole and removes the
