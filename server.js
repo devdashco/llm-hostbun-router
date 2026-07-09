@@ -48,6 +48,20 @@ process.on("unhandledRejection", (err) => {
 const PORT = parseInt(process.env.PORT || "80", 10);
 const DOCS_FILE = process.env.DOCS_FILE || "/srv/docs/index.html";
 const ADMIN_FILE = process.env.ADMIN_FILE || "/srv/admin/index.html";
+// Every model `GET api.anthropic.com/v1/models` returned on 2026-07-09, oldest last.
+// This is a FLOOR, not the source of truth: refreshClaudecodeModels() overwrites CFG from the
+// live Anthropic catalog at boot and every 6h, so a new id ships without a deploy. The seed is
+// what keeps /v1/models from advertising NOTHING when config.json is empty (the old default) or
+// Anthropic is unreachable at boot — which is how the catalog silently lost four ids.
+const CLAUDECODE_MODEL_SEED = Object.freeze([
+  "claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6",
+  "claude-opus-4-6", "claude-opus-4-5-20251101", "claude-haiku-4-5-20251001", "claude-sonnet-4-5-20250929",
+]);
+const CLAUDECODE_MODEL_REFRESH_MS = 6 * 3600 * 1000;
+// Client-side routes of the control panel (its NAV slugs). Kept in sync with admin/index.html by
+// hand — a missing entry only costs a hard-refresh 404 on that tab, never a mis-served API path.
+const UI_ROUTES = new Set(["/overview", "/calls", "/convos", "/stats", "/accounts", "/routing",
+  "/models", "/crazyrouter", "/secrets"].map((s) => s));
 const PRICES_FILE = process.env.PRICES_FILE || "/srv/prices.json";
 const CONFIG_FILE = process.env.CONFIG_FILE || "/data/config.json";
 // Call log lives in the `llmrouter` Postgres, NOT on the container's volume. Unset ⇒ logging off;
@@ -150,9 +164,13 @@ function envDefaults() {
     imageToken: process.env.IMAGE_TOKEN || "",
     // models starting with this prefix (lowercased) are served by the claudecode provider.
     claudePrefix: process.env.CLAUDE_PREFIX || process.env.WRAPPY_PREFIX || "claude",
-    // claudecodeModels: the ids /v1/models advertises for the claudecode provider. Config, not
-    // code — Anthropic ships new ids without asking us. Empty by default; set them in /admin.
-    claudecodeModels: (process.env.CLAUDECODE_MODELS || "").split(",").map((x) => x.trim()).filter(Boolean),
+    // claudecodeModels: the ids /v1/models advertises for the claudecode provider. Anthropic ships
+    // new ids without asking us, so this self-heals from their catalog (refreshClaudecodeModels).
+    // Seeded rather than empty: an empty list advertises no Claude at all, and nothing complains.
+    claudecodeModels: (() => {
+      const env = (process.env.CLAUDECODE_MODELS || "").split(",").map((x) => x.trim()).filter(Boolean);
+      return env.length ? env : [...CLAUDECODE_MODEL_SEED];
+    })(),
     // Bearer gate for the uncensored model(s). When oblitToken is set, requests routed to a model
     // id listed in gatedModels require Authorization: Bearer <oblitToken> (or x-api-key). Empty
     // token = open. gemma + crazyrouter stay open so fb-bot/promopilot are unaffected.
@@ -279,8 +297,13 @@ function mergeConfig(base, saved) {
         .map((a) => ({ name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), token: a.token.trim() }));
     }
   }
-  if (Array.isArray(saved.claudecodeModels))
-    c.claudecodeModels = saved.claudecodeModels.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
+  // UNION, not replace. The live /data/config.json predates four of these ids, and a plain
+  // overwrite would silently un-advertise them on every boot — the exact way the catalog drifted
+  // to five. The seed is a floor; refreshClaudecodeModels() then reconciles against Anthropic.
+  if (Array.isArray(saved.claudecodeModels)) {
+    const savedIds = saved.claudecodeModels.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
+    c.claudecodeModels = [...new Set([...savedIds, ...CLAUDECODE_MODEL_SEED])];
+  }
   if (typeof saved.claudePrefix === "string") c.claudePrefix = saved.claudePrefix;
   else if (typeof saved.wrappyPrefix === "string") c.claudePrefix = saved.wrappyPrefix;
   for (const k of ["oblitToken", "adminPassword"])
@@ -1247,9 +1270,52 @@ async function upstreamCatalogs() {
     const cj = await c.json();
     crazyrouter = ((cj && cj.data) || []).map((m) => ({ ...m, owned_by: "crazyrouter" }));
   } catch { /* crazyrouter down — skip */ }
-  // Model ids are CONFIG, never code. Empty list = nothing advertised; add them in /admin.
-  const claudecode = (CFG.claudecodeModels || []).map((id) => ({ id, object: "model", owned_by: "claudecode" }));
+  // Ids come from Anthropic (refreshClaudecodeModels), floored by CLAUDECODE_MODEL_SEED.
+  const meta = new Map((claudecodeCatalog.models || []).map((m) => [m.id, m]));
+  const claudecode = (CFG.claudecodeModels || []).map((id) => {
+    const m = meta.get(id);
+    return { id, object: "model", owned_by: "claudecode", ...(m && m.display_name ? { display_name: m.display_name } : {}) };
+  });
   return { claudecode, crazyrouter };
+}
+
+// ── claudecode catalog, straight from Anthropic ──────────────────────────────
+// `claudecodeModels` used to be a hand-typed list in config.json. It drifted: Anthropic served 9
+// ids while we advertised 5. Nothing broke loudly — the four missing ids just 400'd as "not
+// routable", which reads like a caller typo. So we ask the source instead.
+//
+// Any pooled account can read the catalog (it's not account-scoped), so we walk the pool until one
+// answers: an exhausted account still lists models, it only 429s on /v1/messages. A failed refresh
+// is a no-op, never a downgrade — CFG keeps whatever it already had.
+let claudecodeCatalog = { source: "seed", ts: 0, account: null, models: [], error: null };
+
+async function fetchAnthropicModels() {
+  for (const a of CFG.claudecodeAccountPool || []) {
+    try {
+      const r = await fetch(`${CFG.bases.claudecode}/v1/models?limit=100`,
+        { headers: TR.anthropicHeaders(a.token), signal: AbortSignal.timeout(8000) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      const models = (j.data || []).filter((m) => m && typeof m.id === "string" && m.id.trim());
+      if (models.length) return { models, account: a.name };
+    } catch { /* try the next account */ }
+  }
+  return null;
+}
+
+async function refreshClaudecodeModels(why) {
+  const hit = await fetchAnthropicModels();
+  if (!hit) {
+    claudecodeCatalog = { ...claudecodeCatalog, error: "no account could read api.anthropic.com/v1/models" };
+    console.warn(`[models] claudecode refresh (${why}) FAILED — keeping ${CFG.claudecodeModels.length} known ids`);
+    return claudecodeCatalog;
+  }
+  // Anthropic is authoritative, but never let a truncated page shrink us below the seed.
+  const live = hit.models.map((m) => m.id);
+  CFG.claudecodeModels = [...new Set([...live, ...CLAUDECODE_MODEL_SEED])];
+  claudecodeCatalog = { source: "anthropic", ts: Date.now(), account: hit.account, models: hit.models, error: null };
+  console.log(`[models] claudecode refresh (${why}) via ${hit.account}: ${live.length} live → advertising ${CFG.claudecodeModels.length}`);
+  return claudecodeCatalog;
 }
 
 async function mergedModels(res) {
@@ -1565,9 +1631,9 @@ async function adminTest(model, prompt, maxTokens) {
   } catch (e) { return { ok: false, status: 0, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, error: e.message }; }
 }
 
-async function handleAdminApi(req, res, path) {
+async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
-  const sub = path.slice("/admin/api/".length);
+  const sub = path.slice(prefix.length);
 
   // login is the only unauthenticated endpoint
   if (sub === "login" && req.method === "POST") {
@@ -1578,12 +1644,18 @@ async function handleAdminApi(req, res, path) {
     const ok = pw.length === CFG.adminPassword.length &&
       (() => { try { return crypto.timingSafeEqual(Buffer.from(pw), Buffer.from(CFG.adminPassword)); } catch { return false; } })();
     if (!ok) { console.error(`[admin] bad login ip=${ip}`); return sendJson(res, 401, { error: "wrong password" }); }
-    const cookie = `${COOKIE}=${makeSession()}; HttpOnly; Secure; SameSite=Lax; Path=/admin; Max-Age=${7 * 24 * 3600}`;
+    // Path=/ — NOT /admin. The panel is served from the root and calls /api/*, so a cookie scoped
+    // to /admin is never sent back and the login silently loops. `Secure` is set unconditionally:
+    // prod is always behind TLS, and a cookie that survives plaintext is worse than a local dev
+    // annoyance (use SESSION_INSECURE=1 to test over http on localhost).
+    const secure = process.env.SESSION_INSECURE === "1" ? "" : " Secure;";
+    const cookie = `${COOKIE}=${makeSession()}; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=${7 * 24 * 3600}`;
     console.log(`[admin] login ok ip=${ip}`);
     return sendJson(res, 200, { ok: true }, { "set-cookie": cookie });
   }
   if (sub === "logout") {
-    return sendJson(res, 200, { ok: true }, { "set-cookie": `${COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/admin; Max-Age=0` });
+    const secure = process.env.SESSION_INSECURE === "1" ? "" : " Secure;";
+    return sendJson(res, 200, { ok: true }, { "set-cookie": `${COOKIE}=; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=0` });
   }
 
   if (!isAuthed(req)) return sendJson(res, 401, { error: "unauthorized" });
@@ -1639,6 +1711,77 @@ async function handleAdminApi(req, res, path) {
     CFG = envDefaults();
     console.log(`[admin] config reset to env defaults ip=${ip}`);
     return sendJson(res, 200, { ok: true, state: adminState() });
+  }
+
+  // The Claude catalog as Anthropic reports it, plus when we last asked and via which account.
+  // GET is cached (whatever the last refresh found); POST forces a round trip.
+  if (sub === "claudecode/models" && (req.method === "GET" || req.method === "POST")) {
+    if (req.method === "POST") await refreshClaudecodeModels(`admin ip=${ip}`);
+    return sendJson(res, 200, {
+      advertised: CFG.claudecodeModels,
+      seed: [...CLAUDECODE_MODEL_SEED],
+      source: claudecodeCatalog.source,
+      checkedAt: claudecodeCatalog.ts || null,
+      viaAccount: claudecodeCatalog.account,
+      error: claudecodeCatalog.error,
+      models: (claudecodeCatalog.models || []).map((m) => ({ id: m.id, display_name: m.display_name, created_at: m.created_at })),
+    });
+  }
+
+  // Which advertised models does an account ACTUALLY serve? The catalog lists every model the org
+  // can see; the subscription decides which ones answer. Those disagree — an exhausted Max plan
+  // lists Opus and 429s it. Worse, a 429 carries no anthropic-ratelimit-* headers, so the headroom
+  // harvest learns nothing from exactly the calls that matter and Accounts renders a cheerful 0%.
+  // One max_tokens:1 ping per model is the only honest answer. ~9 pings, a few tokens each.
+  if (sub === "claudecode/probe" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch {}
+    const pool = CFG.claudecodeAccountPool || [];
+    const acct = p.account ? pool.find((a) => a.name.toLowerCase() === String(p.account).trim().toLowerCase()) : pool[0];
+    if (!acct) return sendJson(res, 400, { error: "no such account", accounts: pool.map((a) => a.name) });
+    const ids = CFG.claudecodeModels || [];
+    const results = await Promise.all(ids.map(async (id) => {
+      const t0 = Date.now();
+      try {
+        const r = await fetch(`${CFG.bases.claudecode}/v1/messages`, {
+          method: "POST", headers: TR.anthropicHeaders(acct.token), signal: AbortSignal.timeout(20000),
+          body: JSON.stringify({ model: id, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+        });
+        let errType = null;
+        if (!r.ok) { try { errType = ((await r.json()).error || {}).type || null; } catch {} }
+        return { id, status: r.status, ok: r.ok, error: errType, ms: Date.now() - t0 };
+      } catch (e) { return { id, status: 0, ok: false, error: e.message, ms: Date.now() - t0 }; }
+    }));
+    const usable = results.filter((r) => r.ok).map((r) => r.id);
+    console.log(`[models] probe ${acct.name}: ${usable.length}/${ids.length} usable (${usable.join(",") || "none"})`);
+    return sendJson(res, 200, { account: acct.name, checkedAt: Date.now(), usable, results });
+  }
+
+  // Pin / unpin ONE project without resending the whole map. `POST config` assigns
+  // projectAccounts wholesale, so a caller that sends {bluebut:"x"} silently deletes every other
+  // pin. This endpoint is the safe door: it merges, and it refuses an unknown account outright
+  // rather than writing a pin that resolves to nothing and 403s at request time.
+  if (sub === "pins" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const project = String(p.project || "").trim().toLowerCase();
+    if (!project) return sendJson(res, 400, { error: "project required" });
+    const pins = { ...(CFG.projectAccounts || CFG.consumerAccounts || {}) };
+    if (p.account === null || p.account === "") {
+      delete pins[project];
+    } else {
+      const account = String(p.account || "").trim();
+      const known = (CFG.claudecodeAccountPool || []).some((a) => a.name.toLowerCase() === account.toLowerCase());
+      if (!known) return sendJson(res, 400, { error: `unknown account '${account}'`, accounts: (CFG.claudecodeAccountPool || []).map((a) => a.name) });
+      pins[project] = account;
+    }
+    CFG.projectAccounts = pins;
+    CFG.consumerAccounts = pins;
+    const persisted = persistConfig();
+    console.log(`[admin] pin ${project} -> ${pins[project] || "(removed)"} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, { ok: true, persisted, projectAccounts: pins });
   }
 
   if (sub === "health" && req.method === "GET") {
@@ -1914,12 +2057,28 @@ const server = http.createServer(async (req, res) => {
   const host = (req.headers.host || "").toLowerCase();
   const path = (req.url || "/").split("?")[0];
 
-  // Admin (only on the main host, never docs.*)
+  // The control-plane UI (only on the main host, never docs.*).
+  //
+  // There is no /admin page any more — the site root IS the panel, and the whole of it sits behind
+  // the password (the SPA renders <Login/> until /api/state stops 401'ing). /admin* survives only
+  // as a 308 to /, so old bookmarks and the deploy's health check don't 404.
+  //
+  // The JSON API keeps its /admin/api/* prefix on purpose: claudectl's proxy_* tools hardcode those
+  // paths (see claudectl/server/claudectl_server.py). /api/* is the new alias; both hit the same
+  // handler, so the rename can happen on claudectl's schedule, not ours.
   if (!host.startsWith("docs.")) {
-    // main page IS the admin panel — root serves it directly (no need to type /admin)
-    if (path === "/" || path === "/admin" || path === "/admin/") return sendFile(res, ADMIN_FILE, "text/html; charset=utf-8", false);
-    if (path.startsWith("/admin/api/")) return handleAdminApi(req, res, path);
-    if (path.startsWith("/admin/")) return sendFile(res, ADMIN_FILE, "text/html; charset=utf-8", false);
+    if (path.startsWith("/admin/api/")) return handleAdminApi(req, res, path, "/admin/api/");
+    if (path.startsWith("/api/") && !path.startsWith("/api/v1/") && path !== "/api/pricing")
+      return handleAdminApi(req, res, path, "/api/");
+    if (path === "/admin" || path.startsWith("/admin/")) {
+      res.writeHead(308, { location: "/" });
+      return res.end();
+    }
+    // The SPA pushes /calls, /accounts, … so those must serve the shell on a hard refresh.
+    // Enumerated, never a catch-all: a catch-all at the root would shadow /v1/*, /local/*, and
+    // every future inference path, turning a routing bug into "the model endpoint returns HTML".
+    if (req.method === "GET" && (path === "/" || UI_ROUTES.has(path.replace(/\/$/, ""))))
+      return sendFile(res, ADMIN_FILE, "text/html; charset=utf-8", false);
   }
 
   if (host.startsWith("docs.") || path === "/docs" || path.startsWith("/docs/") || path === "/docs/")
@@ -2093,7 +2252,14 @@ const server = http.createServer(async (req, res) => {
   return dispatch();
 });
 
-server.listen(PORT, () => console.log(
-  `llm-gateway on :${PORT} | providers: local=${CFG.bases.local || "off"} claudecode=${CFG.bases.claudecode}`
-  + ` (${(CFG.claudecodeAccountPool || []).length} accounts) crazyrouter=${CFG.bases.crazyrouter}`
-  + ` | key=${CFG.crazyrouterKey ? "set" : "MISSING"} admin=/admin`));
+server.listen(PORT, () => {
+  console.log(
+    `llm-gateway on :${PORT} | providers: local=${CFG.bases.local || "off"} claudecode=${CFG.bases.claudecode}`
+    + ` (${(CFG.claudecodeAccountPool || []).length} accounts) crazyrouter=${CFG.bases.crazyrouter}`
+    + ` | key=${CFG.crazyrouterKey ? "set" : "MISSING"} | claude models=${CFG.claudecodeModels.length} (seed)`
+    + ` | ui=/`);
+  // Reconcile the Claude catalog against Anthropic. Fire-and-forget: boot must not block on it,
+  // and a failure leaves the seed in place rather than an empty list.
+  refreshClaudecodeModels("boot").catch((e) => console.error(`[models] boot refresh: ${e.message}`));
+  setInterval(() => refreshClaudecodeModels("interval").catch(() => {}), CLAUDECODE_MODEL_REFRESH_MS).unref();
+});
