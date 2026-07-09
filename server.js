@@ -310,6 +310,10 @@ function envDefaults() {
     // config change. That is what keeps this sustainable.
     //   consumers[name] = { kind, owner?, note?, keys: [{id, hash, created, lastUsed, revoked}] }
     consumers: {},
+    // Legacy caller name -> canonical `<consumer>[:<job>]`. Lets one machine that has called itself
+    // three different things over its life resolve to one consumer, without touching any caller.
+    // See normalizeConsumerPath(). Registered consumers must be the CANONICAL names.
+    consumerAliases: {},
     // When on, an inference call whose consumer is not in the registry is refused 403. Ships OFF so
     // that merely deploying this code cannot black out an unregistered caller; turn it on once the
     // registry is seeded. `requireProject` only checks a name was SUPPLIED — this checks it is a name
@@ -393,6 +397,15 @@ function mergeConfig(base, saved) {
   if (typeof saved.requireRegisteredConsumer === "boolean") c.requireRegisteredConsumer = saved.requireRegisteredConsumer;
   if (saved.auth && typeof saved.auth === "object" && ["off", "optional", "required"].includes(saved.auth.mode))
     c.auth = { mode: saved.auth.mode };
+  if (saved.consumerAliases && typeof saved.consumerAliases === "object" && !Array.isArray(saved.consumerAliases)) {
+    c.consumerAliases = {};
+    for (const [k, v] of Object.entries(saved.consumerAliases)) {
+      const from = String(k || "").trim().toLowerCase(), to = String(v || "").trim().toLowerCase();
+      // An alias whose source contains ':' would never match — normalizeConsumerPath keys on the
+      // consumer half only. And an alias to itself is a silent infinite no-op; drop both.
+      if (from && to && !from.includes(":") && from !== to) c.consumerAliases[from] = to;
+    }
+  }
   if (saved.consumers && typeof saved.consumers === "object" && !Array.isArray(saved.consumers)) {
     c.consumers = {};
     for (const [k, v] of Object.entries(saved.consumers)) {
@@ -755,7 +768,27 @@ function extractProject(req, bodyBuf) {
       p = j.project || (j.metadata && j.metadata.project) || j.user || "";
     } catch { /* not json */ }
   }
-  return String(p || "").trim().toLowerCase().slice(0, 64);
+  return normalizeConsumerPath(String(p || "").trim().toLowerCase().slice(0, 64));
+}
+
+// Callers name themselves, and over months they named themselves inconsistently: the same box
+// arrived as `pmac` (a curl script) and `pmac-claude` (its Claude Code), and an unconfigured Claude
+// Code sends its own HOSTNAME (`macbook-pro-som-tillhor-william-claude`). Those are one machine with
+// several clients — a consumer and its jobs — not several consumers.
+//
+// The alias map folds a legacy name onto its canonical `<consumer>:<job>` path at the door, so no
+// caller has to change and the whole history keeps resolving. Aliases apply to the CONSUMER half
+// only; a job the caller supplied always wins over the one the alias implies, because the caller
+// knows which workload it is running and the map does not.
+function normalizeConsumerPath(p) {
+  if (!p) return p;
+  const aliases = CFG.consumerAliases || {};
+  const { consumer, job } = parseConsumer(p);
+  const target = aliases[consumer];
+  if (!target) return p;
+  const t = parseConsumer(String(target).trim().toLowerCase());
+  const finalJob = job || t.job;   // explicit job beats the alias's implied one
+  return finalJob ? `${t.consumer}:${finalJob}` : t.consumer;
 }
 
 // A caller's identity is a path, not a flat name: `<consumer>[:<job>]`. `promopilot:generatetext`
@@ -2250,6 +2283,36 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     return sendJson(res, 200, { ok: true, persisted, account: pool[i].name });
   }
 
+  // Merge one alias. `POST config` assigns consumerAliases wholesale (same hazard as pins/routes).
+  // Send {to:null} to drop one.
+  if (sub === "consumers/alias" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const from = String(p.from || "").trim().toLowerCase();
+    if (!from) return sendJson(res, 400, { error: "from required" });
+    if (from.includes(":")) return sendJson(res, 400, { error: "alias the consumer, not a job path — drop everything after the ':'" });
+    const aliases = { ...(CFG.consumerAliases || {}) };
+    if (p.to === null || p.to === "") {
+      delete aliases[from];
+    } else {
+      const to = String(p.to || "").trim().toLowerCase();
+      if (!to) return sendJson(res, 400, { error: "to required" });
+      if (to === from) return sendJson(res, 400, { error: "an alias to itself does nothing" });
+      // The target's CONSUMER must exist, or the alias resolves to a name that 403s under the
+      // registration gate — an outage disguised as a cleanup.
+      const t = parseConsumer(to);
+      if (!Object.prototype.hasOwnProperty.call(CFG.consumers || {}, t.consumer))
+        return sendJson(res, 400, { error: `alias target consumer '${t.consumer}' is not registered`, hint: "register it first" });
+      if (aliases[t.consumer]) return sendJson(res, 400, { error: `'${t.consumer}' is itself an alias — chains are not resolved` });
+      aliases[from] = to;
+    }
+    CFG.consumerAliases = aliases;
+    const persisted = persistConfig();
+    console.log(`[admin] alias ${from} -> ${aliases[from] || "(removed)"} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, { ok: true, persisted, consumerAliases: aliases });
+  }
+
   // ── consumer registry ──
   // The registry, plus every consumer the log has SEEN that is not in it. That second list is the
   // work queue: it is what would start 403'ing the moment requireRegisteredConsumer is turned on.
@@ -2274,6 +2337,7 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
       .map((r) => ({ name: r.consumer, calls: r.calls, tokens: Number(r.tokens), jobs: r.jobs, lastTs: Number(r.last_ts) }));
     return sendJson(res, 200, {
       registered, unregistered, enforcing: !!CFG.requireRegisteredConsumer,
+      consumerAliases: CFG.consumerAliases || {},
       authMode: (CFG.auth && CFG.auth.mode) || "optional",
       // Flipping auth to "required" 401s every consumer holding no key. Name them, so the panel can
       // refuse to do it blind rather than discovering it from the error rate.
