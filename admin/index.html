@@ -298,7 +298,7 @@ function Overview(){
   <${Card}>
     <div class="flex" style="justify-content:space-between"><h3 style="margin:0">Recent calls <small class="hint">— newest first · click to open</small></h3><button class="ghost sm" onClick=${()=>load()}>↻</button></div>
     <div style="overflow:auto"><table>
-      <tr><th>when</th><th>project</th><th>model</th><th>lane</th><th>status</th><th>lat · tok</th></tr>
+      <tr><th>when</th><th>project</th><th>model</th><th>lane</th><th>status</th><th>lat · tok</th><th>ip</th></tr>
       ${(recent||[]).length? (recent||[]).map(r=>html`
         <tr class="click" onClick=${()=>openCall(r.id)}>
           <td class="mono mut" style="font-size:12px;white-space:nowrap" title=${fmtTime(r.ts)}>${ago(r.ts)} ago</td>
@@ -307,7 +307,8 @@ function Overview(){
           <td><${LanePill} lane=${r.lane}/></td>
           <td><${StatusPill} status=${r.status} error=${r.error}/></td>
           <td class="mono" style="font-size:12px">${fmtMs(r.duration_ms)} · ${r.total_tokens??'—'}t</td>
-        </tr>`) : html`<tr><td colspan="6" class="mut">no calls logged yet</td></tr>`}
+          <td class="mono mut" style="font-size:11px;white-space:nowrap" title=${(r.ua||'')}>${r.ip||'—'}</td>
+        </tr>`) : html`<tr><td colspan="7" class="mut">no calls logged yet</td></tr>`}
     </table></div>
   </${Card}>
   <div class="grid">
