@@ -57,6 +57,20 @@ const CLAUDECODE_MODEL_SEED = Object.freeze([
   "claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6",
   "claude-opus-4-6", "claude-opus-4-5-20251101", "claude-haiku-4-5-20251001", "claude-sonnet-4-5-20250929",
 ]);
+// Undated aliases that Anthropic SERVES but does not LIST. `claude-haiku-4-5` is the id bluebut and
+// every other caller actually sends, and until now /v1/models never mentioned it — a client that
+// enumerated our catalog could not find the one model that works. Requests route on the `claude`
+// prefix, not on this list, so they always worked; they were just invisible.
+//
+// Verified one id at a time against api.anthropic.com (2026-07-09), NOT derived by stripping the
+// date: `claude-opus-4-1` 404s while `claude-opus-4-1-20250805` serves, and `claude-opus-4-8-20260528`
+// 404s while the undated `claude-opus-4-8` serves. The mapping is not mechanical. Re-verify with
+// POST /admin/api/claudecode/probe before adding one — a 404 here advertises a model that does not exist.
+const CLAUDECODE_MODEL_ALIASES = Object.freeze([
+  "claude-haiku-4-5",    // 200 on a live account
+  "claude-sonnet-4-5",   // 429 = exists, quota-dry
+  "claude-opus-4-5",     // 429 = exists, quota-dry
+]);
 const CLAUDECODE_MODEL_REFRESH_MS = 6 * 3600 * 1000;
 // Client-side routes of the control panel (its NAV slugs). Kept in sync with admin/index.html by
 // hand — a missing entry only costs a hard-refresh 404 on that tab, never a mis-served API path.
@@ -169,7 +183,7 @@ function envDefaults() {
     // Seeded rather than empty: an empty list advertises no Claude at all, and nothing complains.
     claudecodeModels: (() => {
       const env = (process.env.CLAUDECODE_MODELS || "").split(",").map((x) => x.trim()).filter(Boolean);
-      return env.length ? env : [...CLAUDECODE_MODEL_SEED];
+      return env.length ? env : [...CLAUDECODE_MODEL_SEED, ...CLAUDECODE_MODEL_ALIASES];
     })(),
     // Bearer gate for the uncensored model(s). When oblitToken is set, requests routed to a model
     // id listed in gatedModels require Authorization: Bearer <oblitToken> (or x-api-key). Empty
@@ -302,7 +316,7 @@ function mergeConfig(base, saved) {
   // to five. The seed is a floor; refreshClaudecodeModels() then reconciles against Anthropic.
   if (Array.isArray(saved.claudecodeModels)) {
     const savedIds = saved.claudecodeModels.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
-    c.claudecodeModels = [...new Set([...savedIds, ...CLAUDECODE_MODEL_SEED])];
+    c.claudecodeModels = [...new Set([...savedIds, ...CLAUDECODE_MODEL_SEED, ...CLAUDECODE_MODEL_ALIASES])];
   }
   if (typeof saved.claudePrefix === "string") c.claudePrefix = saved.claudePrefix;
   else if (typeof saved.wrappyPrefix === "string") c.claudePrefix = saved.wrappyPrefix;
@@ -1349,7 +1363,9 @@ async function refreshClaudecodeModels(why) {
   }
   // Anthropic is authoritative, but never let a partial sweep shrink us below the seed.
   const live = hit.models.map((m) => m.id);
-  CFG.claudecodeModels = [...new Set([...live, ...CLAUDECODE_MODEL_SEED])];
+  // Aliases are appended after the live catalog: Anthropic serves them but never lists them, so a
+  // sweep alone would drop `claude-haiku-4-5` — the id most callers send.
+  CFG.claudecodeModels = [...new Set([...live, ...CLAUDECODE_MODEL_SEED, ...CLAUDECODE_MODEL_ALIASES])];
   claudecodeCatalog = { source: "anthropic", ts: Date.now(), accounts: hit.accounts, failed: hit.failed, models: hit.models, error: null };
   const fail = hit.failed.length ? ` (${hit.failed.length} account(s) unreadable)` : "";
   console.log(`[models] claudecode refresh (${why}) across ${hit.accounts.length} account(s)${fail}: ${live.length} live → advertising ${CFG.claudecodeModels.length}`);
@@ -1758,6 +1774,7 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     return sendJson(res, 200, {
       advertised: CFG.claudecodeModels,
       seed: [...CLAUDECODE_MODEL_SEED],
+      aliases: [...CLAUDECODE_MODEL_ALIASES],
       source: claudecodeCatalog.source,
       checkedAt: claudecodeCatalog.ts || null,
       sweptAccounts: claudecodeCatalog.accounts || [],

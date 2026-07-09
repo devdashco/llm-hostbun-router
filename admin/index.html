@@ -807,7 +807,8 @@ function ClaudeCatalog(){
           <span>${id}</span>
           <span class="mut">${m&&m.display_name?'· '+m.display_name:''}</span>
           ${m&&tot>0&&na<tot?html`<span class="pill warnp" title=${'only on: '+m.accounts.join(', ')}>${na}/${tot} accts</span>`:''}
-          ${!m&&cat.source==='anthropic'?html`<span class="pill mut" title="in the code seed, not in Anthropic's catalog">seed only</span>`:''}
+          ${!m&&(cat.aliases||[]).includes(id)?html`<span class="pill mut" title="Anthropic serves this id but does not list it in /v1/models">alias</span>`:''}
+          ${!m&&!(cat.aliases||[]).includes(id)&&cat.source==='anthropic'?html`<span class="pill mut" title="in the code seed, not in Anthropic's catalog">seed only</span>`:''}
           ${p&&!p.ok&&p.error?html`<span class="mut hint">${p.error}</span>`:''}
         </div>`; }):html`<span class="mut">loading…</span>`}
     </div>
