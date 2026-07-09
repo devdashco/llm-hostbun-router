@@ -136,7 +136,11 @@ dependency, the lockfile must be committed or the build fails.
   accepts the OpenAI `user` field, so any caller can name any project.
 - **`local` is a reasoning model.** `qwen3.5-9b` returns its thinking in `reasoning_content` and
   leaves `content` empty until it finishes. With a normal token budget it never finishes → callers get
-  `''` and `finish_reason: length`, having paid for every token. `enable_thinking: false` fixes it.
+  `''` and `finish_reason: length`, having paid for every token. The router now defaults it off
+  (`applyLocalThinkingDefault()`). The knob is **`chat_template_kwargs: {enable_thinking: false}`** —
+  a **top-level `enable_thinking` is accepted by llama.cpp and silently ignored**, which is why the
+  obvious fix appears to do nothing. The router hoists the top-level form into `chat_template_kwargs`
+  so a caller that asks for thinking still gets it.
 - **`defaultAccount` quietly voids the "never bill a guess" invariant.** `accountFor()` is
   `pins[project] || defaultAccount`, so an unpinned *or misspelled* project bills the default instead
   of 403'ing. The 403 works today only because `defaultAccount` is empty in prod. Leave it empty.
@@ -186,8 +190,7 @@ dependency, the lockfile must be committed or the build fails.
    `X-Project` header entirely. Store a sha256 hash; plaintext lives in keyvault.
 2. **Accounts + project-pin admin API and UI panel.** Unblocks pinning `promopilot`, and unblocks
    `claudectl`'s account tools (below).
-3. **`local` thinking default** — send `enable_thinking:false` for the `local` provider unless the
-   caller asks otherwise.
+3. ~~**`local` thinking default.**~~ **Done 2026-07-09** — `applyLocalThinkingDefault()`.
 4. **Consumption views** — per project / group / account / model, from the existing `calls` table.
 
 ## Connection to `devdashco/claudectl`

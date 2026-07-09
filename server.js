@@ -259,6 +259,19 @@ function envDefaults() {
     // X-Project header (or body project/metadata.project/user) or they're rejected 400. Off = the
     // project is still recorded when supplied, just not mandatory.
     requireProject: (process.env.REQUIRE_PROJECT || "1") === "1",
+    // The consumer registry. A consumer is WHO is calling, and there are exactly two kinds:
+    //   dev — a developer's machine, or a daemon on it (Claude Code, autofix). Has an `owner`: a person.
+    //   app — code we deployed. Has NO owner; it is not a person, and pretending it is muddies the bill.
+    // Identity is a path: `<consumer>[:<job>]`. `promopilot:generatetext` is consumer promopilot,
+    // job generatetext. Only the CONSUMER is registered — jobs are free, so a new workload needs no
+    // config change. That is what keeps this sustainable.
+    //   consumers[name] = { kind: "dev"|"app", owner?: "philip", note?: "..." }
+    consumers: {},
+    // When on, an inference call whose consumer is not in the registry is refused 403. Ships OFF so
+    // that merely deploying this code cannot black out an unregistered caller; turn it on once the
+    // registry is seeded. `requireProject` only checks a name was SUPPLIED — this checks it is a name
+    // we agreed on. Neither is authentication: the name is still self-asserted (see "Open work").
+    requireRegisteredConsumer: (process.env.REQUIRE_REGISTERED_CONSUMER || "0") === "1",
     // Admin password (HMAC secret + login check). Weak default per request — rotate via the UI.
     adminPassword: process.env.ADMIN_PASSWORD || "ddash",
     // Call logging → the `llmrouter` Postgres (DATABASE_URL). enabled: record any call metadata at all;
@@ -873,6 +886,26 @@ function shipError(message, attrs) {
 }
 
 // ── provider resolution (reads live CFG) ──
+
+// qwen3.5-9b thinks by default: it fills `reasoning_content` and leaves `content` empty until the
+// thought ends, so a normal token budget runs out mid-thought and the caller is billed for an empty
+// string with finish_reason:"length". Thinking is off unless the caller asks for it.
+//
+// llama.cpp only reads the flag out of `chat_template_kwargs` — a top-level `enable_thinking` is
+// accepted and silently ignored. Callers send the top-level form, so hoist it rather than drop it.
+function applyLocalThinkingDefault(j) {
+  if (!j || typeof j !== "object") return j;
+  const kw = j.chat_template_kwargs;
+  const asked = kw && typeof kw === "object" && kw.enable_thinking !== undefined;
+  if (!asked) {
+    const top = typeof j.enable_thinking === "boolean" ? j.enable_thinking : false;
+    j.chat_template_kwargs = { ...(kw && typeof kw === "object" ? kw : {}), enable_thinking: top };
+  }
+  delete j.enable_thinking;
+  return j;
+}
+const isChatCompletions = (url) => typeof url === "string" && url.split("?")[0].endsWith("/chat/completions");
+
 const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCase()] || null);
 // A `claude*` model id means the claudecode provider (our Max account pool → api.anthropic.com).
 const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.claudePrefix || "claude").toLowerCase());
@@ -997,6 +1030,7 @@ async function proxy(req, res, base, opts = {}) {
       const j = JSON.parse(bodyBuf.toString());
       stream = !!j.stream;
       if (rewriteModel && j && j.model) j.model = rewriteModel;
+      if (provider === "local" && isChatCompletions(req.url)) applyLocalThinkingDefault(j);
       if (wantsTranslate) {
         const a = TR.openaiToAnthropic(j);
         body = Buffer.from(JSON.stringify(a));
@@ -1216,6 +1250,7 @@ async function jsonEnforce(req, res, route) {
       ? parsed.choices[0].message.content : null });
   reqObj.stream = false;                                   // must see the whole body to validate
   if (rewriteModel) reqObj.model = rewriteModel;
+  if (provider === "local") applyLocalThinkingDefault(reqObj);
   const messages = Array.isArray(reqObj.messages) ? reqObj.messages.slice() : [];
   const rf = reqObj.response_format;
   const rfType = typeof rf === "string" ? rf : (rf && rf.type);
