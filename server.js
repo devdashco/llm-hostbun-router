@@ -37,6 +37,7 @@
 //   src/pricing.js     USD estimates (crazyrouter only; the rest are flat or free)
 //   translate.js       OpenAI <-> Anthropic, pure functions, unit-tested
 const http = require("node:http");
+const nodePath = require("node:path");
 
 const { CFG, loadConfig, UI_ROUTES } = require("./src/config");
 const { initDb, primeAcctCacheSoon, recordCall } = require("./src/db");
@@ -63,6 +64,9 @@ process.on("unhandledRejection", (err) => {
 const PORT = parseInt(process.env.PORT || "80", 10);
 const DOCS_FILE = process.env.DOCS_FILE || "/srv/docs/index.html";
 const ADMIN_FILE = process.env.ADMIN_FILE || "/srv/admin/index.html";
+// The panel's modules live next to its shell, so a dev run (ADMIN_FILE=./admin/index.html) and the
+// container (/srv/admin/index.html) both resolve without a second env var to forget.
+const UI_DIR = nodePath.join(nodePath.dirname(ADMIN_FILE), "ui");
 
 // Config first: every module below reads CFG, and the key index must exist before the first request.
 loadConfig();
@@ -91,6 +95,18 @@ const server = http.createServer(async (req, res) => {
     if (path === "/admin" || path.startsWith("/admin/")) {
       res.writeHead(308, { location: "/" });
       return res.end();
+    }
+    // The panel's own ES modules and stylesheet. Served from a fixed directory beside ADMIN_FILE,
+    // and the path is REJECTED unless it matches [a-z0-9-]+(/[a-z0-9-]+)?\.(js|css) — no "..", no
+    // absolute paths, no arbitrary reads off the container's filesystem.
+    if (req.method === "GET" && path.startsWith("/ui/")) {
+      const rel = path.slice(4);
+      if (!/^[a-z0-9-]+(\/[a-z0-9-]+)?\.(js|css)$/.test(rel)) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        return res.end("not found");
+      }
+      const type = rel.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
+      return sendFile(res, nodePath.join(UI_DIR, rel), type, false);
     }
     // The SPA pushes /calls, /accounts, … so those must serve the shell on a hard refresh.
     // Enumerated, never a catch-all: a catch-all at the root would shadow /v1/*, /local/*, and

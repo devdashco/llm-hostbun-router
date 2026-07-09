@@ -69,6 +69,14 @@ async function dbRows(sql, params = []) {
 }
 const dbRow = async (sql, params = []) => (await dbRows(sql, params))[0] || null;
 
+// Awaited write that THROWS. dbWrite drops failures and dbRows swallows them — both are right for a
+// call log, and both are wrong for the identity registry, where a lost INSERT means a consumer that
+// looks registered in the panel and 401s on the wire. Returns the pg result (rowCount, rows).
+async function dbExec(sql, params = []) {
+  if (!pool) throw new Error("no database connection");
+  return pool.query(sql, params);
+}
+
 // Latest rate-limit snapshot per Anthropic org, held in memory so acctHealth() can stay synchronous.
 // recordLimits() refreshes it on every call that carries the headers; this primes it once at boot so
 // a freshly restarted container still shows real headroom before the first Anthropic response lands.
@@ -181,6 +189,6 @@ async function clearCalls() {
 }
 
 module.exports = {
-  initDb, dbUp, dbRows, dbWrite, recordCall, recordLimits, primeAcctCache, primeAcctCacheSoon, clearCalls,
+  initDb, dbUp, dbRows, dbRow, dbExec, dbWrite, recordCall, recordLimits, primeAcctCache, primeAcctCacheSoon, clearCalls,
   ACCT_CACHE, ORG_OF_ACCOUNT, PROBE_CACHE, FACET_CACHE, clip, DATABASE_URL, CONTENT_CAP,
 };

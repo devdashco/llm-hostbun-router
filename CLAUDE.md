@@ -9,11 +9,40 @@ refs may still linger in sibling repos.
 
 ## Layout
 
-- `server.js` — the whole router: routing, live `CFG`, admin API, Postgres call log.
-- `translate.js` — OpenAI ↔ Anthropic translation. `translate.test.js` (`node translate.test.js`).
-- `admin/` — password-gated SPA (Preact + htm, vendored inline, no CDN). pw `ddash`. Served at the
-  site **root** `/` — there is no `/admin` page (it 308s to `/`). The JSON API keeps the
-  `/admin/api/*` prefix because `claudectl` hardcodes it; `/api/*` is the alias the SPA itself uses.
+- `server.js` — the HTTP layer and nothing else (~340 lines). Path table, boot, process guards.
+- `src/` — the router proper. No cycles; each module is a leaf or near-leaf.
+  | file | owns |
+  |---|---|
+  | `config.js` | live `CFG`, env + `/data/config.json`, sanitizers, key index |
+  | `identity.js` | consumer/job paths, API keys, `authenticate()` |
+  | `routing.js` | pins, allowlists, groups, usage limits, account pinning |
+  | `http.js` | `readBody`, `buildHeaders`, `proxy()`, JSON enforcement |
+  | `db.js` | Postgres call log + harvested account headroom |
+  | `claudecode.js` | Anthropic catalog, per-account probes |
+  | `admin.js` | the control-plane API behind the password cookie |
+  | `telemetry.js` | call-log row shaping, HyperDX error shipping |
+  | `pricing.js` | USD estimates (crazyrouter only) |
+- **`CFG` is mutated in place, never reassigned** (`setCFG()`). Every module holds the same reference;
+  `CFG = merged` left the router reading a detached copy — the panel saved and changed nothing.
+- `translate.js` — OpenAI ↔ Anthropic translation. Pure, unit-tested.
+- `admin/` — password-gated SPA (Preact + htm, vendored, no CDN). pw `ddash`. `index.html` is a 14-line
+  shell; the app is ES modules under `admin/ui/` (`core.js`, `app.js`, `drawer.js`, `pages/*.js`),
+  served by the router at `/ui/*` (extension-allowlisted, no traversal). Served at the site **root**
+  `/` — there is no `/admin` page (it 308s to `/`). The JSON API keeps the `/admin/api/*` prefix
+  because `claudectl` hardcodes it; `/api/*` is the alias the SPA itself uses.
+
+## Tests — `npm test` (64 checks, ~15s)
+
+Three suites, no network, no database. Run before every push.
+
+- `translate.test.js` — the seven translation traps.
+- `test/router.test.mjs` — boots a real server on an OS-assigned port: pins, allowlists, job
+  inheritance, the image-model refusal, merge-vs-replace endpoints, the auth gate. Written as an
+  old-vs-new parity harness during the `src/` split and kept.
+- `test/ui.test.mjs` — loads the real shell + vendor bundle + module graph in jsdom, logs in, and
+  mounts **every** nav page. Nothing else type-checks or bundles the panel, so a wrong import name is
+  otherwise a blank page in prod. jsdom is a devDependency; the image builds `npm ci --omit=dev`.
+  jsdom does not run `<script type="module">`, hence the hand-built environment in that file.
 - `docs/` — static docs, served at `docs.llm.hostbun.cc`.
 - `headroom-svc/` — optional Python compression sidecar. Separate Coolify app, **same repo**
   (base dir `headroom-svc`). OFF unless `HEADROOM_URL` is set. **Never** applied to `claudecode` —

@@ -658,11 +658,24 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     });
   }
 
+  // One shape for all three providers: {up, status, ms, count}. claudecode used to answer `{ok}`
+  // instead, so the panel — which reads `.up` — showed it permanently DOWN with "status —", on a
+  // provider that was serving every Claude call we made. Never let one member of a set speak a
+  // different dialect than its siblings.
+  //
+  // claudecode is not probed over HTTP: api.anthropic.com/v1/models needs a Max token, so an
+  // unauthenticated GET answers 401 and would read as DOWN. Its health IS "do we hold accounts".
   if (sub === "health" && req.method === "GET") {
     const [local, crazyrouter] = await Promise.all([
       probe(CFG.bases.local), probe(CFG.bases.crazyrouter, CFG.crazyrouterKey),
     ]);
-    return sendJson(res, 200, { local, crazyrouter, claudecode: { ok: (CFG.claudecodeAccountPool || []).length > 0, accounts: (CFG.claudecodeAccountPool || []).length } });
+    const accounts = (CFG.claudecodeAccountPool || []).length;
+    const claudecode = {
+      up: accounts > 0, status: accounts > 0 ? 200 : 0, ms: 0,
+      count: (CFG.claudecodeModels || []).length, accounts,
+      note: accounts > 0 ? undefined : "no accounts in the pool",
+    };
+    return sendJson(res, 200, { local, crazyrouter, claudecode });
   }
 
   if (sub === "models" && req.method === "GET") {
@@ -927,7 +940,81 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     } catch (e) { return sendJson(res, 500, { error: e.message }); }
   }
 
+  // ── identity registry (Postgres): developers → machines, and projects ──
+  // Every write goes to the DB and re-projects into CFG; none of them can be reached through
+  // `POST config`, which assigns wholesale and would wipe key hashes it never had.
+  {
+    const r = await registryRoutes(req, res, sub, ip);
+    if (r) return r;
+  }
+
   return sendJson(res, 404, { error: "unknown admin endpoint" });
+}
+
+// Split out so the dispatcher above stays a flat list of `sub ===` checks. Returns a truthy value
+// when it handled the request, undefined when the path was not ours.
+async function registryRoutes(req, res, sub, ip) {
+  const REG = require("./registry");
+  const body = async () => {
+    const b = await readBody(req);
+    try { return JSON.parse(b.toString() || "{}"); } catch { throw new REG.RegistryError("bad json"); }
+  };
+  const guard = async (fn) => {
+    try { return await fn(); }
+    catch (e) {
+      if (e instanceof REG.RegistryError) return sendJson(res, e.status, { error: e.message, ...e.extra });
+      console.error(`[registry] ${e.message}`);
+      return sendJson(res, 500, { error: e.message });
+    }
+  };
+
+  if (sub === "developers" && req.method === "GET")
+    return guard(async () => sendJson(res, 200, { developers: await REG.listDevelopers() }));
+
+  if (sub === "developers" && req.method === "POST")
+    return guard(async () => {
+      const p = await body();
+      if (p.remove) { await REG.removeDeveloper(p.name); console.log(`[admin] developer removed ${p.name} ip=${ip}`); }
+      else { await REG.addDeveloper(p); console.log(`[admin] developer ${p.name} ip=${ip}`); }
+      return sendJson(res, 200, { ok: true, developers: await REG.listDevelopers() });
+    });
+
+  // machines and projects are the same table; the route just fixes `kind` so a caller cannot create
+  // a project that owns a developer, or a machine that owns nobody.
+  for (const [path, kind] of [["machines", "machine"], ["projects", "project"]]) {
+    if (sub === path && req.method === "POST")
+      return guard(async () => {
+        const p = await body();
+        if (p.remove) { await REG.removeConsumer(p.name); console.log(`[admin] ${kind} removed ${p.name} ip=${ip}`); }
+        else { await REG.addConsumer({ ...p, kind }); console.log(`[admin] ${kind} ${p.name} ip=${ip}`); }
+        return sendJson(res, 200, { ok: true });
+      });
+  }
+
+  if (sub === "registry/keys" && req.method === "POST")
+    return guard(async () => {
+      const out = await REG.issueKey(await body());
+      console.log(`[admin] key issued ${out.consumer} id=${out.keyId} ip=${ip}`);
+      return sendJson(res, 200, { ok: true, ...out, warning: "this is the only time the key is shown — store it in keyvault now" });
+    });
+
+  if (sub === "registry/keys/revoke" && req.method === "POST")
+    return guard(async () => {
+      const p = await body();
+      await REG.revokeKey(p);
+      console.warn(`[admin] key REVOKED ${p.name} id=${p.id} ip=${ip}`);
+      return sendJson(res, 200, { ok: true });
+    });
+
+  if (sub === "registry/alias" && req.method === "POST")
+    return guard(async () => {
+      const p = await body();
+      await REG.setAlias(p);
+      console.log(`[admin] alias ${p.from} -> ${p.to || "(removed)"} ip=${ip}`);
+      return sendJson(res, 200, { ok: true });
+    });
+
+  return undefined;
 }
 
 module.exports = { handleAdminApi, adminState, isAuthed, makeSession, COOKIE };
