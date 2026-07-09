@@ -183,12 +183,15 @@ function envDefaults() {
     // the caller's model id, just switch lane) — OR { block: true } to reject every call from that
     // project so it consumes zero tokens.
     projectRoutes: {},
-    // consumerAccounts: server-side per-CONSUMER account LOCK for the anthropic (claude) lane.
-    // key = X-Consumer (lowercased: "pmac"/"wmac"/"pbox"/"lprod", or a project slug); value = pool
-    // account name. A mapped consumer is pinned to that Max account — NO sticky rotation. This is the
-    // robust replacement for per-box X-Account headers/scripts: the box just sends X-Consumer once,
-    // the gateway decides + logs. Edit it live in /admin. {} = fall back to header/sticky.
+    // projectAccounts: the server-side PIN, project → Max account name. This is the ONLY way an
+    // account is chosen (see accountFor). No headers, no sticky, no rotation. Edit live in /admin.
+    // A project with no pin (and no defaultAccount) is REFUSED with 403 rather than billed to a
+    // guess. `consumerAccounts` is the old name, still read for back-compat.
+    projectAccounts: {},
     consumerAccounts: {},
+    // defaultAccount: the one named account unpinned projects fall back to. "" = refuse instead.
+    // Explicit by design — an empty default means a misconfigured caller fails loudly, not silently.
+    defaultAccount: process.env.DEFAULT_ACCOUNT || "",
     // projectGroups: bundle many projects (e.g. all seoul:* lanes) under one rule. Each entry is
     // { name, prefixes:[...], lane?, model?, block? }. A project matches when its slug equals or
     // starts with any prefix (so "seoul:" catches seoul:probe, seoul:l1_metadata, …). block:true
@@ -315,14 +318,20 @@ function mergeConfig(base, saved) {
     }
     c.projectRoutes = pr;
   }
-  if (saved.consumerAccounts && typeof saved.consumerAccounts === "object" && !Array.isArray(saved.consumerAccounts)) {
-    const ca = {};
-    for (const [k, v] of Object.entries(saved.consumerAccounts)) {
-      if (typeof k === "string" && k.trim() && typeof v === "string" && v.trim())
-        ca[k.trim().toLowerCase()] = v.trim();
+  // The account pin. `projectAccounts` is the name; `consumerAccounts` is its predecessor and is
+  // migrated in (new name wins on conflict). Both land in c.projectAccounts so accountFor sees one map.
+  {
+    const pins = {};
+    for (const src of [saved.consumerAccounts, saved.projectAccounts]) {
+      if (!src || typeof src !== "object" || Array.isArray(src)) continue;
+      for (const [k, v] of Object.entries(src)) {
+        if (typeof k === "string" && k.trim() && typeof v === "string" && v.trim())
+          pins[k.trim().toLowerCase()] = v.trim();
+      }
     }
-    c.consumerAccounts = ca;
+    if (Object.keys(pins).length) { c.projectAccounts = pins; c.consumerAccounts = pins; }
   }
+  if (typeof saved.defaultAccount === "string") c.defaultAccount = saved.defaultAccount.trim();
   if (Array.isArray(saved.projectGroups)) {
     const pg = [];
     const seen = new Set();
@@ -1052,21 +1061,12 @@ async function proxy(req, res, base, opts = {}) {
     await doFailover(threw ? `fetch-failed (${fetchErr.message})` : `status ${up.status}`);
   }
 
-  // Anthropic lane: the pinned account hit its 5h/7d cap (429). Retire it, switch to a fresh pool
-  // account, and retry ONCE so the caller never sees the 429. Decided before any bytes are written to
-  // res, so it's safe for streaming too. The switch re-warms cache on the new account (unavoidable —
-  // the old one is dead), but only happens on the rare limit-hit, not per call.
-  if (lane === "anthropic" && !threw && up && up.status === 429 && CFG.anthropicPool && CFG.anthropicPool.length && opts.account) {
-    recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);  // mark the 429'd account hot NOW
-    const nextAcct = stickyAnthropic(true);
-    if (nextAcct && nextAcct.name !== opts.account) {
-      console.warn(`[anthropic] 429 on ${opts.account} → retry on ${nextAcct.name}`);
-      const h2 = buildHeaders(req, { authToken: nextAcct.token });
-      base_rec.keyLabel = `anthropic:${nextAcct.name}`;
-      const init2 = { method: req.method, headers: h2, redirect: "follow" };
-      if (!["GET", "HEAD"].includes(req.method) && body && body.length) init2.body = body;
-      try { up = await fetch(curTarget, init2); } catch (e) { threw = true; fetchErr = e; }
-    }
+  // The project's pinned account hit its 5h/7d cap (429). We deliberately do NOT switch accounts:
+  // a silent switch blows the prompt cache and hides which sub paid. Record the limit so /admin and
+  // the statusline immediately show the account hot, then let the real 429 reach the caller.
+  if (lane === "anthropic" && !threw && up && up.status === 429 && opts.account) {
+    recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);
+    console.warn(`[account] 429 on ${opts.account} (project=${base_rec.project || "-"}) — no auto-switch, returning 429 to caller`);
   }
 
   // claudebox quota notice leaked as a 200 (status-based failover can't see it). Sniff non-stream
@@ -1453,49 +1453,37 @@ function usageVerdict(project) {
 //   0b. projectGroups (prefix-matched group override)
 //   1. forceModel (global override)  2. modelRoutes (per-model, any lane)  3. local alias map
 //   4. wrappy prefix  5. empty model → default route  6. cloud policy (open/allowlist/off)
-// ── anthropic-lane account rotation (STICKY, switch-on-limit) ──────────────
-// Prompt cache is per-account (per-org): switching accounts = full cache miss (~12x cost). So we
-// PIN one account and only advance when it's maxed/429 — the switch cost is paid once, then the
-// new account's cache re-warms and stays cheap. Headroom for each account comes free from the
-// harvested acct_limits (the rate-limit headers off real traffic — no probe).
-let _anthropicSticky = null;   // {name, org, token}
-function _acctUtil(org) {
+// ── account selection: PINNED per project, never automatic ────────────────
+// One project → one account, decided by config alone. There is deliberately NO auto-rotation:
+// a silent account switch is a full prompt-cache miss (~12x cost) AND it makes "who spent this?"
+// unanswerable after the fact. If the pinned account is out of quota, its real 429 reaches the
+// caller. You fix that by re-pinning in /admin — not by the gateway guessing.
+//
+// `acctHealth` exists for DISPLAY and DEBUGGING only. It never influences which account is chosen.
+function acctHealth(org) {
   try {
     const r = org && db && db.prepare("SELECT u5,u7,s5,s7,ts FROM acct_limits WHERE org_id=?").get(org);
     if (!r) return { util: 0, hot: false, ts: 0 };
-    const stale = !r.ts || (Date.now() - r.ts > 6 * 3600 * 1000);   // no fresh reading → treat as cool
+    const stale = !r.ts || (Date.now() - r.ts > 6 * 3600 * 1000);   // no fresh reading → unknown, not "cool"
     const util = stale ? 0 : Math.max(r.u5 || 0, r.u7 || 0);
     const hot = !stale && ((r.u5 || 0) >= 0.95 || (r.u7 || 0) >= 0.98 || r.s5 === "rejected" || r.s7 === "rejected");
-    return { util, hot, ts: r.ts || 0 };
-  } catch { return { util: 0, hot: false, ts: 0 }; }
+    return { util, hot, ts: r.ts || 0, stale };
+  } catch { return { util: 0, hot: false, ts: 0, stale: true }; }
 }
-function pickAnthropic(excludeOrg) {
+
+// The account a project bills to, or null. Resolution is exactly two steps, both explicit:
+//   1. projectAccounts[project]  — the pin, edited in /admin
+//   2. CFG.defaultAccount        — one named fallback, also explicit
+// No request header can override it. Deterministic: same project ⇒ same account, every time.
+// (`consumerAccounts` is the pre-rename name of `projectAccounts`; both are read during migration.)
+function accountFor(project) {
   const pool = CFG.anthropicPool || [];
-  const cand = pool.filter((a) => a.org !== excludeOrg).map((a) => ({ ...a, ..._acctUtil(a.org) }));
-  if (!cand.length) return null;
-  const cool = cand.filter((a) => !a.hot);
-  const from = cool.length ? cool : cand;            // if everything's hot, take the least-bad
-  from.sort((a, b) => a.util - b.util || a.ts - b.ts);   // coolest, then least-recently-used
-  return from[0];
-}
-// Return the account to use now: keep the sticky one while it's healthy (cache stays warm); when it
-// goes hot, advance to a fresh one. `force429` immediately retires the current sticky (called on a 429).
-function stickyAnthropic(force429) {
-  if (!(CFG.anthropicPool && CFG.anthropicPool.length)) return null;
-  if (_anthropicSticky) {
-    const s = _acctUtil(_anthropicSticky.org);
-    if (!s.hot && !force429) return _anthropicSticky;
-    const next = pickAnthropic(_anthropicSticky.org);
-    if (next && next.org !== _anthropicSticky.org) {
-      console.log(`[anthropic] switch ${_anthropicSticky.name}(${Math.round(s.util * 100)}%${force429 ? " 429" : ""}) → ${next.name}`);
-      _anthropicSticky = { name: next.name, org: next.org, token: next.token };
-    }
-    return _anthropicSticky;
-  }
-  const p = pickAnthropic(null) || CFG.anthropicPool[0];
-  _anthropicSticky = { name: p.name, org: p.org, token: p.token };
-  console.log(`[anthropic] initial account → ${_anthropicSticky.name}`);
-  return _anthropicSticky;
+  if (!pool.length) return null;
+  const p = String(project == null ? "" : project).trim().toLowerCase();
+  const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
+  const want = String((p && pins[p]) || CFG.defaultAccount || "").trim().toLowerCase();
+  if (!want) return null;
+  return pool.find((a) => String(a.name).toLowerCase() === want) || null;
 }
 
 function resolveRoute(model, project) {
@@ -1596,7 +1584,9 @@ function adminState() {
     forceModel: CFG.forceModel,
     modelRoutes: CFG.modelRoutes,
     projectRoutes: CFG.projectRoutes,
-    consumerAccounts: CFG.consumerAccounts,
+    projectAccounts: CFG.projectAccounts,
+    consumerAccounts: CFG.consumerAccounts,   // legacy alias, same map
+    defaultAccount: CFG.defaultAccount,
     projectGroups: CFG.projectGroups,
     projectLimits: CFG.projectLimits,
     projectLimitDefault: CFG.projectLimitDefault,
@@ -1618,8 +1608,16 @@ function adminState() {
     // secrets — never returned in clear
     crazyrouterKeySet: !!CFG.crazyrouterKey, crazyrouterKeyMasked: mask(CFG.crazyrouterKey),
     wrappyTokenSet: !!CFG.wrappyToken, wrappyTokenMasked: mask(CFG.wrappyToken),
-    anthropicPool: (CFG.anthropicPool || []).map((a) => ({ name: a.name, org: a.org, tokenMasked: mask(a.token) })),
-    anthropicSticky: _anthropicSticky ? { name: _anthropicSticky.name, org: _anthropicSticky.org } : null,
+    // Each account carries its harvested headroom AND the age of that reading, so any consumer
+    // (admin UI, statusline) can render "hot/cool" together with "as of when" — never a stale
+    // number presented as fresh. `stale:true` = no reading in 6h; show it as unknown, not cool.
+    anthropicPool: (CFG.anthropicPool || []).map((a) => {
+      const h = acctHealth(a.org);
+      return { name: a.name, org: a.org, tokenMasked: mask(a.token),
+               util: h.util, hot: h.hot, ts: h.ts, stale: h.stale };
+    }),
+    // No sticky account exists any more: selection is pinned per project (accountFor).
+    defaultAccount: CFG.defaultAccount || null,
     oblitTokenSet: !!CFG.oblitToken, oblitTokenMasked: mask(CFG.oblitToken),
     adminPasswordMasked: mask(CFG.adminPassword),
     configFile: CONFIG_FILE,
@@ -1730,9 +1728,11 @@ async function handleAdminApi(req, res, path) {
     if (patch.forceModel) next.forceModel = patch.forceModel;
     if (patch.modelRoutes) next.modelRoutes = patch.modelRoutes;
     if (patch.projectRoutes) next.projectRoutes = patch.projectRoutes;
-    if (patch.consumerAccounts) next.consumerAccounts = patch.consumerAccounts;
+    if (patch.projectAccounts) next.projectAccounts = patch.projectAccounts;   // project → account PIN
+    if (patch.consumerAccounts) next.consumerAccounts = patch.consumerAccounts;  // legacy name for the same
+    if (typeof patch.defaultAccount === "string") next.defaultAccount = patch.defaultAccount;
     if (patch.projectGroups) next.projectGroups = patch.projectGroups;
-    if (Array.isArray(patch.anthropicPool)) next.anthropicPool = patch.anthropicPool;   // Max-token rotation pool
+    if (Array.isArray(patch.anthropicPool)) next.anthropicPool = patch.anthropicPool;   // the Max account pool
     if (patch.projectLimits) next.projectLimits = patch.projectLimits;
     if (patch.projectLimitDefault) next.projectLimitDefault = patch.projectLimitDefault;
     if (patch.cloudPolicy) next.cloudPolicy = patch.cloudPolicy;
@@ -2147,22 +2147,26 @@ const server = http.createServer(async (req, res) => {
       console.log(`[headroom] ${path} model=${model || "-"} lane=${lane} ${hc.stats.tokens_before}->${hc.stats.tokens_after} saved=${hc.stats.tokens_saved} (${Math.round(100 * hc.stats.tokens_saved / Math.max(1, hc.stats.tokens_before))}%)`);
   }
 
-  // Anthropic lane account selection. An explicit `X-Account` (alias `X-CCC-Account`) header LOCKS
-  // the call to that named pool account — this is the PER-CONSUMER lock: each box (pmac/wmac/pbox)
-  // sends the account it owns, so the middleware bills the right sub and the log attributes it. No
-  // header / unknown name → fall back to the global STICKY (rotate on maxed/429). The client Bearer
-  // is always overridden either way, so a box's keychain token value is irrelevant on this lane.
+  // Max-account provider: the account is PINNED to the project, server-side (see accountFor).
+  // No `X-Account` / `X-CCC-Account` / `X-Consumer` header is consulted — identity comes from the
+  // project, the pin lives in /admin, and the client Bearer is overridden regardless. An unpinned
+  // project is a configuration bug, so we say so loudly rather than silently billing someone.
   if (lane === "anthropic" && CFG.anthropicPool && CFG.anthropicPool.length) {
-    // Account resolution, most-specific first:
-    //  1. server-side consumer→account LOCK map (robust; edit in /admin, no client script)
-    //  2. explicit X-Account / X-CCC-Account header (per-request override, legacy)
-    //  3. global sticky (rotates on limit) — only for unmapped, unheadered callers
-    const consumer = String(req.headers["x-consumer"] || project || "").trim().toLowerCase();
-    const mapped = (CFG.consumerAccounts && CFG.consumerAccounts[consumer]) || "";
-    const want = String(mapped || req.headers["x-account"] || req.headers["x-ccc-account"] || "").trim().toLowerCase();
-    let acct = want ? (CFG.anthropicPool.find((a) => String(a.name).toLowerCase() === want) || null) : null;
-    if (!acct) acct = stickyAnthropic(false);
-    if (acct) { route.authToken = acct.token; route.account = acct.name; }
+    const acct = accountFor(project);
+    if (!acct) {
+      const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
+      const known = Object.keys(pins).sort().join(", ") || "none";
+      console.warn(`[account] REFUSED project="${project || "(none)"}" — no pin and no defaultAccount. pinned projects: ${known}`);
+      res.writeHead(403, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: {
+        type: "no_account_for_project",
+        message: `project "${project || "(none)"}" is not pinned to a Claude Code account`,
+        hint: "pin it in /admin (projectAccounts), or set defaultAccount",
+        pinned_projects: Object.keys(pins).sort(),
+      } }));
+    }
+    route.authToken = acct.token;
+    route.account = acct.name;
   }
 
   // Terminal dispatch: json-enforce path (JSON response_format) or plain proxy.
