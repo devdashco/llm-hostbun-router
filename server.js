@@ -32,6 +32,7 @@ const path = require("path");
 const crypto = require("crypto");
 const url = require("url");
 const { Readable } = require("stream");
+const TR = require("./translate");   // OpenAI <-> Anthropic
 
 // A single malformed request must NEVER take down the whole proxy. This is a
 // stateless per-request router, so a thrown error in one handler is isolated —
@@ -72,28 +73,43 @@ const HEADROOM_URL = (process.env.HEADROOM_URL || "").replace(/\/$/, "");
 const HEADROOM_TOKEN = process.env.HEADROOM_TOKEN || ""; // bearer for the compress sidecar (if gated)
 const HEADROOM_TIMEOUT_MS = parseInt(process.env.HEADROOM_TIMEOUT_MS || "4000", 10);
 const HEADROOM_MIN_CHARS = parseInt(process.env.HEADROOM_MIN_CHARS || "2000", 10); // skip small bodies
+// Compression NEVER applies to claudecode: it rewrites the prompt, which misses the prompt cache
+// (a cache read is ~10x cheaper than a fresh input token). Compressing to save tokens there costs
+// more than it saves. Hard-coded out of the default; adding it back via env is a mistake.
 const HEADROOM_LANES = new Set(
-  (process.env.HEADROOM_LANES || "local,crazyrouter,wrappy").split(",").map((s) => s.trim()).filter(Boolean)
+  (process.env.HEADROOM_LANES || "local,crazyrouter").split(",").map((s) => s.trim()).filter(Boolean)
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Lane taxonomy. The three providers, plus legacy-id normalization.
+// Providers. Where a request is actually served. There are three, and that's the whole taxonomy.
 // ─────────────────────────────────────────────────────────────────────────────
-// `anthropic` is a PASSTHROUGH lane: it forwards the caller's request body AND its
-// Authorization header untouched to api.anthropic.com. Unlike `wrappy` (the claudebox
-// text shim, which needs system=string and 422s on Claude Code's system-array + tools),
-// this lane serves real Claude Code / native /v1/messages callers on their own Max OAuth
-// bearer — so the convo, model, effort + tokens land in the call log while staying free.
-// Only reached when a projectRoute/modelRoute opts a caller into it (never a default).
-const LANES = ["local", "crazyrouter", "wrappy", "anthropic"];
-const LANE_SET = new Set(LANES);
-const LEGACY_LANE = { cloud: "crazyrouter", claude: "wrappy" };
-// Normalize any lane id (legacy or canonical) to a canonical one; returns "" if unrecognized.
+//   local        pbox llama.cpp. Speaks OpenAI natively.
+//   claudecode   the claudecode-account-pool (our Claude Max logins) → api.anthropic.com.
+//                Native /v1/messages is forwarded verbatim; OpenAI /v1/chat/completions is
+//                translated (translate.js). The account is PINNED per project — never rotated.
+//   crazyrouter  cloud relay (gemini etc). Opt-in by model id. Never an automatic fallback.
+//
+// `provider` is the field name. `lane` was the old word for the same thing and is still accepted
+// on input so existing /data/config.json keeps working.
+// Static catalog for the claudecode provider. Probing upstream /v1/models would spend a real
+// token on a real account for a list that never changes.
+const CLAUDECODE_MODELS = (process.env.CLAUDECODE_MODELS ||
+  "claude-opus-4-8,claude-sonnet-4-6,claude-sonnet-5,claude-haiku-4-5,claude-fable-5")
+  .split(",").map((x) => x.trim()).filter(Boolean);
+
+const PROVIDERS = ["local", "crazyrouter", "claudecode"];
+const PROVIDER_SET = new Set(PROVIDERS);
+// Legacy ids → canonical. `wrappy` (claudebox) and `anthropic` were two names for one thing:
+// "serve this from a Claude Max subscription". They collapse into `claudecode`.
+const LEGACY_LANE = { cloud: "crazyrouter", claude: "claudecode", wrappy: "claudecode", anthropic: "claudecode" };
+// Normalize any provider id (legacy or canonical); returns "" if unrecognized.
 function normLane(l) {
   const s = String(l || "").trim().toLowerCase();
   const c = LEGACY_LANE[s] || s;
-  return LANE_SET.has(c) ? c : "";
+  return PROVIDER_SET.has(c) ? c : "";
 }
+const LANES = PROVIDERS;              // back-compat alias for existing references
+const LANE_SET = PROVIDER_SET;
 
 const LIMIT_WINDOWS = ["1h", "6h", "24h", "7d", "30d"];
 const WINDOW_MS = { "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000 };
@@ -123,35 +139,22 @@ function envDefaults() {
       // (the old LM Studio backend is gone) — default empty so a bare deploy points at nothing.
       local: (process.env.LOCAL_BASE || "").replace(/\/$/, ""),
       crazyrouter: (process.env.CRAZYROUTER_BASE || process.env.CRAZY_BASE || "https://crazyrouter.com").replace(/\/$/, ""),
-      wrappy: (process.env.WRAPPY_BASE || process.env.CLAUDE_BASE || "https://claude.hostbun.cc").replace(/\/$/, ""),
-      // anthropic passthrough lane → the real Anthropic API. No key injected: the caller's
-      // own Authorization (a Max OAuth bearer) is forwarded as-is.
-      anthropic: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
+      // claudecode → the real Anthropic API, called with a pinned account's Max token. The old
+      // `wrappy` base (claude.hostbun.cc, the claudebox subprocess wrapper) is GONE.
+      claudecode: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
       // image generation lane (SD-Turbo on the pbox GPU). Routed by path, not model name.
       images: (process.env.IMAGE_BASE || "https://sdturbo.bofrid.dev").replace(/\/$/, ""),
     },
     crazyrouterKey: process.env.CRAZYROUTER_KEY || "",
-    wrappyToken: process.env.WRAPPY_TOKEN || process.env.CLAUDE_TOKEN || "ddash",
-    // anthropicPool: Max OAuth setup-tokens the anthropic lane rotates over. STICKY — a session
-    // stays on ONE account (so its prompt cache stays warm; switching orgs = full cache miss ~12x)
-    // and only advances to a fresh account when the current one is maxed (5h/7d) or returns 429.
-    // [{name, org, token}]. Empty = passthrough (use the caller's own Authorization, no rotation).
-    // Seed via ANTHROPIC_POOL env (JSON) or the admin config; tokens are masked in adminState.
-    anthropicPool: (() => { try { return JSON.parse(process.env.ANTHROPIC_POOL || "[]"); } catch { return []; } })(),
+    // claudecodeAccountPool: our Claude Max logins, [{name, org, token}] with token = sk-ant-oat…
+    // (setup-tokens, ~1yr, no refresh). A project is PINNED to one of these (projectAccounts); the
+    // gateway never rotates between them. Seed via ANTHROPIC_POOL env or the admin config; tokens
+    // are masked in adminState. `anthropicPool` is the old name and is still read.
+    claudecodeAccountPool: (() => { try { return JSON.parse(process.env.ANTHROPIC_POOL || "[]"); } catch { return []; } })(),
     // bearer injected toward the image upstream (SD-Turbo API_TOKEN). Empty = send nothing.
     imageToken: process.env.IMAGE_TOKEN || "",
-    // models starting with this prefix (lowercased) route to the wrappy lane.
-    wrappyPrefix: process.env.WRAPPY_PREFIX || "claude",
-    // ── wrappy → crazyrouter failover ──
-    // When the wrappy lane (claudebox) errors or is unreachable, automatically retry the SAME
-    // request on the crazyrouter lane. crazyrouter exposes the identical claude-* ids, so by
-    // default we resend the caller's model unchanged (model: "" = pass-through). Set model to a
-    // specific crazyrouter id to pin the fallback. Triggers on: fetch failure, HTTP >=500, 429,
-    // 401, 403 (token died). One shot per request — never loops.
-    wrappyFallback: {
-      enabled: (process.env.WRAPPY_FALLBACK || "1") !== "0",
-      model: process.env.WRAPPY_FALLBACK_MODEL || "",
-    },
+    // models starting with this prefix (lowercased) are served by the claudecode provider.
+    claudePrefix: process.env.CLAUDE_PREFIX || process.env.WRAPPY_PREFIX || "claude",
     // Bearer gate for the uncensored model(s). When oblitToken is set, requests routed to a model
     // id listed in gatedModels require Authorization: Bearer <oblitToken> (or x-api-key). Empty
     // token = open. gemma + crazyrouter stay open so fb-bot/promopilot are unaffected.
@@ -166,7 +169,7 @@ function envDefaults() {
     // ── flow control (admin-editable) ──
     // forceModel: when enabled, EVERY request is rewritten to this lane+model regardless of what
     // the caller asked for. The big red switch.
-    forceModel: { enabled: false, lane: "wrappy", model: "" },
+    forceModel: { enabled: false, lane: "claudecode", model: "" },
     // modelRoutes: explicit per-incoming-model overrides to ANY lane (highest priority after
     // forceModel). key = incoming model name (lowercased). value = { lane, model }.
     // The legacy local model ids are redirected here to wrappy (claude-sonnet-4-6 is multimodal),
@@ -175,7 +178,7 @@ function envDefaults() {
     modelRoutes: Object.fromEntries(
       ["local", "gemma", "gemma-4-e4b-it-obliterated", "google/gemma-4-26b-a4b",
        "obliterated", "obliteratus", "qwen3.6-27b-obliterated"]
-        .map((id) => [id, { lane: "wrappy", model: "claude-sonnet-4-6" }])
+        .map((id) => [id, { lane: "claudecode", model: "claude-sonnet-4-6" }])
     ),
     // projectRoutes: per-PROJECT overrides to ANY lane (highest priority of all — beats forceModel
     // and modelRoutes). Lets you steer a single app (e.g. promopilot) off gemini onto wrappy without
@@ -252,8 +255,7 @@ function mergeConfig(base, saved) {
     const pick = (...keys) => { for (const k of keys) if (typeof b[k] === "string" && b[k].trim()) return b[k].trim().replace(/\/$/, ""); return null; };
     const loc = pick("local"); if (loc) c.bases.local = loc;
     const cr = pick("crazyrouter", "crazy"); if (cr) c.bases.crazyrouter = cr;
-    const wr = pick("wrappy", "claude"); if (wr) c.bases.wrappy = wr;
-    const an = pick("anthropic"); if (an) c.bases.anthropic = an;
+    const an = pick("claudecode", "anthropic"); if (an) c.bases.claudecode = an;
   }
   if (saved.localMap && typeof saved.localMap === "object" && !Array.isArray(saved.localMap)) {
     const m = {};
@@ -268,15 +270,19 @@ function mergeConfig(base, saved) {
   // Secrets / scalars, with legacy aliases.
   if (typeof saved.crazyrouterKey === "string") c.crazyrouterKey = saved.crazyrouterKey;
   else if (typeof saved.crazyKey === "string") c.crazyrouterKey = saved.crazyKey;
-  if (typeof saved.wrappyToken === "string") c.wrappyToken = saved.wrappyToken;
-  else if (typeof saved.claudeToken === "string") c.wrappyToken = saved.claudeToken;
-  if (Array.isArray(saved.anthropicPool)) {
-    c.anthropicPool = saved.anthropicPool
-      .filter((a) => a && typeof a.token === "string" && a.token.trim())
-      .map((a) => ({ name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), token: a.token.trim() }));
+  // The account pool. `claudecodeAccountPool` is the name; `anthropicPool` is what the live
+  // /data/config.json still calls it. Read either, keep both in sync so a rollback still boots.
+  {
+    const raw = Array.isArray(saved.claudecodeAccountPool) ? saved.claudecodeAccountPool
+      : Array.isArray(saved.anthropicPool) ? saved.anthropicPool : null;
+    if (raw) {
+      c.claudecodeAccountPool = raw
+        .filter((a) => a && typeof a.token === "string" && a.token.trim())
+        .map((a) => ({ name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), token: a.token.trim() }));
+    }
   }
-  if (typeof saved.wrappyPrefix === "string") c.wrappyPrefix = saved.wrappyPrefix;
-  else if (typeof saved.claudePrefix === "string") c.wrappyPrefix = saved.claudePrefix;
+  if (typeof saved.claudePrefix === "string") c.claudePrefix = saved.claudePrefix;
+  else if (typeof saved.wrappyPrefix === "string") c.claudePrefix = saved.wrappyPrefix;
   for (const k of ["oblitToken", "adminPassword"])
     if (typeof saved[k] === "string") c[k] = saved[k];
   if (typeof saved.jsonEnforce === "boolean") c.jsonEnforce = saved.jsonEnforce;
@@ -288,17 +294,11 @@ function mergeConfig(base, saved) {
     const f = saved.forceModel;
     c.forceModel = {
       enabled: !!f.enabled,
-      lane: normLane(f.lane) || "wrappy",
+      lane: normLane(f.lane) || "claudecode",
       model: typeof f.model === "string" ? f.model.trim() : "",
     };
   }
-  if (saved.wrappyFallback && typeof saved.wrappyFallback === "object") {
-    const f = saved.wrappyFallback;
-    c.wrappyFallback = {
-      enabled: !!f.enabled,
-      model: typeof f.model === "string" ? f.model.trim() : "",
-    };
-  }
+  // `wrappyFallback` is intentionally NOT read any more. Silent cross-provider failover is gone.
   if (saved.modelRoutes && typeof saved.modelRoutes === "object" && !Array.isArray(saved.modelRoutes)) {
     const mr = {};
     for (const [k, v] of Object.entries(saved.modelRoutes)) {
@@ -381,7 +381,7 @@ function mergeConfig(base, saved) {
     if (typeof l.content === "boolean") c.logging.content = l.content;
     if (Number.isInteger(l.retain) && (l.retain === 0 || (l.retain >= 100 && l.retain <= 1000000))) c.logging.retain = l.retain;
   }
-  if (!c.wrappyPrefix) c.wrappyPrefix = "claude";
+  if (!c.claudePrefix) c.claudePrefix = "claude";
   if (!c.adminPassword) c.adminPassword = "ddash";
   return c;
 }
@@ -432,7 +432,7 @@ function priceMap() {
 }
 // Cost in USD for one (sentModel, lane, ptok, ctok) aggregate. wrappy/local = flat → 0.
 function costUsd(prices, sentModel, lane, ptok, ctok) {
-  if (lane === "wrappy" || lane === "local") return 0;
+  if (lane === "claudecode" || lane === "local") return 0;   // Max subscription / local GPU = flat cost
   const p = prices[sentModel]; if (!p) return 0;
   return (ptok || 0) / 1e6 * p.in + (ctok || 0) / 1e6 * p.out;
 }
@@ -522,22 +522,13 @@ const clip = (s) => { const t = s == null ? "" : String(s); return (CONTENT_CAP 
 // Which credential a route uses (for the "which keys" view).
 function keyLabel(route) {
   if (route.lane === "crazyrouter") return "crazyrouterKey";
-  if (route.lane === "wrappy") return "wrappyToken";
-  if (route.lane === "anthropic") return "caller-oauth";
+  if (route.lane === "claudecode") return "claudecode-pool";
   if (route.lane === "local") return isGated(route.target) && CFG.oblitToken ? "oblitToken" : "none (open)";
   return "—";
 }
 
-// The wrappy lane hits claude.hostbun.cc, which load-balances internally across the
-// Max accounts — normally opaque (all logged as `wrappyToken`). The claudebox wrapper
-// now stamps the chosen account on the response as `X-Claudebox-Account`, so we can
-// attribute each wrappy call to a specific Max login: `wrappy:<name>`. Returns the
-// enriched label (or null when the header is absent / lane isn't wrappy).
-function wrappyAccountLabel(lane, upHeaders) {
-  if (lane !== "wrappy" || !upHeaders) return null;
-  const a = (upHeaders.get("x-claudebox-account") || "").trim();
-  return a ? `wrappy:${a}` : null;
-}
+// (Removed: wrappyAccountLabel. The gateway now picks the account itself, so the log is
+// attributed at dispatch time — no need to read it back out of a wrapper's response header.)
 
 // Extract the prompt text from a request body (chat messages / responses input / prompt).
 // full=true (local-dev anthropic lane) saves the ENTIRE turn — system + tools + messages, uncapped —
@@ -786,117 +777,23 @@ function shipError(message, attrs) {
 
 // ── lane resolution (reads live CFG) ──
 const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCase()] || null);
-const isWrappyModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.wrappyPrefix || "claude").toLowerCase());
+// A `claude*` model id means the claudecode provider (our Max account pool → api.anthropic.com).
+const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.claudePrefix || "claude").toLowerCase());
 const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.includes(target);
 
-// ── wrappy → crazyrouter failover ──
-// True when a wrappy upstream result should trigger fallback (transport dead or server-side fail).
-const isWrappyFailure = (status, threw) => threw || status >= 500 || status === 429 || status === 401 || status === 403;
-// claudebox quota/system-notice leak: the wrapper returns HTTP 200 but the message *content* is a
-// human notice ("You've hit your weekly limit · resets 2am (UTC)") instead of a real completion.
-// Status-based failover can't see this, so we sniff the content. Kept conservative to avoid eating
-// legit replies that merely discuss limits. Treated as a wrappy failure → fail over to crazyrouter.
-function isClaudeboxNotice(content) {
-  if (typeof content !== "string") return false;
-  const s = content.trim();
-  if (!s || s.length > 300) return false;          // real completions are longer; notices are short
-  return /you'?ve hit your (weekly |session |usage |rate )?limit/i.test(s) ||
-         /\bresets?\b.*\bUTC\b/i.test(s) ||
-         /(usage|rate|weekly|session) limit (reached|exceeded)/i.test(s);
-}
-// ── wrappy circuit breaker ──
-// After consecutive quota/error hits we skip wrappy entirely for CIRCUIT_TTL_MS to avoid paying
-// 12-27 seconds per call just to get a quota notice back. Resets automatically on TTL expiry.
-const CIRCUIT_TTL_MS = 20 * 60 * 1000;   // stay open 20 min — covers the time until the hourly reset
-const CIRCUIT_THRESHOLD = 3;              // consecutive failures before opening
-const wrappyCircuit = { failures: 0, openUntil: 0 };
-function wrappyCircuitOpen() { return Date.now() < wrappyCircuit.openUntil; }
-function wrappyCircuitTrip() {
-  wrappyCircuit.failures++;
-  if (wrappyCircuit.failures >= CIRCUIT_THRESHOLD && !wrappyCircuitOpen()) {
-    wrappyCircuit.openUntil = Date.now() + CIRCUIT_TTL_MS;
-    const resetAt = new Date(wrappyCircuit.openUntil).toISOString();
-    console.warn(`[circuit] wrappy circuit OPEN (${wrappyCircuit.failures} failures) — bypassing wrappy until ${resetAt}`);
-  }
-}
-function wrappyCircuitReset() {
-  if (wrappyCircuit.failures > 0) {
-    console.log("[circuit] wrappy circuit CLOSED — upstream healthy again");
-    wrappyCircuit.failures = 0; wrappyCircuit.openUntil = 0;
-  }
-}
-
-// Half-open prober: while the circuit is OPEN, ping wrappy off the request path every 60s. A real
-// (non-quota) success closes the circuit so claude traffic returns to wrappy as soon as its quota
-// resets — instead of blindly serving the crazyrouter fallback for the full 20-min TTL. Costs one
-// tiny background call per minute and never penalizes a user request.
-const CIRCUIT_PROBE_MS = 60 * 1000;
-let wrappyProbing = false;
-async function probeWrappy() {
-  if (wrappyProbing || !wrappyCircuitOpen()) return;
-  wrappyProbing = true;
-  try {
-    const r = await fetch(CFG.bases.wrappy + "/v1/chat/completions", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${CFG.wrappyToken}` },
-      body: JSON.stringify({ model: "claude-haiku-4-5", messages: [{ role: "user", content: "reply ok" }], max_tokens: WRAPPY_MIN_MAX_TOKENS, stream: false }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!r.ok) return;                                   // still erroring — stay open
-    const content = extractResponseBody(Buffer.from(await r.arrayBuffer()), false).content;
-    if (isClaudeboxNotice(content)) return;              // still quota-limited — stay open
-    console.log("[circuit] wrappy half-open probe succeeded — closing circuit");
-    wrappyCircuitReset();
-  } catch { /* probe failed — leave circuit open */ }
-  finally { wrappyProbing = false; }
-}
-setInterval(probeWrappy, CIRCUIT_PROBE_MS).unref?.();
-
-// Build the crazyrouter route to retry a failed wrappy call on. `model` = caller's original model.
-// Returns null when fallback is disabled or no usable model. crazyrouter mirrors the claude-* ids,
-// so an empty configured model means "resend the caller's model unchanged".
-function wrappyFallbackRoute(model) {
-  const fb = CFG.wrappyFallback;
-  if (!fb || !fb.enabled) return null;
-  const fbModel = (fb.model && fb.model.trim()) || (model == null ? "" : String(model));
-  if (!fbModel) return null;
-  return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: fbModel, reason: "wrappy fallback -> crazyrouter" };
-}
-
-// ── wrappy admission control (concurrency gate) ──
-// claudebox spawns a heavyweight `claude` CLI subprocess per request; there is NO
-// concurrency cap on its side, so a burst (PromoPilot fires 6 L1 + 6 L2 + crowd
-// jobs at once) stampedes the container (4 cpu / 12g / pids-limit=128) → every
-// call slows → they hit the 300s timeout or come back empty. Fix: cap concurrent
-// in-flight wrappy requests to a size claudebox can actually serve, and QUEUE the
-// rest (bounded FIFO). On queue overflow/timeout, shed to the crazyrouter
-// fallback instead of piling on. Tunables (live-safe env, no redeploy needed if
-// you'd rather add them to CFG later):
-//   WRAPPY_MAX_CONCURRENCY  simultaneous wrappy calls        (default 3)
-//   WRAPPY_QUEUE_MAX        max waiters before shedding       (default 60)
-//   WRAPPY_QUEUE_TIMEOUT_MS max wait in queue before shedding (default 120000)
-const WRAPPY_MAX = Math.max(1, parseInt(process.env.WRAPPY_MAX_CONCURRENCY || "3", 10));
-const WRAPPY_QUEUE_MAX = Math.max(0, parseInt(process.env.WRAPPY_QUEUE_MAX || "60", 10));
-const WRAPPY_QUEUE_TIMEOUT_MS = Math.max(1000, parseInt(process.env.WRAPPY_QUEUE_TIMEOUT_MS || "120000", 10));
-const wrappyGate = { active: 0, queue: [], peakQueue: 0, shed: 0 };
-function wrappyAcquire() {
-  return new Promise((resolve, reject) => {
-    if (wrappyGate.active < WRAPPY_MAX) { wrappyGate.active++; return resolve(); }
-    if (wrappyGate.queue.length >= WRAPPY_QUEUE_MAX) { wrappyGate.shed++; return reject(new Error("queue full")); }
-    const item = { resolve, reject, timer: null };
-    item.timer = setTimeout(() => {
-      const i = wrappyGate.queue.indexOf(item);
-      if (i >= 0) { wrappyGate.queue.splice(i, 1); wrappyGate.shed++; reject(new Error("queue timeout")); }
-    }, WRAPPY_QUEUE_TIMEOUT_MS);
-    wrappyGate.queue.push(item);
-    if (wrappyGate.queue.length > wrappyGate.peakQueue) wrappyGate.peakQueue = wrappyGate.queue.length;
-  });
-}
-function wrappyRelease() {
-  const next = wrappyGate.queue.shift();
-  if (next) { clearTimeout(next.timer); next.resolve(); }   // hand the slot straight to the next waiter
-  else wrappyGate.active = Math.max(0, wrappyGate.active - 1);
-}
+// ── DELETED: the entire claudebox (wrappy) support apparatus ──────────────
+// The wrapper spawned a `claude` CLI subprocess per request, so it needed a concurrency gate, a
+// circuit breaker, a half-open prober, a 200-with-a-quota-notice body sniffer, and a silent
+// cross-provider failover to crazyrouter. All of that existed to babysit ONE upstream.
+//
+// The gateway now speaks to api.anthropic.com directly. There is no subprocess to stampede, so
+// there is nothing to gate; a 429 is a real 429 and is returned as such. Nothing silently reroutes
+// a Claude request to a different model on a different provider behind your back — that swapped the
+// answer, blew the prompt cache, and spent money invisibly. If the pinned account is out of quota
+// you get told, and you re-pin.
+//
+// Removed: isWrappyFailure, isClaudeboxNotice, wrappyCircuit{,Open,Trip,Reset}, probeWrappy,
+//          wrappyFallbackRoute, wrappyGate/Acquire/Release, floorWrappyTokens, doFailover.
 
 const HOP_REQ = new Set(["host", "connection", "content-length", "accept-encoding",
   "keep-alive", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
@@ -944,18 +841,6 @@ function hasImageContent(messages) {
   return false;
 }
 
-// claudebox maps `max_tokens` → `max_thinking_tokens`; a tiny budget (e.g. 1) starves the agent so
-// it never emits a final answer and the request hangs until timeout. That hang counts as a wrappy
-// failure → trips the circuit / fails over to crazyrouter. Floor wrappy-bound requests (and our own
-// probes) so small-max_tokens callers can't wedge the lane. Only raises when an explicit value is
-// below the floor; unset is left alone (claudebox uses its own working default).
-const WRAPPY_MIN_MAX_TOKENS = Number(process.env.WRAPPY_MIN_MAX_TOKENS || 1024);
-function floorWrappyTokens(obj) {
-  if (obj && typeof obj.max_tokens === "number" && obj.max_tokens < WRAPPY_MIN_MAX_TOKENS)
-    obj.max_tokens = WRAPPY_MIN_MAX_TOKENS;
-  return obj;
-}
-
 // Run the request's `messages` through the headroom-compress sidecar before forwarding upstream.
 // Returns { buf, stats }. On ANY problem it returns the original bytes and stats=null, so a slow or
 // dead compressor never blocks inference. Only touches chat/messages bodies that carry a messages[].
@@ -997,28 +882,50 @@ async function headroomCompress(bodyBuf, model, lane) {
 
 async function proxy(req, res, base, opts = {}) {
   const { bodyBuf, injectKey, authToken, rewriteModel, model, lane, project } = opts;
-  const target = base + req.url;
+  let target = base + req.url;
   const ip = opts.ip || req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const t0 = Date.now();
   let stream = false;
-  const headers = buildHeaders(req, { injectKey, authToken });
+  let headers = buildHeaders(req, { injectKey, authToken });
   let body = bodyBuf;
+
+  // Does this call need OpenAI→Anthropic translation? Only when an OpenAI-shaped request is being
+  // served by the claudecode provider. A native /v1/messages caller (Claude Code) is forwarded
+  // byte-for-byte — translating it would only lose fidelity and bust its prompt cache.
+  const wantsTranslate = !!opts.translate;
+
   if (bodyBuf && bodyBuf.length) {
     try {
       const j = JSON.parse(bodyBuf.toString());
       stream = !!j.stream;
-      let mutated = false;
-      if (rewriteModel && j && j.model) { j.model = rewriteModel; mutated = true; }
-      if (lane === "wrappy" && j) { const before = j.max_tokens; floorWrappyTokens(j); if (j.max_tokens !== before) mutated = true; }
-      if (mutated) { body = Buffer.from(JSON.stringify(j)); headers["content-type"] = "application/json"; }
-    } catch { /* leave body as-is */ }
+      if (rewriteModel && j && j.model) j.model = rewriteModel;
+      if (wantsTranslate) {
+        const a = TR.openaiToAnthropic(j);
+        body = Buffer.from(JSON.stringify(a));
+        target = base + "/v1/messages";                     // OpenAI path does not exist upstream
+      } else {
+        body = Buffer.from(JSON.stringify(j));
+      }
+      headers["content-type"] = "application/json";
+    } catch { /* not JSON — leave body as-is */ }
   }
-  // Common fields for the call-log row. Local-dev (anthropic lane) saves chats in full (uncapped).
-  const fullContent = (lane === "anthropic");
+
+  // The claudecode provider ALWAYS gets synthesized auth headers. A Max setup-token is rejected by
+  // Anthropic without `anthropic-beta: oauth-2025-04-20` + a claude-cli UA; trusting the caller to
+  // supply them is exactly why only real Claude Code ever worked on this path.
+  if (lane === "claudecode" && authToken) {
+    headers = {
+      ...TR.anthropicHeaders(authToken, { extraBeta: req.headers["anthropic-beta"] || "" }),
+      accept: stream ? "text/event-stream" : "application/json",
+    };
+  }
+
+  // Common fields for the call-log row. claudecode chats are saved in full (uncapped).
+  const fullContent = (lane === "claudecode");
   const base_rec = {
     ts: t0, ip, ua: req.headers["user-agent"] || "", method: req.method, path: (req.url || "").split("?")[0],
     reqModel: model || null, lane: lane || "local", sentModel: rewriteModel || model || null,
-    keyLabel: opts.account ? `anthropic:${opts.account}` : keyLabel({ lane: lane || "local", target: opts.target }), stream, full: fullContent,
+    keyLabel: opts.account ? `claudecode:${opts.account}` : keyLabel({ lane: lane || "local", target: opts.target }), stream, full: fullContent,
     reqContent: extractRequestContent(bodyBuf, fullContent), project: project || null,
     ...extractReqParams(bodyBuf),
     ...extractReqMeta(bodyBuf),
@@ -1030,59 +937,13 @@ async function proxy(req, res, base, opts = {}) {
   try { up = await fetch(curTarget, curInit); }
   catch (e) { threw = true; fetchErr = e; }
 
-  // wrappy → crazyrouter failover (one shot). Decided before any client bytes are sent, so it is
-  // safe even for streaming responses — nothing has been written to `res` yet. Re-fires the request
-  // at crazyrouter and updates up/curLane/base_rec in place. Returns true if it ran.
-  let failedOver = false;
-  async function doFailover(why) {
-    if (failedOver) return false;
-    const fb = wrappyFallbackRoute(model);
-    if (!fb) return false;
-    console.warn(`[fallback] wrappy ${why} -> crazyrouter model=${fb.rewriteModel} ${target}`);
-    shipError(`wrappy fallback -> crazyrouter`, { from: "wrappy", reason: why, model: model || "-", fbModel: fb.rewriteModel, ip });
-    const fbHeaders = buildHeaders(req, { injectKey: true });
-    let fbBody = bodyBuf;
-    if (bodyBuf && bodyBuf.length) {
-      try { const j = JSON.parse(bodyBuf.toString()); j.model = fb.rewriteModel; fbBody = Buffer.from(JSON.stringify(j)); fbHeaders["content-type"] = "application/json"; } catch { /* leave body as-is */ }
-    }
-    curTarget = fb.base + req.url; curLane = "crazyrouter";
-    base_rec.lane = "crazyrouter"; base_rec.sentModel = fb.rewriteModel; base_rec.keyLabel = "crazyrouterKey";
-    curInit = { method: req.method, headers: fbHeaders, redirect: "follow" };
-    if (!["GET", "HEAD"].includes(req.method) && fbBody && fbBody.length) curInit.body = fbBody;
-    up = null; threw = false; fetchErr = null;
-    try { up = await fetch(curTarget, curInit); }
-    catch (e) { threw = true; fetchErr = e; }
-    failedOver = true;
-    return true;
-  }
-
-  if (lane === "wrappy" && isWrappyFailure(up ? up.status : 0, threw)) {
-    wrappyCircuitTrip();
-    await doFailover(threw ? `fetch-failed (${fetchErr.message})` : `status ${up.status}`);
-  }
-
-  // The project's pinned account hit its 5h/7d cap (429). We deliberately do NOT switch accounts:
-  // a silent switch blows the prompt cache and hides which sub paid. Record the limit so /admin and
-  // the statusline immediately show the account hot, then let the real 429 reach the caller.
-  if (lane === "anthropic" && !threw && up && up.status === 429 && opts.account) {
+  // NOTE: there is no failover. Not to another account, not to another provider. A 429 means the
+  // project's pinned account is out of quota and the caller is told so; a 5xx means the upstream
+  // failed and the caller is told so. Silently re-answering with a different model on someone
+  // else's bill is what the old wrappy→crazyrouter path did, and it hid both cost and truth.
+  if (lane === "claudecode" && !threw && up && up.status === 429 && opts.account) {
     recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);
     console.warn(`[account] 429 on ${opts.account} (project=${base_rec.project || "-"}) — no auto-switch, returning 429 to caller`);
-  }
-
-  // claudebox quota notice leaked as a 200 (status-based failover can't see it). Sniff non-stream
-  // wrappy bodies; if it's a wrapper notice, fail over to crazyrouter. `preBuf` holds the bytes we
-  // already read so the non-quota case can still be forwarded without re-fetching.
-  let preBuf = null;
-  if (!threw && !failedOver && curLane === "wrappy" && up && up.status < 400 && up.body &&
-      !(up.headers.get("content-type") || "").includes("text/event-stream")) {
-    preBuf = Buffer.from(await up.arrayBuffer());
-    if (isClaudeboxNotice(extractResponseBody(preBuf, false).content)) {
-      preBuf = null;
-      wrappyCircuitTrip();
-      await doFailover("quota notice (200 body)");
-    } else {
-      wrappyCircuitReset(); // wrappy returned a real response — it's healthy
-    }
   }
 
   if (threw) {
@@ -1096,28 +957,60 @@ async function proxy(req, res, base, opts = {}) {
     console.error(`[err] upstream=${up.status} lane=${curLane || "?"} model=${model || "-"} ${curTarget}`);
     up.clone().text().then((t) => shipError(`upstream ${up.status} ${req.method} ${req.url}`, { model: model || "-", lane: curLane || "?", ip, status: up.status, body: t })).catch(() => {});
   }
-  // Attribute the wrappy lane to the actual Max account the wrapper picked (X-Claudebox-Account),
-  // so its token usage isn't an opaque `wrappyToken` blob. No-op on other lanes / older wrappers.
-  { const wl = wrappyAccountLabel(curLane, up.headers); if (wl) base_rec.keyLabel = wl; }
   // Free rate-limit harvest: snapshot this account's live 5h/7d headroom off the response headers
-  // (no probe, zero tokens). Fires for any Anthropic-native reply; a no-op for other lanes.
+  // (no probe, zero tokens). Fires for any Anthropic-native reply; a no-op for other providers.
   recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel);
-  const rh = {};
-  up.headers.forEach((v, k) => { if (!HOP_RES.has(k.toLowerCase())) rh[k] = v; });
-  res.writeHead(up.status, rh);
   const isStream = (up.headers.get("content-type") || "").includes("text/event-stream");
   // Only chat/responses/completions calls carry content worth recording; for those we tee the
   // body (capped) to pull tokens + reply. /v1/models etc. are skipped to keep the log signal high.
   const recordThis = CFG.logging.enabled && req.method === "POST" && /\/(chat\/completions|responses|completions|messages|chat)$/.test(base_rec.path);
-  if (preBuf) {
-    // Body already fully read during the quota sniff (non-quota wrappy reply) — forward the bytes.
-    if (recordThis) {
-      const ex = extractResponseBody(preBuf, isStream);
-      recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0, usage: ex.usage, respContent: ex.content,
-        stopReason: ex.stopReason, error: up.status >= 400 ? `upstream ${up.status}` : null });
+
+  // ── translated responses (OpenAI caller, claudecode provider) ──
+  // The upstream spoke Anthropic; the caller expects OpenAI. Rewrite the body, and DON'T forward
+  // upstream's content-length (the translated body is a different size).
+  if (wantsTranslate && up.body && up.status < 400) {
+    if (isStream) {
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+      const tr = TR.createSseTranslator({ model: base_rec.sentModel || base_rec.reqModel || "", includeUsage: true });
+      const raw = [];
+      for await (const chunk of Readable.fromWeb(up.body)) {
+        const s = Buffer.from(chunk).toString();
+        if (recordThis) raw.push(s);
+        const out = tr.push(s);
+        if (out) res.write(out);
+      }
+      res.end();
+      if (recordThis) {
+        const u = tr.usage ? TR.usageToOpenai(tr.usage) : null;
+        recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0,
+          usage: u && { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens, total_tokens: u.total_tokens },
+          respContent: raw.join("").slice(0, 20000), stopReason: null, error: null });
+      }
+      return;
     }
-    res.end(preBuf);
-  } else if (up.body && !up.bodyUsed) {
+    const buf = Buffer.from(await up.arrayBuffer());
+    let out;
+    try {
+      out = TR.anthropicToOpenai(JSON.parse(buf.toString()), { model: base_rec.sentModel || base_rec.reqModel || "" });
+    } catch (e) {
+      console.error(`[translate] bad upstream body: ${e.message}`);
+      res.writeHead(502, { "content-type": "application/json" });
+      recordCall({ ...base_rec, status: 502, ms: Date.now() - t0, error: "translate failed: " + e.message });
+      return res.end(JSON.stringify({ error: { message: "translate failed: " + e.message, type: "bad_upstream" } }));
+    }
+    const outBuf = Buffer.from(JSON.stringify(out));
+    res.writeHead(up.status, { "content-type": "application/json" });
+    if (recordThis) {
+      recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0, usage: out.usage,
+        respContent: clip(out.choices?.[0]?.message?.content || ""), stopReason: out.choices?.[0]?.finish_reason || null, error: null });
+    }
+    return res.end(outBuf);
+  }
+
+  const rh = {};
+  up.headers.forEach((v, k) => { if (!HOP_RES.has(k.toLowerCase())) rh[k] = v; });
+  res.writeHead(up.status, rh);
+  if (up.body && !up.bodyUsed) {
     const r = Readable.fromWeb(up.body);
     if (recordThis) {
       const chunks = []; let size = 0;
@@ -1216,13 +1109,12 @@ async function jsonEnforce(req, res, route) {
       ? parsed.choices[0].message.content : null });
   reqObj.stream = false;                                   // must see the whole body to validate
   if (rewriteModel) reqObj.model = rewriteModel;
-  if (lane === "wrappy") floorWrappyTokens(reqObj);        // don't starve the claudebox agent (hangs)
   const messages = Array.isArray(reqObj.messages) ? reqObj.messages.slice() : [];
   const rf = reqObj.response_format;
   const rfType = typeof rf === "string" ? rf : (rf && rf.type);
-  // wrappy (claudebox) and local json_object don't honour response_format natively → strip it and
-  // steer with a plain instruction instead.
-  if (lane === "wrappy" || (lane === "local" && rfType === "json_object")) {
+  // Neither claudecode nor the local json_object mode honours `response_format` natively → strip it
+  // and steer with a plain instruction instead.
+  if (lane === "claudecode" || (lane === "local" && rfType === "json_object")) {
     delete reqObj.response_format;
     injectJsonInstruction(messages, rf);
   }
@@ -1230,49 +1122,41 @@ async function jsonEnforce(req, res, route) {
   headers["content-type"] = "application/json";
   headers["accept"] = "application/json";
   let target = base + req.url;
+  const curLane = lane;
+  // No failover. If the upstream fails, the caller is told. See proxy() for why.
 
-  // wrappy → crazyrouter failover: re-point this enforced call at crazyrouter once. The messages
-  // were already steered with a JSON instruction (wrappy path strips response_format above), so the
-  // crazyrouter model still returns JSON we can validate. One shot, guarded by `fellBack`.
-  let curLane = lane, fellBack = false;
-  function switchWrappyToCrazy() {
-    const fb = wrappyFallbackRoute(model);
-    if (!fb) return false;
-    curLane = "crazyrouter";
-    target = fb.base + req.url;
-    headers = buildHeaders(req, { injectKey: true });
-    headers["content-type"] = "application/json";
-    headers["accept"] = "application/json";
-    reqObj.model = fb.rewriteModel;
-    logRec.lane = "crazyrouter"; logRec.sentModel = fb.rewriteModel; logRec.keyLabel = "crazyrouterKey";
-    fellBack = true;
-    wrappyCircuitTrip();
-    console.warn(`[fallback] wrappy(json-enforce) -> crazyrouter model=${fb.rewriteModel}`);
-    shipError(`wrappy fallback -> crazyrouter (json-enforce)`, { from: "wrappy", model: model || "-", fbModel: fb.rewriteModel, ip });
-    return true;
+  // One upstream round-trip. On claudecode we translate OpenAI→Anthropic on the way out and
+  // Anthropic→OpenAI on the way back, so everything below this line only ever sees OpenAI shape.
+  const translating = curLane === "claudecode";
+  async function callUpstream() {
+    const url = translating ? base + "/v1/messages" : target;
+    const hdrs = translating
+      ? { ...TR.anthropicHeaders(authToken), accept: "application/json" }
+      : headers;
+    const payload = translating ? TR.openaiToAnthropic(reqObj) : reqObj;
+    const up = await fetch(url, { method: "POST", headers: hdrs, redirect: "follow", body: Buffer.from(JSON.stringify(payload)) });
+    let text = await up.text();
+    if (translating && up.status < 400) {
+      try { text = JSON.stringify(TR.anthropicToOpenai(JSON.parse(text), { model: reqObj.model })); }
+      catch (e) { console.error(`[translate] json-enforce bad upstream body: ${e.message}`); }
+    }
+    return { up, text };
   }
 
   let lastErr = "", lastRaw = "";
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     reqObj.messages = messages;
-    let up;
-    try { up = await fetch(target, { method: req.method, headers, redirect: "follow", body: Buffer.from(JSON.stringify(reqObj)) }); }
+    let up, text;
+    try { ({ up, text } = await callUpstream()); }
     catch (e) {
-      // wrappy unreachable → fall back to crazyrouter and retry this attempt.
-      if (curLane === "wrappy" && !fellBack && switchWrappyToCrazy()) { attempt--; continue; }
       console.error(`[err] json-enforce fetch-failed lane=${curLane} model=${model || "-"} ${target}: ${e.message}`);
       shipError(`json-enforce upstream fetch failed: ${e.message}`, { model: model || "-", lane: curLane, ip, target });
       recordCall({ ...logRec, status: 502, ms: Date.now() - t0, error: "upstream fetch failed: " + e.message });
       res.writeHead(502, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: { message: "upstream fetch failed: " + e.message } }));
     }
-    const text = await up.text();
-    // Attribute the wrappy lane to the wrapper-chosen Max account (see wrappyAccountLabel).
-    // Before the error guard so failed calls (429 = account capped, 500, timeout) attribute too.
-    { const wl = wrappyAccountLabel(curLane, up.headers); if (wl) logRec.keyLabel = wl; }
-    if (up.status >= 400) {                                // upstream error
-      // wrappy server-side failure → fall back to crazyrouter and retry this attempt.
-      if (curLane === "wrappy" && !fellBack && isWrappyFailure(up.status, false)) { wrappyCircuitTrip(); if (switchWrappyToCrazy()) { attempt--; continue; } }
+    if (curLane === "claudecode") recordLimits(up.headers, logRec.project, logRec.sentModel || logRec.reqModel);
+    if (up.status >= 400) {                                // upstream error — surfaced, never masked
       console.error(`[err] upstream=${up.status} lane=${curLane} model=${model || "-"} ${target} (json-enforce)`);
       shipError(`upstream ${up.status} ${req.method} ${req.url} (json-enforce)`, { model: model || "-", lane: curLane, ip, status: up.status, body: text });
       recordCall({ ...logRec, status: up.status, ms: Date.now() - t0, error: `upstream ${up.status}`, respContent: text });
@@ -1288,12 +1172,8 @@ async function jsonEnforce(req, res, route) {
       return finishJson(res, wantStream, parsed, text);
     }
     const content = msg && typeof msg.content === "string" ? msg.content : null;
-    // claudebox quota notice leaked as a 200 → wrappy is effectively down. Fail over to crazyrouter
-    // (one shot) instead of burning JSON retries against a model that will never answer.
-    if (curLane === "wrappy" && !fellBack && isClaudeboxNotice(content)) { wrappyCircuitTrip(); if (switchWrappyToCrazy()) { attempt--; continue; } }
     const v = validateJsonContent(content);
     if (v.ok) {
-      if (curLane !== "crazyrouter") wrappyCircuitReset(); // healthy wrappy response
       if (v.repaired) { msg.content = v.value; logJson(up.status, parsed, null); return finishJson(res, wantStream, parsed, JSON.stringify(parsed)); }
       logJson(up.status, parsed, null);
       return finishJson(res, wantStream, parsed, text);
@@ -1331,50 +1211,33 @@ function localModelEntries() {
   return out;
 }
 
-// Fetch wrappy + crazyrouter catalogs (best-effort). Returns {wrappy, crazyrouter}.
+// Fetch the crazyrouter catalog (best-effort). claudecode ids are static (claude-*), so they are
+// listed from config rather than probed — probing would spend a real token on a real account.
 async function upstreamCatalogs() {
-  let wrappy = [];
-  try {
-    const c = await fetch(CFG.bases.wrappy + "/v1/models", { headers: { authorization: `Bearer ${CFG.wrappyToken}` } });
-    const cj = await c.json();
-    wrappy = ((cj && cj.data) || []).map((m) => ({ ...m, owned_by: "wrappy" }));
-  } catch { /* wrappy down — skip */ }
   let crazyrouter = [];
-  const seen = new Set();
   try {
-    const u = await fetch(CFG.bases.crazyrouter + "/v1/models", { headers: { authorization: `Bearer ${CFG.crazyrouterKey}` } });
-    const j = await u.json();
-    for (const m of (j && j.data) || []) { if (m && m.id && !seen.has(m.id)) { seen.add(m.id); crazyrouter.push(m); } }
-  } catch { /* crazyrouter /v1/models down — fall back to the price feed below */ }
-  // crazyrouter.com/v1/models only lists a sliver of the catalog for some keys, while the price
-  // feed (gen-prices.sh → /api/pricing) carries the full ~250. Merge in any priced ids we don't
-  // already have so /v1/models reflects everything that's actually routable.
-  try {
-    const pj = JSON.parse(fs.readFileSync(PRICES_FILE, "utf8"));
-    for (const m of (pj && pj.models) || []) {
-      const id = m && m.model;
-      if (id && !seen.has(id)) { seen.add(id); crazyrouter.push({ id, object: "model", owned_by: "crazyrouter" }); }
-    }
-  } catch { /* no price feed yet — keep whatever the live catalog returned */ }
-  return { wrappy, crazyrouter };
+    const c = await fetch(CFG.bases.crazyrouter + "/v1/models", { headers: { authorization: `Bearer ${CFG.crazyrouterKey}` }, signal: AbortSignal.timeout(8000) });
+    const cj = await c.json();
+    crazyrouter = ((cj && cj.data) || []).map((m) => ({ ...m, owned_by: "crazyrouter" }));
+  } catch { /* crazyrouter down — skip */ }
+  const claudecode = CLAUDECODE_MODELS.map((id) => ({ id, object: "model", owned_by: "claudecode" }));
+  return { claudecode, crazyrouter };
 }
 
 async function mergedModels(res) {
   const local = localModelEntries();
-  const { wrappy, crazyrouter } = await upstreamCatalogs();
+  const { claudecode, crazyrouter } = await upstreamCatalogs();
   const images = [{ id: "imagegen", object: "model", owned_by: "pbox" }];
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-  res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...wrappy, ...crazyrouter] }));
+  res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter] }));
 }
 
 // Build a concrete route for an explicit (lane, model) — used by forceModel / modelRoutes /
 // defaultRoute. `model` is the id actually sent upstream (rewriteModel).
 function laneRoute(lane, model, reason) {
   const l = normLane(lane) || "crazyrouter";
-  if (l === "wrappy") return { lane: "wrappy", base: CFG.bases.wrappy, authToken: CFG.wrappyToken, rewriteModel: model || undefined, reason };
-  // Passthrough: no authToken/injectKey → buildHeaders forwards the caller's own Authorization
-  // (Max OAuth bearer) untouched to api.anthropic.com. model "" keeps the caller's id as-is.
-  if (l === "anthropic") return { lane: "anthropic", base: CFG.bases.anthropic, rewriteModel: model || undefined, reason };
+  // claudecode: the pinned account's token is attached later (dispatch), not here.
+  if (l === "claudecode") return { lane: "claudecode", base: CFG.bases.claudecode, rewriteModel: model || undefined, reason };
   if (l === "local") return { lane: "local", base: CFG.bases.local, rewriteModel: model, target: model, reason };
   return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
 }
@@ -1477,7 +1340,7 @@ function acctHealth(org) {
 // No request header can override it. Deterministic: same project ⇒ same account, every time.
 // (`consumerAccounts` is the pre-rename name of `projectAccounts`; both are read during migration.)
 function accountFor(project) {
-  const pool = CFG.anthropicPool || [];
+  const pool = CFG.claudecodeAccountPool || [];
   if (!pool.length) return null;
   const p = String(project == null ? "" : project).trim().toLowerCase();
   const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
@@ -1502,14 +1365,7 @@ function resolveRoute(model, project) {
     return laneRoute(CFG.modelRoutes[key].lane, CFG.modelRoutes[key].model || m, `override: ${key}`);
   const lt = localTarget(m);
   if (lt) return { lane: "local", base: CFG.bases.local, rewriteModel: lt, target: lt, reason: "local alias" };
-  if (isWrappyModel(m)) {
-    if (wrappyCircuitOpen()) {
-      // Circuit is open — route directly to the fallback without touching wrappy.
-      const fb = wrappyFallbackRoute(m);
-      if (fb) return { ...fb, reason: "wrappy circuit open → crazyrouter" };
-    }
-    return { lane: "wrappy", base: CFG.bases.wrappy, authToken: CFG.wrappyToken, reason: "wrappy prefix" };
-  }
+  if (isClaudeModel(m)) return { lane: "claudecode", base: CFG.bases.claudecode, reason: "claude* model" };
   if (!m) return defaultRouteResolved("no model specified");
   const pol = CFG.cloudPolicy || "open";
   if (pol === "open") return { lane: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, reason: "crazyrouter (open)" };
@@ -1579,8 +1435,7 @@ function adminState() {
     bases: CFG.bases,
     localMap: CFG.localMap,
     gatedModels: CFG.gatedModels,
-    wrappyPrefix: CFG.wrappyPrefix,
-    wrappyFallback: CFG.wrappyFallback,
+    claudePrefix: CFG.claudePrefix,
     forceModel: CFG.forceModel,
     modelRoutes: CFG.modelRoutes,
     projectRoutes: CFG.projectRoutes,
@@ -1598,20 +1453,12 @@ function adminState() {
     requireProject: CFG.requireProject,
     logging: CFG.logging,
     loggingDbReady: !!db,
-    // wrappy concurrency gate — live health of the admission control
-    wrappyGate: {
-      max: WRAPPY_MAX, queueMax: WRAPPY_QUEUE_MAX, queueTimeoutMs: WRAPPY_QUEUE_TIMEOUT_MS,
-      active: wrappyGate.active, queued: wrappyGate.queue.length,
-      peakQueue: wrappyGate.peakQueue, shed: wrappyGate.shed,
-      circuitOpen: wrappyCircuitOpen(),
-    },
     // secrets — never returned in clear
     crazyrouterKeySet: !!CFG.crazyrouterKey, crazyrouterKeyMasked: mask(CFG.crazyrouterKey),
-    wrappyTokenSet: !!CFG.wrappyToken, wrappyTokenMasked: mask(CFG.wrappyToken),
     // Each account carries its harvested headroom AND the age of that reading, so any consumer
     // (admin UI, statusline) can render "hot/cool" together with "as of when" — never a stale
     // number presented as fresh. `stale:true` = no reading in 6h; show it as unknown, not cool.
-    anthropicPool: (CFG.anthropicPool || []).map((a) => {
+    claudecodeAccountPool: (CFG.claudecodeAccountPool || []).map((a) => {
       const h = acctHealth(a.org);
       return { name: a.name, org: a.org, tokenMasked: mask(a.token),
                util: h.util, hot: h.hot, ts: h.ts, stale: h.stale };
@@ -1671,7 +1518,6 @@ async function adminTest(model, prompt, maxTokens) {
   const route = resolveRoute(model);
   const headers = { "content-type": "application/json" };
   if (route.lane === "crazyrouter") headers.authorization = `Bearer ${CFG.crazyrouterKey}`;
-  else if (route.lane === "wrappy") headers.authorization = `Bearer ${CFG.wrappyToken}`;
   else if (route.lane === "local" && isGated(route.target) && CFG.oblitToken) headers.authorization = `Bearer ${CFG.oblitToken}`;
   const sendModel = route.rewriteModel || model;
   const body = { model: sendModel, messages: [{ role: "user", content: prompt || "Reply with a short greeting." }], max_tokens: maxTokens || 256, stream: false };
@@ -1719,12 +1565,10 @@ async function handleAdminApi(req, res, path) {
     if (patch.bases) {
       if (typeof patch.bases.local === "string") next.bases.local = patch.bases.local;
       if (typeof (patch.bases.crazyrouter ?? patch.bases.crazy) === "string") next.bases.crazyrouter = patch.bases.crazyrouter ?? patch.bases.crazy;
-      if (typeof (patch.bases.wrappy ?? patch.bases.claude) === "string") next.bases.wrappy = patch.bases.wrappy ?? patch.bases.claude;
     }
     if (patch.localMap) next.localMap = patch.localMap;
     if (patch.gatedModels) next.gatedModels = patch.gatedModels;
-    if (typeof (patch.wrappyPrefix ?? patch.claudePrefix) === "string") next.wrappyPrefix = patch.wrappyPrefix ?? patch.claudePrefix;
-    if (patch.wrappyFallback && typeof patch.wrappyFallback === "object") next.wrappyFallback = patch.wrappyFallback;
+    if (typeof (patch.claudePrefix ?? patch.wrappyPrefix) === "string") next.claudePrefix = patch.claudePrefix ?? patch.wrappyPrefix;
     if (patch.forceModel) next.forceModel = patch.forceModel;
     if (patch.modelRoutes) next.modelRoutes = patch.modelRoutes;
     if (patch.projectRoutes) next.projectRoutes = patch.projectRoutes;
@@ -1732,7 +1576,8 @@ async function handleAdminApi(req, res, path) {
     if (patch.consumerAccounts) next.consumerAccounts = patch.consumerAccounts;  // legacy name for the same
     if (typeof patch.defaultAccount === "string") next.defaultAccount = patch.defaultAccount;
     if (patch.projectGroups) next.projectGroups = patch.projectGroups;
-    if (Array.isArray(patch.anthropicPool)) next.anthropicPool = patch.anthropicPool;   // the Max account pool
+    if (Array.isArray(patch.claudecodeAccountPool)) next.claudecodeAccountPool = patch.claudecodeAccountPool;
+    else if (Array.isArray(patch.anthropicPool)) next.claudecodeAccountPool = patch.anthropicPool;   // legacy name
     if (patch.projectLimits) next.projectLimits = patch.projectLimits;
     if (patch.projectLimitDefault) next.projectLimitDefault = patch.projectLimitDefault;
     if (patch.cloudPolicy) next.cloudPolicy = patch.cloudPolicy;
@@ -1743,7 +1588,6 @@ async function handleAdminApi(req, res, path) {
     if (typeof patch.requireProject === "boolean") next.requireProject = patch.requireProject;
     if (patch.logging && typeof patch.logging === "object") Object.assign(next.logging, patch.logging);
     if (typeof (patch.crazyrouterKey ?? patch.crazyKey) === "string") next.crazyrouterKey = patch.crazyrouterKey ?? patch.crazyKey;
-    if (typeof (patch.wrappyToken ?? patch.claudeToken) === "string") next.wrappyToken = patch.wrappyToken ?? patch.claudeToken;
     for (const k of ["oblitToken", "adminPassword"])
       if (typeof patch[k] === "string") next[k] = patch[k];
     const merged = mergeConfig(envDefaults(), next);
@@ -1763,15 +1607,15 @@ async function handleAdminApi(req, res, path) {
   }
 
   if (sub === "health" && req.method === "GET") {
-    const [local, wrappy, crazyrouter] = await Promise.all([
-      probe(CFG.bases.local), probe(CFG.bases.wrappy, CFG.wrappyToken), probe(CFG.bases.crazyrouter, CFG.crazyrouterKey),
+    const [local, crazyrouter] = await Promise.all([
+      probe(CFG.bases.local), probe(CFG.bases.crazyrouter, CFG.crazyrouterKey),
     ]);
-    return sendJson(res, 200, { local, wrappy, crazyrouter });
+    return sendJson(res, 200, { local, crazyrouter, claudecode: { ok: (CFG.claudecodeAccountPool || []).length > 0, accounts: (CFG.claudecodeAccountPool || []).length } });
   }
 
   if (sub === "models" && req.method === "GET") {
-    const { wrappy, crazyrouter } = await upstreamCatalogs();
-    return sendJson(res, 200, { local: localModelEntries(), wrappy, crazyrouter });
+    const { claudecode, crazyrouter } = await upstreamCatalogs();
+    return sendJson(res, 200, { local: localModelEntries(), claudecode, crazyrouter });
   }
 
   // Latest per-account rate-limit snapshot harvested off real traffic (zero-token; see recordLimits).
@@ -1808,7 +1652,7 @@ async function handleAdminApi(req, res, path) {
     return sendJson(res, 200, {
       input: p.model || "", project: p.project || "", lane: r.lane, sentModel: sent, reason: r.reason || "",
       blocked: !!r.blocked, why: r.why, gated,
-      base: r.base || (r.lane === "local" ? CFG.bases.local : r.lane === "wrappy" ? CFG.bases.wrappy : r.lane === "crazyrouter" ? CFG.bases.crazyrouter : ""),
+      base: r.base || (r.lane === "local" ? CFG.bases.local : r.lane === "claudecode" ? CFG.bases.claudecode : r.lane === "crazyrouter" ? CFG.bases.crazyrouter : ""),
     });
   }
 
@@ -2151,7 +1995,7 @@ const server = http.createServer(async (req, res) => {
   // No `X-Account` / `X-CCC-Account` / `X-Consumer` header is consulted — identity comes from the
   // project, the pin lives in /admin, and the client Bearer is overridden regardless. An unpinned
   // project is a configuration bug, so we say so loudly rather than silently billing someone.
-  if (lane === "anthropic" && CFG.anthropicPool && CFG.anthropicPool.length) {
+  if (lane === "claudecode" && CFG.claudecodeAccountPool && CFG.claudecodeAccountPool.length) {
     const acct = accountFor(project);
     if (!acct) {
       const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
@@ -2179,31 +2023,16 @@ const server = http.createServer(async (req, res) => {
         return jsonEnforce(req, res, { ...route, model, lane, ip, bodyBuf, project });
       }
     }
-    return proxy(req, res, route.base, { ...route, bodyBuf, model, lane, project });
+    const translate = lane === "claudecode" && path.endsWith("/chat/completions");
+    return proxy(req, res, route.base, { ...route, bodyBuf, model, lane, project, translate });
   };
 
-  // Wrappy lane: pass through the concurrency gate so we never stampede claudebox.
-  // (For non-streaming wrappy — ~100% of traffic — proxy()/jsonEnforce() await the
-  // full upstream body, so the slot is held for claudebox's real work duration.)
-  if (lane === "wrappy") {
-    try {
-      await wrappyAcquire();
-    } catch (e) {
-      // Queue full/timeout — shed to the crazyrouter fallback rather than pile on.
-      const fb = wrappyFallbackRoute(model);
-      if (fb) {
-        console.warn(`[gate] wrappy shed (${e.message}, active=${wrappyGate.active} q=${wrappyGate.queue.length}) -> crazyrouter`);
-        shipError(`wrappy shed -> crazyrouter`, { reason: e.message, model: model || "-", ip });
-        return proxy(req, res, fb.base, { ...route, base: fb.base, injectKey: true, rewriteModel: fb.rewriteModel, bodyBuf, model, lane: "crazyrouter", project });
-      }
-      console.warn(`[gate] wrappy shed (${e.message}) — no fallback, 503`);
-      res.writeHead(503, { "content-type": "application/json", "retry-after": "5" });
-      return res.end(JSON.stringify({ error: { message: "wrappy lane saturated, retry shortly", type: "overloaded" } }));
-    }
-    try { return await dispatch(); }
-    finally { wrappyRelease(); }
-  }
+  // No admission control: there is no subprocess to stampede. api.anthropic.com handles its own
+  // concurrency, and its 429 is a real signal we surface rather than absorb.
   return dispatch();
 });
 
-server.listen(PORT, () => console.log(`llm-hostbun-proxy on :${PORT} crazyrouter=${CFG.bases.crazyrouter} wrappy=${CFG.bases.wrappy} local=${CFG.bases.local} key=${CFG.crazyrouterKey ? "set" : "MISSING"} admin=/admin`));
+server.listen(PORT, () => console.log(
+  `llm-gateway on :${PORT} | providers: local=${CFG.bases.local || "off"} claudecode=${CFG.bases.claudecode}`
+  + ` (${(CFG.claudecodeAccountPool || []).length} accounts) crazyrouter=${CFG.bases.crazyrouter}`
+  + ` | key=${CFG.crazyrouterKey ? "set" : "MISSING"} admin=/admin`));
