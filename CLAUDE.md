@@ -122,6 +122,14 @@ dependency, the lockfile must be committed or the build fails.
   dropped. That is deliberate: the DB is a network hop away, and losing a log line must never fail an
   inference request. It does mean the log can silently under-count if the DB is down — watch for
   `[log] write failed`.
+- **Importing rows with explicit `id` does NOT advance a `BIGSERIAL` sequence.** After the SQLite
+  import the sequence still read `13`, so the first new rows got ids `1..13` — invisible in the admin
+  list (it orders by `id DESC`) and on a collision course with the imported range. Any future bulk
+  import must end with `SELECT setval('calls_id_seq', (SELECT MAX(id) FROM calls))`.
+- **The old SQLite file still exists**, frozen, at
+  `/var/lib/docker/volumes/d11s05nc130l2kjzr6anpebr-config-data/_data/calls.db` on hostbun (64,208
+  rows). It is the only backup of the pre-cutover log. Read it with
+  `docker exec <container> node -e '…require("node:sqlite")…'` — the host has no `sqlite3`.
 - **There is no auth on the inference endpoints.** Anyone who can reach `llm.hostbun.cc` can spend the
   Max subscriptions. Only `/admin` is gated. This is the largest open risk. Note that `X-Project` is
   **attribution, not authentication** — it is a self-asserted string, and `extractProject()` also
