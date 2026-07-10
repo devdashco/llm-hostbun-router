@@ -98,19 +98,20 @@ check("POST routes rejects an empty rule", !!api("routes", { project: "acme2", a
 check("POST routes clears", api("routes", { project: "acme", clear: true }).projectRoutes.acme, undefined);
 check("POST pins rejects an unknown account", !!api("pins", { project: "acme", account: "nope" }).error, true);
 
+// The registry lives in Postgres, and this suite runs without one. Validation that holds with or
+// without a database still answers; anything that would WRITE refuses with 503 rather than saving
+// into CFG, living in memory until the next refresh(), and silently vanishing — which is exactly
+// what the old CFG-writing endpoints did.
 console.log("admin — a consumer is a person's machine or an app, never both:");
-check("app registers", api("consumers", { name: "acme", kind: "app" }).ok, true);
-check("app may not have an owner", api("consumers", { name: "acme", kind: "app", owner: "bob" }).error, "an app has no owner");
-check("dev must have an owner", !!api("consumers", { name: "acme3", kind: "dev" }).error, true);
+check("app may not have an owner", api("consumers", { name: "acme", kind: "app", owner: "bob" }).error, "a project has no owner — it is not a person");
+check("dev must have an owner", api("consumers", { name: "acme3", kind: "dev" }).error, "a machine belongs to a developer — developer required");
 check("kind must be dev or app", api("consumers", { name: "acme", kind: "robot" }).error, "kind must be 'dev' or 'app'");
 check("a job is not a consumer", !!api("consumers", { name: "acme:job", kind: "app" }).error, true);
 
-console.log("admin — issuing a key IS registering:");
-const k = api("consumers/keys", { name: "fresh", kind: "app" });
-check("key returned once", /^sk-llm-[0-9a-f]{8}-.{20,}$/.test(k.key || ""), true);
-check("consumer created by the same call", api("state").consumers.fresh.kind, "app");
+console.log("admin — a registry write without a DB refuses, it does not pretend:");
+check("registering needs the DB", api("consumers", { name: "acme", kind: "app" }).error, "registry unavailable: no database connection");
+check("issuing a key needs the DB", api("consumers/keys", { name: "fresh", kind: "app" }).error, "registry unavailable: no database connection");
 check("hash never leaves the process", JSON.stringify(api("consumers")).includes('"hash"'), false);
-check("revoke", api("consumers/keys/revoke", { name: "fresh", id: k.keyId }).ok, true);
 
 console.log("admin — the gate:");
 check("unauthed state is 401", status("/api/state"), "401");

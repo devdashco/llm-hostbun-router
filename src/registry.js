@@ -74,6 +74,13 @@ class RegistryError extends Error {
   constructor(message, status = 400, extra = {}) { super(message); this.status = status; this.extra = extra; }
 }
 
+// Reads fall back to the CFG mirror; a WRITE without the database would be a lie. It would look like
+// it saved, live in memory until the next refresh(), and then vanish — which is exactly what the old
+// CFG-writing key endpoint did. Refuse loudly instead.
+function requireDb() {
+  if (!dbUp()) throw new RegistryError("registry unavailable: no database connection", 503);
+}
+
 async function initRegistry() {
   if (!dbUp()) { console.warn("[registry] no DB — running from the /data/config.json mirror only"); return; }
   for (const sql of SCHEMA) await dbExec(sql);
@@ -116,6 +123,7 @@ async function seedFromMirror() {
 }
 
 async function upsertDeveloper(name, email) {
+  requireDb();
   const n = cleanName(name);
   if (!validName(n)) throw new RegistryError(`invalid developer name '${name}'`);
   await dbExec(`INSERT INTO developers (name, email, created_at) VALUES ($1,$2,$3)
@@ -168,6 +176,7 @@ async function listDevelopers() {
 }
 
 async function addDeveloper({ name, email }) {
+  requireDb();
   await upsertDeveloper(name, email);
   await refresh();
 }
@@ -175,6 +184,7 @@ async function addDeveloper({ name, email }) {
 // ON DELETE RESTRICT on consumers.developer_id makes the DB refuse this while a machine still points
 // at the developer. Catch it and say what to do rather than surfacing a raw FK violation.
 async function removeDeveloper(name) {
+  requireDb();
   const n = cleanName(name);
   const owned = await dbRows(
     `SELECT c.name FROM consumers c JOIN developers d ON d.id = c.developer_id WHERE d.name = $1`, [n]);
@@ -191,18 +201,21 @@ async function addConsumer({ name, kind, developer, note }) {
   if (n.includes(":")) throw new RegistryError("register the consumer, not the job — drop everything after the ':'");
   if (!validName(n)) throw new RegistryError(`invalid name '${name}' — a-z 0-9 . _ - only`);
   if (kind !== "machine" && kind !== "project") throw new RegistryError("kind must be 'machine' or 'project'");
+  // Refuse rather than drop it silently: an owner on a project is how "what do my developers cost"
+  // quietly starts including cron jobs. This check, and every one above it, is true with or without
+  // Postgres — so it answers before we demand a database. Everything below needs one.
+  if (kind === "project" && cleanName(developer))
+    throw new RegistryError("a project has no owner — it is not a person");
+  if (kind === "machine" && !cleanName(developer))
+    throw new RegistryError("a machine belongs to a developer — developer required");
+  requireDb();
 
   let devId = null;
   if (kind === "machine") {
     const d = cleanName(developer);
-    if (!d) throw new RegistryError("a machine belongs to a developer — developer required");
     const known = (await dbRows("SELECT id FROM developers WHERE name=$1 AND disabled_at IS NULL", [d]))[0];
     if (!known) throw new RegistryError(`unknown developer '${d}' — register the person first`, 400);
     devId = known.id;
-  } else if (cleanName(developer)) {
-    // Refuse rather than drop it silently: an owner on a project is how "what do my developers cost"
-    // quietly starts including cron jobs.
-    throw new RegistryError("a project has no owner — it is not a person");
   }
   await dbExec(
     `INSERT INTO consumers (name, kind, developer_id, note, created_at) VALUES ($1,$2,$3,$4,$5)
@@ -214,6 +227,7 @@ async function addConsumer({ name, kind, developer, note }) {
 }
 
 async function removeConsumer(name) {
+  requireDb();
   const n = cleanName(name);
   const r = await dbExec("DELETE FROM consumers WHERE name = $1", [n]);
   if (!r.rowCount) throw new RegistryError(`unknown consumer '${n}'`, 404);
@@ -227,6 +241,7 @@ async function issueKey({ name, kind, developer, note }) {
   const n = cleanName(name);
   if (!n) throw new RegistryError("name required");
   if (n.includes(":")) throw new RegistryError("a key belongs to the consumer, not the job");
+  requireDb();
   let row = (await dbRows("SELECT id FROM consumers WHERE name=$1", [n]))[0];
   if (!row) {
     if (!kind) throw new RegistryError(`'${n}' is new — say kind:"machine" or kind:"project" to create it`, 400, { kinds: ["machine", "project"] });
@@ -241,6 +256,7 @@ async function issueKey({ name, kind, developer, note }) {
 }
 
 async function revokeKey({ name, id }) {
+  requireDb();
   const n = cleanName(name);
   const r = await dbExec(
     `UPDATE api_keys SET revoked_at = $1 FROM consumers c
@@ -252,6 +268,7 @@ async function revokeKey({ name, id }) {
 
 // ── aliases ───────────────────────────────────────────────────────────────
 async function setAlias({ from, to }) {
+  requireDb();
   const f = cleanName(from);
   if (!f) throw new RegistryError("from required");
   if (f.includes(":")) throw new RegistryError("alias the consumer, not a job path");

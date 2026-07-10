@@ -446,37 +446,22 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
 
   // Merge one alias. `POST config` assigns consumerAliases wholesale (same hazard as pins/routes).
   // Send {to:null} to drop one.
+  // Alias a legacy caller name onto a canonical <consumer>[:<job>] path. Writes the DB, like every
+  // other registry mutation — CFG is only its projection.
   if (sub === "consumers/alias" && req.method === "POST") {
+    const REG = require("./registry");
     const body = await readBody(req);
     let p = {};
     try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
-    const from = String(p.from || "").trim().toLowerCase();
-    if (!from) return sendJson(res, 400, { error: "from required" });
-    if (from.includes(":")) return sendJson(res, 400, { error: "alias the consumer, not a job path — drop everything after the ':'" });
-    const aliases = { ...(CFG.consumerAliases || {}) };
-    if (p.to === null || p.to === "") {
-      delete aliases[from];
-    } else {
-      const to = String(p.to || "").trim().toLowerCase();
-      if (!to) return sendJson(res, 400, { error: "to required" });
-      if (to === from) return sendJson(res, 400, { error: "an alias to itself does nothing" });
-      // The target's CONSUMER must exist, or the alias resolves to a name that 403s under the
-      // registration gate — an outage disguised as a cleanup.
-      const t = parseConsumer(to);
-      if (!Object.prototype.hasOwnProperty.call(CFG.consumers || {}, t.consumer))
-        return sendJson(res, 400, { error: `alias target consumer '${t.consumer}' is not registered`, hint: "register it first" });
-      if (aliases[t.consumer]) return sendJson(res, 400, { error: `'${t.consumer}' is itself an alias — chains are not resolved` });
-      aliases[from] = to;
+    try {
+      await REG.setAlias({ from: p.from, to: p.to });
+      console.log(`[admin] alias ${p.from} -> ${p.to || "(removed)"} ip=${ip}`);
+      return sendJson(res, 200, { ok: true, consumerAliases: CFG.consumerAliases });
+    } catch (e) {
+      if (e instanceof REG.RegistryError) return sendJson(res, e.status, { error: e.message, ...e.extra });
+      return sendJson(res, 500, { error: e.message });
     }
-    CFG.consumerAliases = aliases;
-    const persisted = persistConfig();
-    console.log(`[admin] alias ${from} -> ${aliases[from] || "(removed)"} ip=${ip} persisted=${persisted}`);
-    return sendJson(res, 200, { ok: true, persisted, consumerAliases: aliases });
   }
-
-  // ── consumer registry ──
-  // The registry, plus every consumer the log has SEEN that is not in it. That second list is the
-  // work queue: it is what would start 403'ing the moment requireRegisteredConsumer is turned on.
   if (sub === "consumers" && req.method === "GET") {
     const reg = CFG.consumers || {};
     const seen = await dbRows(
@@ -512,83 +497,70 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
 
   // Merge one entry. Like `pins`, and for the same reason: `POST config` assigns `consumers`
   // wholesale, so sending one registration from a stale render would delete every other one.
+  // ── consumers: the panel's door onto the registry ────────────────────────────
+  // These three used to write CFG.consumers directly. The registry now lives in Postgres and
+  // registry.refresh() REBUILDS CFG.consumers from it, so a key issued into CFG authenticated
+  // until the next registry write and then silently vanished. There is exactly one writer now.
+  //
+  // The panel still speaks the old vocabulary (kind: dev|app). The DB speaks machine|project.
+  // Translate at this edge rather than teaching either side the other's words.
+  const KIND = { dev: "machine", app: "project" };
+
   if (sub === "consumers" && req.method === "POST") {
+    const REG = require("./registry");
     const body = await readBody(req);
     let p = {};
     try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
-    const name = String(p.name || "").trim().toLowerCase();
-    if (!name) return sendJson(res, 400, { error: "name required" });
-    if (name.includes(":")) return sendJson(res, 400, { error: "register the consumer, not the job — drop everything after the ':'" });
-    const reg = { ...(CFG.consumers || {}) };
-    if (p.remove) {
-      delete reg[name];
-    } else {
-      if (p.kind !== "dev" && p.kind !== "app") return sendJson(res, 400, { error: "kind must be 'dev' or 'app'" });
-      const e = { kind: p.kind };
-      if (p.kind === "dev") {
-        const owner = String(p.owner || "").trim().toLowerCase();
-        if (!owner) return sendJson(res, 400, { error: "a dev consumer is someone's machine — owner required" });
-        e.owner = owner;
+    try {
+      if (p.remove) {
+        await REG.removeConsumer(p.name);
+        console.log(`[admin] consumer removed ${p.name} ip=${ip}`);
+      } else {
+        const kind = KIND[p.kind];
+        if (!kind) return sendJson(res, 400, { error: "kind must be 'dev' or 'app'" });
+        await REG.addConsumer({ name: p.name, kind, developer: p.owner, note: p.note });
+        console.log(`[admin] consumer ${p.name} -> ${kind}${p.owner ? "/" + p.owner : ""} ip=${ip}`);
       }
-      // Silently dropping an owner sent for an app would look like it saved. Say no instead.
-      if (p.kind === "app" && String(p.owner || "").trim()) return sendJson(res, 400, { error: "an app has no owner" });
-      if (typeof p.note === "string" && p.note.trim()) e.note = p.note.trim();
-      reg[name] = e;
+      return sendJson(res, 200, { ok: true, consumers: CFG.consumers });
+    } catch (e) {
+      if (e instanceof REG.RegistryError) return sendJson(res, e.status, { error: e.message, ...e.extra });
+      return sendJson(res, 500, { error: e.message });
     }
-    CFG.consumers = reg;
-    const persisted = persistConfig();
-    console.log(`[admin] consumer ${name} -> ${p.remove ? "(removed)" : reg[name].kind + (reg[name].owner ? "/" + reg[name].owner : "")} ip=${ip} persisted=${persisted}`);
-    return sendJson(res, 200, { ok: true, persisted, consumers: reg });
   }
 
   // Issue a key. This IS the registration step: one call creates the consumer if it does not exist
-  // and hands back the only copy of the secret. Two steps (register, then separately authenticate)
-  // is what let a self-asserted header masquerade as identity in the first place.
-  // The plaintext is returned ONCE and never stored — only its sha256 lands in config.json.
+  // and hands back the only copy of the secret. Two steps — register a name, then separately
+  // authenticate — is what let a self-asserted header masquerade as identity in the first place.
+  // The plaintext is returned ONCE; only its sha256 is stored.
   if (sub === "consumers/keys" && req.method === "POST") {
+    const REG = require("./registry");
     const body = await readBody(req);
     let p = {};
     try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
-    const name = String(p.name || "").trim().toLowerCase();
-    if (!name) return sendJson(res, 400, { error: "name required" });
-    if (name.includes(":")) return sendJson(res, 400, { error: "keys belong to a consumer, not a job — drop everything after the ':'" });
-    const reg = { ...(CFG.consumers || {}) };
-    let e = reg[name];
-    if (!e) {
-      if (p.kind !== "dev" && p.kind !== "app") return sendJson(res, 400, { error: `"${name}" is new — say kind:"dev" or kind:"app" to create it`, kinds: ["dev", "app"] });
-      if (p.kind === "dev" && !String(p.owner || "").trim()) return sendJson(res, 400, { error: "a dev consumer is someone's machine — owner required" });
-      if (p.kind === "app" && String(p.owner || "").trim()) return sendJson(res, 400, { error: "an app has no owner" });
-      e = { kind: p.kind, keys: [] };
-      if (p.kind === "dev") e.owner = String(p.owner).trim().toLowerCase();
+    try {
+      const out = await REG.issueKey({ name: p.name, kind: p.kind ? KIND[p.kind] : undefined, developer: p.owner, note: p.note });
+      console.log(`[admin] key issued ${out.consumer} id=${out.keyId} ip=${ip}`);
+      return sendJson(res, 200, { ok: true, ...out, warning: "this is the only time the key is shown — store it in keyvault now" });
+    } catch (e) {
+      if (e instanceof REG.RegistryError) return sendJson(res, e.status, { error: e.message, ...e.extra });
+      return sendJson(res, 500, { error: e.message });
     }
-    const k = mintKey();
-    e.keys = [...(e.keys || []), { id: k.id, hash: sha256(k.secret), created: Date.now(), lastUsed: 0, revoked: false, note: (p.note || "").trim() || undefined }];
-    reg[name] = e;
-    CFG.consumers = reg;
-    const persisted = persistConfig();   // also reindexes
-    console.log(`[admin] key issued ${name} id=${k.id} ip=${ip} persisted=${persisted}`);
-    return sendJson(res, 200, {
-      ok: true, persisted, consumer: name, kind: e.kind, keyId: k.id, key: k.raw,
-      warning: "this is the only time the key is shown — store it in keyvault now",
-    });
   }
 
   // Revoke one key. The consumer, its pins and its history survive; only this credential dies.
   if (sub === "consumers/keys/revoke" && req.method === "POST") {
+    const REG = require("./registry");
     const body = await readBody(req);
     let p = {};
     try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
-    const name = String(p.name || "").trim().toLowerCase(), id = String(p.id || "").trim();
-    const reg = { ...(CFG.consumers || {}) };
-    const e = reg[name];
-    if (!e) return sendJson(res, 404, { error: `unknown consumer '${name}'` });
-    const k = (e.keys || []).find((x) => x.id === id);
-    if (!k) return sendJson(res, 404, { error: `unknown key '${id}'` });
-    k.revoked = true; k.revokedAt = Date.now();
-    CFG.consumers = reg;
-    const persisted = persistConfig();
-    console.warn(`[admin] key REVOKED ${name} id=${id} ip=${ip} persisted=${persisted}`);
-    return sendJson(res, 200, { ok: true, persisted });
+    try {
+      await REG.revokeKey({ name: p.name, id: p.id });
+      console.warn(`[admin] key REVOKED ${p.name} id=${p.id} ip=${ip}`);
+      return sendJson(res, 200, { ok: true });
+    } catch (e) {
+      if (e instanceof REG.RegistryError) return sendJson(res, e.status, { error: e.message, ...e.extra });
+      return sendJson(res, 500, { error: e.message });
+    }
   }
 
   // Auth mode. Separate + logged, like `consumers/enforce`: going to "required" 401s every caller
