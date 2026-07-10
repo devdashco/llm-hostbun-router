@@ -86,9 +86,9 @@ Rules resolve exact path → consumer → group, so a rule on `promopilot` also 
 `promopilot:generatetext`. The pin is applied first; the allowlist then judges the model that will
 actually be **sent**.
 
-Ask an admin, or `POST /admin/api/routes {project, provider?, model?, allowProviders?, allowModels?}`.
+Ask an admin, or `POST /api/routes {project, provider?, model?, allowProviders?, allowModels?}`.
 
 ## Where did my request go?
 
-`POST /admin/api/resolve {model, project}` answers exactly that: the provider, the model that would be
+`POST /api/resolve {model, project}` answers exactly that: the provider, the model that would be
 sent upstream, the reason, and whether it would be blocked. No tokens are spent.

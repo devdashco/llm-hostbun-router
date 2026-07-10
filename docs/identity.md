@@ -1,16 +1,55 @@
-# Identity: projects, jobs, keys
+# Identity: developers, machines, projects, keys
+
+> **An API key is required.** `auth.mode = required`. A request with no valid key gets `401`.
+> Your key is in keyvault at `llm/<consumer>/API_KEY`. Jump to [Authenticating](#authenticating).
 
 ## A consumer is WHO calls
 
-Exactly two kinds, and they are not the same thing.
+Three entities, and the rules are enforced by the database, not by application code.
 
-| kind | what it is | has an owner? |
+| entity | what it is | has an owner? |
 |---|---|---|
-| `dev` | a person's machine, or a daemon on it (`pmac`, `lprod-autofix`) | **yes**, a human |
-| `app` | code we deployed (`promopilot`, `redbut`) | **no** |
+| `developer` | a person — `philip`, `william` | — |
+| `machine` | a person's box, or a daemon on it — `pmac`, `wmac`, `pbox`, `lprod` | **yes**, a developer |
+| `project` | code we deployed — `promopilot`, `redbut` | **no** — an app is not a person |
 
-Giving an app an owner is how "what do my developers cost" quietly starts including cron jobs. Posting
-an owner for an app returns a 400, not a silent drop.
+Giving a project an owner is how "what do my developers cost" quietly starts including cron jobs.
+Posting an owner for a project returns a 400, not a silent drop.
+
+A machine and a project are both *callers*: either can appear on the wire and either can hold a key.
+
+## Authenticating
+
+Every inference request needs a key. Get yours from keyvault:
+
+```bash
+kv get llm/<consumer>/API_KEY          # e.g. llm/promopilot/API_KEY
+```
+
+Send it the way your client already sends one — **no `X-Project` header needed, the key says who you are**:
+
+```bash
+# OpenAI clients (openai-python, openai-node, curl, LangChain, …)
+curl https://llm.hostbun.cc/v1/chat/completions \
+  -H "Authorization: Bearer sk-llm-…" \
+  -H "content-type: application/json" \
+  -d '{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"hi"}]}'
+
+# Anthropic SDK, native /v1/messages
+curl https://llm.hostbun.cc/v1/messages \
+  -H "x-api-key: sk-llm-…" -H "anthropic-version: 2023-06-01" …
+```
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="https://llm.hostbun.cc/v1", api_key=os.environ["LLM_API_KEY"])
+```
+
+To label a workload inside your consumer, add `X-Job: generatetext` (or send `X-Project:
+promopilot:generatetext` — only the part after the colon is read). A job needs no registration.
+
+**Lost your key?** They are hashed at rest; nobody can read yours back out of the router. Issue a new
+one and revoke the old: `POST /api/consumers/keys {"name":"<consumer>"}`.
 
 ## Identity is a path: `<consumer>[:<job>]`
 
@@ -55,12 +94,12 @@ a dash would make the key unparseable.
 the secret:
 
 ```bash
-POST /admin/api/consumers/keys   {"name":"my-app","kind":"app"}
+POST /api/consumers/keys   {"name":"my-app","kind":"app"}
 → {"consumer":"my-app","keyId":"1a2b3c4d","key":"sk-llm-1a2b3c4d-…",
    "warning":"this is the only time the key is shown — store it in keyvault now"}
 ```
 
-Revoke with `POST /admin/api/consumers/keys/revoke {name, id}`. The consumer, its pins and its history
+Revoke with `POST /api/consumers/keys/revoke {name, id}`. The consumer, its pins and its history
 survive; only that credential dies.
 
 > `lastUsed` on a key is flushed on a five-minute timer, not per request. It is approximate. Never

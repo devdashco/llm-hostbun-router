@@ -69,6 +69,9 @@ const DOCS_FILE = process.env.DOCS_FILE || "/srv/docs/index.html";
 // The docsify markdown and its vendored bundle sit beside the shell, in both dev and the container.
 const DOCS_DIR = nodePath.dirname(DOCS_FILE);
 const ADMIN_FILE = process.env.ADMIN_FILE || "/srv/admin/index.html";
+// Every refusal carries this. A 4xx that does not say where the answer lives just becomes a Slack
+// message to whoever wrote the router.
+const DOCS_URL = process.env.DOCS_URL || "https://docs.llm.hostbun.cc/";
 // The panel's modules live next to its shell, so a dev run (ADMIN_FILE=./admin/index.html) and the
 // container (/srv/admin/index.html) both resolve without a second env var to forget.
 const UI_DIR = nodePath.join(nodePath.dirname(ADMIN_FILE), "ui");
@@ -217,15 +220,28 @@ const server = http.createServer(async (req, res) => {
 
   // A key that was PRESENTED and is bad is always an error, in every mode above "off". Falling back
   // to the header there would mean a revoked key silently keeps working under its old name.
+  // A 401 is read by a machine at 3am and by a person who has never seen this router. It should say
+  // what happened, where the fix lives, and the exact bytes to change — not "unauthorized".
+  //
+  // `claimed` is the name the caller asserted (X-Project / user field). When it looks like a real
+  // consumer, name its keyvault path outright: that is the single most useful sentence we can emit.
   const keyFail = (why) => {
-    console.error(`[err] 401 ${why} ip=${ip} model=${model || "-"}`);
+    const claimed = parseConsumer(extractProject(req, bodyBuf)).consumer;
+    const known = claimed && consumerEntry(claimed);
+    console.error(`[err] 401 ${why} ip=${ip} model=${model || "-"} claimed=${claimed || "-"}`);
     recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
       reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 401, ms: 0,
-      error: why, reqContent: extractRequestContent(bodyBuf), project: null });
+      error: why, reqContent: extractRequestContent(bodyBuf), project: claimed || null });
     res.writeHead(401, { "content-type": "application/json", "www-authenticate": `Bearer realm="llm.hostbun.cc"` });
     return res.end(JSON.stringify({ error: {
-      type: "invalid_api_key", code: "invalid_api_key", message: why,
-      hint: "send `Authorization: Bearer sk-llm-…` (or `x-api-key`). Issue one in the panel at https://llm.hostbun.cc/ → Consumers.",
+      type: "invalid_api_key", code: "invalid_api_key",
+      message: `${why}. This router requires an API key: send it as \`Authorization: Bearer sk-llm-…\` (any OpenAI client) or \`x-api-key\` (Anthropic SDK). The key identifies you — no X-Project header is needed.`,
+      docs: `${DOCS_URL}#/identity?id=authenticating`,
+      your_key: known
+        ? `keyvault: llm/${claimed}/API_KEY   (you sent X-Project: ${claimed}, which is no longer an identity)`
+        : "keyvault: llm/<your-consumer>/API_KEY — ask in #eng if you do not know your consumer name",
+      example: "curl https://llm.hostbun.cc/v1/chat/completions -H 'Authorization: Bearer sk-llm-…' -H 'content-type: application/json' -d '{\"model\":\"claude-haiku-4-5\",\"messages\":[…]}'",
+      no_key_yet: "POST /api/consumers/keys {\"name\":\"<consumer>\"} from the panel at https://llm.hostbun.cc/ → Consumers",
     } }));
   };
   if (auth && !auth.ok && isInference) return keyFail(auth.why);
@@ -240,7 +256,11 @@ const server = http.createServer(async (req, res) => {
       reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
       error: "missing project", reqContent: extractRequestContent(bodyBuf), project: null });
     res.writeHead(400, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: { message: "missing project attribution: send an 'X-Project' header (or a 'project' body field) identifying the calling app.", type: "invalid_request_error", code: "project_required" } }));
+    return res.end(JSON.stringify({ error: {
+      type: "invalid_request_error", code: "project_required",
+      message: "no identity on this request. Send your API key as `Authorization: Bearer sk-llm-…` — it identifies you.",
+      docs: `${DOCS_URL}#/identity?id=authenticating`,
+    } }));
   }
 
   // Registration gate: a name must be one we agreed on, not one the caller invented. Without this
@@ -258,8 +278,9 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(403, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: {
       type: "unknown_consumer",
-      message: `consumer "${consumer}" is not registered`,
-      hint: "register it in the panel (Consumers) as a machine (belongs to a developer) or a project (deployed code)",
+      message: `consumer "${consumer}" is not registered. Register it as a machine (belongs to a developer) or a project (deployed code), then use its API key.`,
+      docs: `${DOCS_URL}#/identity`,
+      how: "POST /api/consumers/keys {\"name\":\"<consumer>\",\"kind\":\"app\"} — issuing a key registers it in one call",
       registered: known,
     } }));
   }
@@ -348,8 +369,9 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(403, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: {
         type: "no_account_for_project",
-        message: `project "${project || "(none)"}" is not pinned to a Claude Code account`,
-        hint: "pin it in the panel (Accounts → pins), or set defaultAccount",
+        message: `consumer "${project || "(none)"}" is not pinned to a Claude Max account, so there is no subscription to bill. The router never guesses whose plan to spend.`,
+        docs: `${DOCS_URL}#/routing`,
+        hint: "pin it in the panel (Accounts → pins), or POST /api/pins {project,account}",
         pinned_projects: Object.keys(pins).sort(),
       } }));
     }

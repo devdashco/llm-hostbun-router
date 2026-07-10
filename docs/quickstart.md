@@ -22,7 +22,7 @@ curl https://llm.hostbun.cc/v1/chat/completions \
 
 ## With an API key
 
-Ask an admin for one (`POST /admin/api/consumers/keys`). It is shown exactly once. Store it in
+Ask an admin for one (`POST /api/consumers/keys`). It is shown exactly once. Store it in
 keyvault, never in git. The key names the consumer, so `X-Project` may then carry only the job.
 
 ```bash
