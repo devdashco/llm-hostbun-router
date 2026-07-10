@@ -28,6 +28,24 @@ const { readBody, sendJson, mask, buildHeaders } = require("./http");
 const CC = require("./claudecode");
 const { probeAccount, refreshClaudecodeModels, upstreamCatalogs, localModelEntries } = CC;
 
+// A probe older than this is history, not status — a 5h window can empty and refill inside it.
+const PROBE_STALE_MS = 6 * 3600 * 1000;
+
+// The single verdict for one pool account, so the Overview banner and the Accounts table can never
+// disagree. Precedence is deliberate:
+//   dry     — probed, and not one advertised model answered. The account is unusable NOW.
+//   hot     — ≥90% of a window burned, or Anthropic itself says warning. Usable, about to not be.
+//   unknown — never probed. NOT "ok": the 5h/7d bars are harvested off headers a 429 never sends,
+//             so an exhausted account sits at a cheerful `0% · allowed` until someone probes it.
+//   ok      — probed, serves at least one model, both windows have room.
+function poolHealth(a) {
+  if (a.probe && !a.probe.usable.length) return "dry";
+  const l = a.limits;
+  if (l && (l.s5 === "allowed_warning" || l.s7 === "allowed_warning" || (l.u5 || 0) >= 0.9 || (l.u7 || 0) >= 0.9)) return "hot";
+  if (!a.probe) return "unknown";
+  return "ok";
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 const COOKIE = "hb_admin";
 const sign = (payload) => crypto.createHmac("sha256", CFG.adminPassword).update(payload).digest("hex");
@@ -347,14 +365,34 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
         usage: { calls: s.calls || 0, tokens: Number(s.tokens) || 0, lastTs: Number(s.last_ts) || 0,
           rateLimited: s.rate_limited || 0, errors: s.errors || 0,
           calls24h: s24.calls || 0, tokens24h: Number(s24.tokens) || 0 },
-        probe: pr ? { checkedAt: pr.checkedAt, usable: pr.usable, total: pr.results.length } : null,
+        // 404 = the id does not exist on this org. 429 = it exists and the subscription is dry.
+        // That distinction is the entire point of probing, so it ships as counts, not a ratio.
+        probe: pr ? { checkedAt: pr.checkedAt, usable: pr.usable, total: pr.results.length,
+          dead: pr.results.filter((r) => r.status === 404).length,
+          exhausted: pr.results.filter((r) => r.status === 429).length } : null,
       };
     });
+    // One verdict per account, computed HERE so Overview and Accounts can never disagree about which
+    // account is dry. A probe that found nothing outranks a cheerful 0% bar: the bar is a floor
+    // harvested off headers that a 429 never sends.
+    for (const a of accounts) a.health = poolHealth(a);
+    const rank = { dry: 0, hot: 1, unknown: 2, ok: 3 };
+    accounts.sort((x, y) => (rank[x.health] - rank[y.health]) || x.name.localeCompare(y.name));
     return sendJson(res, 200, {
       accounts, now: Date.now(), defaultAccount: CFG.defaultAccount || "",
       advertisedModels: (CFG.claudecodeModels || []).length,
       // A pinned project naming an account that no longer exists in the pool 403s at request time.
       orphanPins: Object.entries(pins).filter(([, acc]) => !pool.some((a) => a.name === acc)).map(([p, acc]) => ({ project: p, account: acc })),
+      summary: {
+        accounts: accounts.length,
+        dry: accounts.filter((a) => a.health === "dry").length,
+        hot: accounts.filter((a) => a.health === "hot").length,
+        unprobed: accounts.filter((a) => !a.probe).length,
+        serving: accounts.filter((a) => a.probe && a.probe.usable.length).length,
+        // A dry account with projects pinned to it is an outage those projects have not hit yet.
+        strandedProjects: accounts.filter((a) => a.health === "dry").flatMap((a) => a.projects),
+        staleProbes: accounts.filter((a) => a.probe && Date.now() - a.probe.checkedAt > PROBE_STALE_MS).length,
+      },
     });
   }
 
@@ -959,7 +997,15 @@ async function registryRoutes(req, res, sub, ip) {
 
   // machines and projects are the same table; the route just fixes `kind` so a caller cannot create
   // a project that owns a developer, or a machine that owns nobody.
+  // machines and projects are the same table; the route fixes `kind` so a caller cannot create a
+  // project that owns a developer, or a machine that owns nobody.
   for (const [path, kind] of [["machines", "machine"], ["projects", "project"]]) {
+    if (sub === path && req.method === "GET")
+      return guard(async () => {
+        const list = await REG.listConsumers(kind);
+        const stale = list.some((x) => x.stale);
+        return sendJson(res, 200, { [path]: list, ...(stale ? { stale: true, warning: "registry DB unreachable — this is the /data/config.json mirror, possibly out of date" } : {}) });
+      });
     if (sub === path && req.method === "POST")
       return guard(async () => {
         const p = await body();
@@ -982,6 +1028,18 @@ async function registryRoutes(req, res, sub, ip) {
       await REG.revokeKey(p);
       console.warn(`[admin] key REVOKED ${p.name} id=${p.id} ip=${ip}`);
       return sendJson(res, 200, { ok: true });
+    });
+
+  // Delete the call-log history of a name that was never registered — the junk left over from probes
+  // and typos (`test`, `smoketest`, `totally-made-up-xyz`). Refuses any name that IS registered, or
+  // that is an alias of one: those calls are somebody's history, not orphans. One name at a time, no
+  // patterns — a bulk purge over a LIKE is how you lose promopilot to a typo.
+  if (sub === "consumers/purge" && req.method === "POST")
+    return guard(async () => {
+      const p = await body();
+      const rows = await REG.purgeUnregistered(p.name);
+      console.warn(`[admin] PURGED ${rows} call(s) of unregistered '${p.name}' ip=${ip}`);
+      return sendJson(res, 200, { ok: true, name: p.name, deleted: rows });
     });
 
   if (sub === "registry/alias" && req.method === "POST")

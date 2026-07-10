@@ -18,6 +18,57 @@ Posting an owner for a project returns a 400, not a silent drop.
 
 A machine and a project are both *callers*: either can appear on the wire and either can hold a key.
 
+## Registering — every caller, before its first request
+
+Nothing calls this router unregistered. `auth.mode = required`, so an unregistered name does not get
+a warning, it gets a `401`. Registration is one call, and **issuing the key IS the registration** —
+there is no separate "create, then authenticate" step to forget.
+
+All of it is API-driven. Log in once for a cookie:
+
+```bash
+curl -c /tmp/c -X POST https://llm.hostbun.cc/api/login \
+  -H 'content-type: application/json' -d '{"password":"…"}'
+API() { curl -s -b /tmp/c -H 'content-type: application/json' "$@"; }
+```
+
+**A project** (deployed code — no owner, because an app is not a person):
+
+```bash
+API -X POST https://llm.hostbun.cc/api/consumers/keys -d '{"name":"myapp","kind":"app"}'
+# -> {"consumer":"myapp","keyId":"…","key":"sk-llm-…","warning":"only time the key is shown"}
+```
+
+**A developer, then their machine** (a machine belongs to a person; a person is registered first):
+
+```bash
+API -X POST https://llm.hostbun.cc/api/developers -d '{"name":"philip"}'
+API -X POST https://llm.hostbun.cc/api/consumers/keys -d '{"name":"newbox","kind":"dev","owner":"philip"}'
+```
+
+Store the key immediately — only its sha256 is kept:
+
+```bash
+kv set llm/myapp/API_KEY 'sk-llm-…'
+```
+
+**Listing and removing:**
+
+| call | what it does |
+|---|---|
+| `GET /api/projects` | every project, its live key count, whether it `canCall` |
+| `GET /api/machines` | every machine, its developer, same |
+| `GET /api/developers` | every person and the machines they own |
+| `POST /api/consumers {"name":"x","remove":true}` | delete a consumer (its keys cascade) |
+| `POST /api/consumers/keys/revoke {"name":"x","id":"…"}` | kill one key, keep the consumer |
+| `POST /api/consumers/purge {"name":"junk"}` | delete the call-log rows of a name that was **never** registered |
+
+The rules are enforced by Postgres, not by the API: a project with an owner, a machine without one, a
+duplicate name, and deleting a developer who still owns a box are all refused by the database.
+
+A **job** (`myapp:nightly`) needs no registration — only the consumer does. That is what keeps this
+sustainable: a new workload never touches config.
+
 ## Authenticating
 
 Every inference request needs a key. Get yours from keyvault:

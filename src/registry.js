@@ -175,6 +175,62 @@ async function listDevelopers() {
     GROUP BY d.id, d.name, d.email, d.created_at ORDER BY d.name`);
 }
 
+// One consumer kind, listed with everything you need to decide whether it is healthy: who owns it
+// (machines only), how many live keys it holds, and whether it has been used. A `project` with zero
+// active keys cannot call the router at all now that auth is required — that is the number to watch.
+async function listConsumers(kind) {
+  // With no database this would return [] — which reads as "nothing is registered", not "I cannot
+  // see". Serve the CFG mirror instead and say it is stale. An empty list and an unreachable
+  // registry must never look alike.
+  if (!dbUp()) {
+    const want = kind === "machine" ? "dev" : "app";
+    return Object.entries(CFG.consumers || {})
+      .filter(([, e]) => e.kind === want)
+      .map(([name, e]) => ({
+        name, note: e.note,
+        ...(kind === "machine" ? { developer: e.owner } : {}),
+        activeKeys: (e.keys || []).filter((k) => !k.revoked).length,
+        keyLastUsed: 0, created: 0,
+        canCall: (e.keys || []).some((k) => !k.revoked),
+        stale: true,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+  const rows = await dbRows(`
+    SELECT c.name, c.note, c.created_at, d.name AS developer,
+      (SELECT COUNT(*)::int FROM api_keys k WHERE k.consumer_id = c.id AND k.revoked_at IS NULL) AS active_keys,
+      (SELECT MAX(k.last_used_at) FROM api_keys k WHERE k.consumer_id = c.id) AS key_last_used
+    FROM consumers c
+    LEFT JOIN developers d ON d.id = c.developer_id
+    WHERE c.kind = $1 AND c.disabled_at IS NULL
+    ORDER BY c.name`, [kind]);
+  return rows.map((r) => ({
+    name: r.name, note: r.note || undefined,
+    ...(kind === "machine" ? { developer: r.developer } : {}),
+    activeKeys: r.active_keys, keyLastUsed: Number(r.key_last_used) || 0,
+    created: Number(r.created_at) || 0,
+    // Say it plainly rather than making the reader infer it from activeKeys === 0.
+    canCall: r.active_keys > 0,
+  }));
+}
+
+// Delete the call-log rows of a name that was never registered. Destructive and deliberately narrow:
+// it REFUSES any name that is registered (use the consumer's own delete for those), refuses an empty
+// name, and never takes a pattern — a bulk purge over a LIKE is how you lose promopilot's history to
+// a typo. Returns the row count so the caller can see what it cost.
+async function purgeUnregistered(name) {
+  requireDb();
+  const n = cleanName(name);
+  if (!n) throw new RegistryError("name required");
+  const registered = (await dbRows("SELECT 1 FROM consumers WHERE name = $1", [n]))[0];
+  if (registered) throw new RegistryError(`'${n}' IS registered — delete the consumer instead of purging its history`, 409);
+  const aliased = (await dbRows("SELECT 1 FROM consumer_aliases WHERE alias = $1", [n]))[0];
+  if (aliased) throw new RegistryError(`'${n}' is an alias of a registered consumer — its calls are not orphans`, 409);
+  // The log stores the full `<consumer>[:<job>]` path, so match the consumer half.
+  const r = await dbExec("DELETE FROM calls WHERE split_part(project, ':', 1) = $1", [n]);
+  return r.rowCount;
+}
+
 async function addDeveloper({ name, email }) {
   requireDb();
   await upsertDeveloper(name, email);
@@ -294,5 +350,6 @@ async function setAlias({ from, to }) {
 module.exports = {
   RegistryError, initRegistry, refresh,
   listDevelopers, addDeveloper, removeDeveloper,
-  addConsumer, removeConsumer, issueKey, revokeKey, setAlias,
+  listConsumers, addConsumer, removeConsumer, purgeUnregistered,
+  issueKey, revokeKey, setAlias,
 };

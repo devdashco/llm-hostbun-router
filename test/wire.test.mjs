@@ -119,6 +119,10 @@ routes.push(
   ["GET  /api/stats", () => adminGet("/api/stats")],
   ["GET  /api/consumers", () => adminGet("/api/consumers")],
   ["GET  /api/developers", () => adminGet("/api/developers")],
+  // The registry's read surface. Without a DB these answer 503, not 500 or a hang — a caller must be
+  // able to tell "the registry is down" from "you asked wrong".
+  ["GET  /api/machines", () => adminGet("/api/machines")],
+  ["GET  /api/projects", () => adminGet("/api/projects")],
 );
 
 // The /admin surface is gone. These assert the removal, and — more importantly — that removing it
