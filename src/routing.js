@@ -7,7 +7,7 @@
 //     cache (~12x cost) and makes "who spent this?" unanswerable after the fact.
 const { CFG, normProvider, isImageModel, WINDOW_MS } = require("./config");
 const { parseConsumer } = require("./identity");
-const { dbRows, ACCT_CACHE } = require("./db");
+const { dbUp, dbRow, dbRows, ACCT_CACHE } = require("./db");
 
 const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCase()] || null);
 // A `claude*` model id means the claudecode provider (our Max account pool → api.anthropic.com).

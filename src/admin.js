@@ -20,10 +20,10 @@ const C = require("./config");
 const { CFG, setCFG, persistConfig, mergeConfig, envDefaults, loadConfig, reindexKeys, CANON, OBLIT, E4B,
         PROVIDERS, normProvider, sanitizeRule, sanitizeLimit, IMAGE_MODEL_IDS, CONFIG_FILE } = C;
 const DB = require("./db");
-const { dbUp, dbRows, ACCT_CACHE, ORG_OF_ACCOUNT, PROBE_CACHE, FACET_CACHE } = DB;
+const { dbUp, dbRow, dbRows, ACCT_CACHE, ORG_OF_ACCOUNT, PROBE_CACHE, FACET_CACHE } = DB;
 const { priceMap, costUsd } = require("./pricing");
 const { mintKey, sha256, parseConsumer } = require("./identity");
-const { resolveRoute, accountFor, acctHealth, isGated, localTarget } = require("./routing");
+const { resolveRoute, accountFor, acctHealth, isGated, localTarget, limitFor, projectUsage } = require("./routing");
 const { readBody, sendJson, mask, buildHeaders } = require("./http");
 const CC = require("./claudecode");
 const { probeAccount, refreshClaudecodeModels, upstreamCatalogs, localModelEntries } = CC;

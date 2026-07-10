@@ -47,6 +47,9 @@ const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL, jsonEnforce, 
 const { mergedModels, refreshClaudecodeModels, CLAUDECODE_MODEL_REFRESH_MS } = require("./src/claudecode");
 const { handleAdminApi } = require("./src/admin");
 const { PRICES_FILE } = require("./src/pricing");
+// Used on every refusal path (missing project, unknown consumer, bad key, unpinned account) and by
+// the upstream-error shipper. Unbound since the split, so each gate 502'd instead of refusing.
+const { extractRequestContent, shipError } = require("./src/telemetry");
 
 // A single malformed request must NEVER take down the whole proxy. This is a
 // stateless per-request router, so a thrown error in one handler is isolated —
