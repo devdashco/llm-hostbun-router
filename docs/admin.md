@@ -55,8 +55,13 @@ banner and the Accounts table can never disagree:
 |---|---|
 | `dry` | probed, and **not one** advertised model answered — every call to it fails now |
 | `hot` | a window is ≥90% burned, or Anthropic itself flagged `allowed_warning` |
+| `thin` | serves something, but ≥1 model that **exists** on the org 429s. Ask it for opus and the call fails. A 404 doesn't count — that id was never ours |
 | `unknown` | never probed. **Not** `ok` — an exhausted account reads `0% · allowed` until probed |
-| `ok` | probed, serving, both windows have room |
+| `ok` | probed, and every model that exists on the org answers |
+
+`summary.servingModels` is the number that matters most: model ids that answer on **at least one**
+account. As of 2026-07-10 it is **2 of 13** — every account serves haiku and 429s everything else,
+which is seven green-looking rows and no opus anywhere.
 
 `summary.strandedProjects` is the one to watch: a project pinned to a `dry` account. There is no
 fallback, so those calls are failing right now.

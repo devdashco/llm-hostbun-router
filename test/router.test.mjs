@@ -145,6 +145,7 @@ console.log("accounts — the pool view:");
   // allowed until someone probes it, so an unprobed account must never render as healthy.
   check("an unprobed account is unknown, not ok", byName.acctA.health, "unknown");
   check("summary counts the unprobed", [a.summary.accounts, a.summary.unprobed, a.summary.serving, a.summary.dry], [2, 2, 0, 0]);
+  check("no probe means no model is known to answer", a.summary.servingModels, 0);
   api("pins", { project: "ghostproj", account: "acctA" });
   api("config", { projectAccounts: { ghostproj: "vanished" } });   // simulate an account removed from the pool
   const b = api("accounts");

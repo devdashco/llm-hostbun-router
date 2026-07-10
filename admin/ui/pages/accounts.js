@@ -61,7 +61,8 @@ const Bar=({v})=>{
 const HEALTH={
   dry:{t:'DRY',c:'var(--red)',w:'not one advertised model answered — every call to this account fails'},
   hot:{t:'HOT',c:'var(--amb)',w:'a rate-limit window is ≥90% burned, or Anthropic flagged it'},
-  ok:{t:'OK',c:'var(--grn)',w:'probed, serving, and both windows have room'},
+  thin:{t:'THIN',c:'var(--amb)',w:'serves something, but at least one model that exists on this org 429s — ask it for opus and the call fails'},
+  ok:{t:'OK',c:'var(--grn)',w:'probed, and every model that exists on this org answers'},
   unknown:{t:'?',c:'var(--mut,#a1a1aa)',w:'never probed — the 5h/7d bars are a floor, not a verdict'},
 };
 const HealthPill=({h})=>{ const x=HEALTH[h]||HEALTH.unknown;
@@ -111,9 +112,10 @@ function Accounts(){
     <${KV} n="Pool">${s.accounts??'…'} account${s.accounts===1?'':'s'}<//>
     <${KV} n="Serving">${s.serving==null?'…':html`<span class=${s.serving?'up':'down'}>${s.serving} / ${s.accounts}</span>`}<//>
     <${KV} n="Dry">${s.dry?html`<span class="down">${s.dry}</span>`:(s.dry===0?'0':'…')}<//>
-    <${KV} n="Hot">${s.hot?html`<span class="warnp">${s.hot}</span>`:(s.hot===0?'0':'…')}<//>
+    <${KV} n="Thin / hot">${d?html`<span class=${(s.thin||s.hot)?'warnp':''}>${s.thin||0} / ${s.hot||0}</span>`:'…'}<//>
     <${KV} n="Unprobed">${s.unprobed?html`<span class="mut">${s.unprobed}</span>`:(s.unprobed===0?'0':'…')}<//>
-    <${KV} n="Advertised models">${d?d.advertisedModels:'…'}<//>
+    ${/* 2 of 13 means the pool serves haiku and nothing else, however green the rows look. */''}
+    <${KV} n="Models actually served">${d?html`<span class=${s.servingModels?(s.servingModels<d.advertisedModels?'warnp':'up'):'down'} title="models that answer on at least one account, of the advertised catalog">${s.servingModels} / ${d.advertisedModels}</span>`:'…'}<//>
   </div>
 
   <${Pins}/>
@@ -132,18 +134,24 @@ function Accounts(){
       <tr><th>health</th><th>account</th><th>probe <small class="hint">— usable / advertised</small></th><th>pinned projects</th><th>5h used</th><th>7d used</th><th>7d resets</th>
         <th title="all-time calls / tokens through this account">usage</th><th>last 24h</th><th></th></tr>
       ${accts.map(a=>{
-        const l=a.limits, p=probes[a.name]||a.probe;
-        // A fresh client-side probe overrides the server's verdict — the operator just watched it run.
-        const health=p?(p.usable.length?(a.health==='hot'?'hot':'ok'):'dry'):a.health;
+        const l=a.limits;
+        // A probe we just ran overrides the row the server rendered. It arrives as raw {results},
+        // not the counted shape /accounts ships, so count it here rather than re-fetching.
+        const fresh=probes[a.name];
+        const p=fresh?{...fresh, total:fresh.results.length,
+          dead:fresh.results.filter(r=>r.status===404).length,
+          exhausted:fresh.results.filter(r=>r.status===429).length}:a.probe;
+        // Mirrors poolHealth() server-side. `hot` is a limits verdict a probe cannot contradict.
+        const health=!p?a.health:!p.usable.length?'dry':a.health==='hot'?'hot':p.exhausted?'thin':'ok';
         const stale=p&&(now-p.checkedAt)>PROBE_STALE_MS;
-        const total=p&&(p.total||(p.results||[]).length);
+        const total=p&&p.total;
         return html`<tr key=${a.name} style=${health==='dry'?'background:rgba(239,68,68,.06)':''}>
           <td><${HealthPill} h=${health}/></td>
           <td class="mono"><b>${a.name}</b>${a.org?html`<div class="hint" style="font-size:10px" title=${a.org}>${a.org.slice(0,12)}…</div>`:html`<div class="hint" style="font-size:10px">org unknown</div>`}</td>
           <td style="font-size:12px;min-width:120px">${!p?html`<span class="mut">not probed</span><div class="hint" style="font-size:10px">bars below are unverified</div>`
             :html`<span class=${p.usable.length?'up':'down'}><b>${p.usable.length}/${total}</b></span>
                   <div class="hint" style="font-size:10px" title=${p.usable.join(', ')||'nothing answers'}>${p.usable.length?p.usable.slice(0,2).join(', ')+(p.usable.length>2?' +'+(p.usable.length-2):''):(p.exhausted?`${p.exhausted}× 429 (dry)`:'nothing answers')}</div>
-                  <div class="hint" style=${'font-size:10px;'+(stale?'color:var(--amb)':'')}>${ago(p.checkedAt)}${stale?' · stale':''}${p.dead?` · ${p.dead}× 404`:''}</div>`}</td>
+                  <div class="hint" style=${'font-size:10px;'+(stale?'color:var(--amb)':'')} title="429 = the id exists and the subscription is dry · 404 = the id does not exist on this org">${ago(p.checkedAt)}${stale?' · stale':''}${p.exhausted?` · ${p.exhausted}× 429`:''}${p.dead?` · ${p.dead}× 404`:''}</div>`}</td>
           <td>${a.projects.length?a.projects.map(pr=>html`<span class="pill" style=${`margin:1px;background:${health==='dry'?'#3a2a2a':'#2a3a2a'};color:${health==='dry'?'#e08b8b':'#8bc88b'}`} title=${health==='dry'?'pinned to a dry account — this project is down':''}>${pr}</span>`):html`<span class="mut" style="font-size:11px">— unused</span>`}</td>
           <td style="min-width:70px"><${Bar} v=${l&&l.u5}/>${l?html`<div class="hint" style="font-size:10px">${ago(l.ts)}</div>`:''}</td>
           <td style="min-width:70px"><${Bar} v=${l&&l.u7}/>${l&&(l.s5==='allowed_warning'||l.s7==='allowed_warning')?html`<div class="warnp" style="font-size:10px">warning</div>`:''}</td>

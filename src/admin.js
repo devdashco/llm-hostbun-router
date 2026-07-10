@@ -35,14 +35,19 @@ const PROBE_STALE_MS = 6 * 3600 * 1000;
 // disagree. Precedence is deliberate:
 //   dry     — probed, and not one advertised model answered. The account is unusable NOW.
 //   hot     — ≥90% of a window burned, or Anthropic itself says warning. Usable, about to not be.
+//   thin    — serves something, but ≥1 model that EXISTS on this org answered 429. In practice this
+//             is the whole pool: haiku answers, opus and sonnet are exhausted. Rendering that as
+//             "ok" is how a project pinned here 429s on opus while the panel says everything is fine.
+//             A 404 does not count — that id was never ours to call.
 //   unknown — never probed. NOT "ok": the 5h/7d bars are harvested off headers a 429 never sends,
 //             so an exhausted account sits at a cheerful `0% · allowed` until someone probes it.
-//   ok      — probed, serves at least one model, both windows have room.
+//   ok      — probed, every advertised model that exists on this org answers.
 function poolHealth(a) {
   if (a.probe && !a.probe.usable.length) return "dry";
   const l = a.limits;
   if (l && (l.s5 === "allowed_warning" || l.s7 === "allowed_warning" || (l.u5 || 0) >= 0.9 || (l.u7 || 0) >= 0.9)) return "hot";
   if (!a.probe) return "unknown";
+  if (a.probe.exhausted > 0) return "thin";
   return "ok";
 }
 
@@ -376,7 +381,7 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     // account is dry. A probe that found nothing outranks a cheerful 0% bar: the bar is a floor
     // harvested off headers that a 429 never sends.
     for (const a of accounts) a.health = poolHealth(a);
-    const rank = { dry: 0, hot: 1, unknown: 2, ok: 3 };
+    const rank = { dry: 0, hot: 1, thin: 2, unknown: 3, ok: 4 };
     accounts.sort((x, y) => (rank[x.health] - rank[y.health]) || x.name.localeCompare(y.name));
     return sendJson(res, 200, {
       accounts, now: Date.now(), defaultAccount: CFG.defaultAccount || "",
@@ -387,6 +392,10 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
         accounts: accounts.length,
         dry: accounts.filter((a) => a.health === "dry").length,
         hot: accounts.filter((a) => a.health === "hot").length,
+        thin: accounts.filter((a) => a.health === "thin").length,
+        // Models that answer on at least one account. If this is 1 while 13 are advertised, the pool
+        // serves haiku and nothing else, however green the individual rows look.
+        servingModels: [...new Set(accounts.flatMap((a) => (a.probe ? a.probe.usable : [])))].length,
         unprobed: accounts.filter((a) => !a.probe).length,
         serving: accounts.filter((a) => a.probe && a.probe.usable.length).length,
         // A dry account with projects pinned to it is an outage those projects have not hit yet.

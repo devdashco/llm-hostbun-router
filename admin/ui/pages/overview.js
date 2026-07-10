@@ -65,7 +65,7 @@ function Overview(){
       if(!s.accounts) return html`<span class="down">none</span>`;
       // "0 / 7 probed" is honest; "0 / 7" alone reads as an outage when it is only ignorance.
       if(s.unprobed===s.accounts) return html`<span class="mut">? / ${s.accounts}</span>`;
-      return html`<span class=${s.serving?(s.dry?'warnp':'up'):'down'}>${s.serving} / ${s.accounts}</span>`;
+      return html`<span class=${s.serving?((s.dry||s.thin)?'warnp':'up'):'down'}>${s.serving} / ${s.accounts}</span>`;
     })()}<//>
     <${KV} n="Cloud policy">${state.cloudPolicy||'open'}<//>
     <${KV} n="JSON enforce">${state.jsonEnforce?'ON':'OFF'}<//>
@@ -103,7 +103,7 @@ function Pool({d}){
   const stranded=s.strandedProjects||[];
   return html`<${Card} cls=${bad?'bad':''}>
     <div class="flex" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0">Claude Max pool <small class="hint">— ${s.serving??0}/${s.accounts??0} accounts serving${s.unprobed?`, ${s.unprobed} never probed`:''}</small></h3>
+      <h3 style="margin:0">Claude Max pool <small class="hint">— ${s.serving??0}/${s.accounts??0} accounts serving${s.servingModels!=null&&s.unprobed<s.accounts?`, ${s.servingModels} of ${d.advertisedModels} model ids answer anywhere`:''}${s.unprobed?`, ${s.unprobed} never probed`:''}</small></h3>
       <button class="ghost sm" onClick=${()=>go('accounts')}>Accounts →</button>
     </div>
     ${stranded.length?html`<p class="down" style="margin:8px 0 0"><b>⛔ ${stranded.map(p=>p).join(', ')}</b> ${stranded.length>1?'are':'is'} pinned to a dry account — those calls are failing now.</p>`:''}
@@ -132,6 +132,11 @@ function Issues({health,st,state,pool}){
     if(stranded.length) probs.push(['dry',`${stranded.join(', ')} ${stranded.length>1?'are':'is'} pinned to a DRY account — every claudecode call from ${stranded.length>1?'them':'it'} is failing, and there is no fallback.`]);
     else if(s.dry) probs.push(['dry',`${s.dry} pool account(s) serve no model at all. No project is pinned to ${s.dry>1?'them':'it'} yet.`]);
     if(s.hot) probs.push(['slow',`${s.hot} account(s) have burned ≥90% of a rate-limit window.`]);
+    // The pool's real failure mode: every account answers haiku and 429s everything else, so each
+    // row looks alive while a request for opus fails on all seven.
+    if(s.servingModels!=null && s.unprobed<s.accounts && s.servingModels<=2 && s.thin)
+      probs.push(['dry',`The pool serves only ${s.servingModels} model id(s) — ${s.thin} account(s) are THIN: every other advertised model 429s. Asking for opus or sonnet fails on all of them.`]);
+    else if(s.thin) probs.push(['dry',`${s.thin} account(s) are THIN — they serve some models and 429 the rest.`]);
     if(s.accounts&&s.unprobed===s.accounts) probs.push(['probe',`No account has ever been probed. The 5h/7d bars are a floor harvested off real traffic — an exhausted account still reads 0% · allowed.`]);
     else if(s.unprobed) probs.push(['probe',`${s.unprobed} account(s) never probed — their headroom bars are unverified.`]);
     if(s.staleProbes) probs.push(['probe',`${s.staleProbes} probe result(s) are over 6h old; a 5h window can empty and refill in that time.`]);
