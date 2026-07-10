@@ -1,4 +1,4 @@
-// llm.hostbun.cc — single-URL OpenAI router + admin UI.
+// llm.hostbun.cc — single-URL OpenAI router + control panel.
 //
 // PROVIDERS — where a request is actually served. Three, and that is the whole taxonomy:
 //   • local        -> llama.cpp on the pbox GPU (OpenAI-native; base + ids from config.json)
@@ -13,11 +13,11 @@
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
 //   /local/*                                   -> back-compat: strips /local, proxies to the local provider (pbox)
-//   /admin, /admin/api/*                       -> password-gated admin UI (edit routing/models/keys live)
+//   /  and /api/*                              -> password-gated control panel + its JSON API
 //
 // Routing is driven by a live, mutable CFG object. CFG is seeded from env defaults and then
 // overlaid with /data/config.json (a Coolify-managed persistent volume) — so edits made in the
-// admin UI take effect immediately AND survive restarts/reboots/redeploys. Nothing here needs a
+// panel take effect immediately AND survive restarts/reboots/redeploys. Nothing here needs a
 // redeploy to change routing.
 //
 // NAMING: canonical provider ids are `local`, `crazyrouter`, `claudecode`. The legacy ids `cloud`
@@ -32,7 +32,7 @@
 //   src/http.js        the wire: readBody, buildHeaders, proxy(), JSON enforcement
 //   src/db.js          the call log (Postgres) and harvested account headroom
 //   src/claudecode.js  the Anthropic catalog and per-account probes
-//   src/admin.js       the control-plane API behind the password cookie
+//   src/admin.js       the control-plane API (/api/*) behind the password cookie
 //   src/telemetry.js   call-log row shaping + HyperDX error shipping
 //   src/pricing.js     USD estimates (crazyrouter only; the rest are flat or free)
 //   translate.js       OpenAI <-> Anthropic, pure functions, unit-tested
@@ -90,20 +90,27 @@ const server = http.createServer(async (req, res) => {
 
   // The control-plane UI (only on the main host, never docs.*).
   //
-  // There is no /admin page any more — the site root IS the panel, and the whole of it sits behind
-  // the password (the SPA renders <Login/> until /api/state stops 401'ing). /admin* survives only
-  // as a 308 to /, so old bookmarks and the deploy's health check don't 404.
+  // There is no /admin anything. The site root IS the panel, behind the password (the SPA renders
+  // <Login/> until /api/state stops 401'ing), and its JSON API is /api/*. The old /admin/api/*
+  // prefix and the /admin -> / redirect are GONE: claudectl, the statusline and the cccc TUI were
+  // repointed at /api/* first, because deleting a prefix your own tooling still calls is how a
+  // cleanup becomes an outage.
   //
-  // The JSON API keeps its /admin/api/* prefix on purpose: claudectl's proxy_* tools hardcode those
-  // paths (see claudectl/server/claudectl_server.py). /api/* is the new alias; both hit the same
-  // handler, so the rename can happen on claudectl's schedule, not ours.
+  // The two carve-outs below are load-bearing. /api/v1/* is the OpenAI-compatible surface (a caller
+  // that sets base_url=https://llm.hostbun.cc/api reaches /api/v1/chat/completions), and /api/pricing
+  // is public. Routing either into the cookie-gated admin handler would 401 real inference traffic.
   if (!host.startsWith("docs.")) {
-    if (path.startsWith("/admin/api/")) return handleAdminApi(req, res, path, "/admin/api/");
     if (path.startsWith("/api/") && !path.startsWith("/api/v1/") && path !== "/api/pricing")
       return handleAdminApi(req, res, path, "/api/");
+    // A tombstone, not a route. Without it /admin/* falls through to the model router and a stale
+    // `POST /admin/api/login` is read as an inference request — answered "model_not_routable" and
+    // written to the call log as blocked traffic. 404 with a pointer is the honest answer.
     if (path === "/admin" || path.startsWith("/admin/")) {
-      res.writeHead(308, { location: "/" });
-      return res.end();
+      res.writeHead(404, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: {
+        type: "gone", code: "admin_prefix_removed",
+        message: "the /admin prefix was removed; the panel is at / and its JSON API at /api/*",
+      } }));
     }
     // The panel's own ES modules and stylesheet. Served from a fixed directory beside ADMIN_FILE,
     // and the path is REJECTED unless it matches [a-z0-9-]+(/[a-z0-9-]+)?\.(js|css) — no "..", no
@@ -215,7 +222,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(401, { "content-type": "application/json", "www-authenticate": `Bearer realm="llm.hostbun.cc"` });
     return res.end(JSON.stringify({ error: {
       type: "invalid_api_key", code: "invalid_api_key", message: why,
-      hint: "send `Authorization: Bearer sk-llm-…` (or `x-api-key`). Issue one in /admin → Consumers.",
+      hint: "send `Authorization: Bearer sk-llm-…` (or `x-api-key`). Issue one in the panel at https://llm.hostbun.cc/ → Consumers.",
     } }));
   };
   if (auth && !auth.ok && isInference) return keyFail(auth.why);
@@ -249,7 +256,7 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ error: {
       type: "unknown_consumer",
       message: `consumer "${consumer}" is not registered`,
-      hint: "register it in /admin (Consumers), as kind 'dev' (a person's machine) or 'app' (deployed code)",
+      hint: "register it in the panel (Consumers) as a machine (belongs to a developer) or a project (deployed code)",
       registered: known,
     } }));
   }
@@ -263,7 +270,7 @@ const server = http.createServer(async (req, res) => {
         reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 400, ms: 0,
         error: `not routable: ${route.why}`, reqContent: extractRequestContent(bodyBuf), project });
     res.writeHead(400, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: { message: `model '${model || ""}' is not routable: ${route.why}. Set a model override, crazyrouter allowlist entry, or default route in /admin.`, type: "invalid_request_error", code: "model_not_routable" } }));
+    return res.end(JSON.stringify({ error: { message: `model '${model || ""}' is not routable: ${route.why}. Set a model override, crazyrouter allowlist entry, or default route in the panel.`, type: "invalid_request_error", code: "model_not_routable" } }));
   }
 
   // Per-project usage limits (rolling-window quota): warn → slow (throttle) → block (429).
@@ -283,7 +290,7 @@ const server = http.createServer(async (req, res) => {
           error: `usage_limit: ${pctI}% of ${v.lim.window} cap`, reqContent: extractRequestContent(bodyBuf) });
         res.writeHead(429, { "content-type": "application/json", "retry-after": "60",
           "x-usage-percent": String(pctI), "x-usage-window": v.lim.window, "x-usage-limit": capStr });
-        return res.end(JSON.stringify({ error: { message: `project '${project}' has hit its ${v.lim.window} usage limit (${pctI}% of ${capStr}). Requests are blocked until usage rolls off the window, or raise the limit in /admin.`, type: "rate_limit_error", code: "usage_limit_exceeded" } }));
+        return res.end(JSON.stringify({ error: { message: `project '${project}' has hit its ${v.lim.window} usage limit (${pctI}% of ${capStr}). Requests are blocked until usage rolls off the window, or raise the limit in the panel.`, type: "rate_limit_error", code: "usage_limit_exceeded" } }));
       }
       if (v.action === "warn" || v.action === "slow") res.setHeader("x-usage-warning", `${pctI}% of ${v.lim.window} limit`);
       if (v.action === "slow") {
@@ -322,7 +329,7 @@ const server = http.createServer(async (req, res) => {
 
   // Max-account provider: the account is PINNED to the project, server-side (see accountFor).
   // No `X-Account` / `X-CCC-Account` / `X-Consumer` header is consulted — identity comes from the
-  // project, the pin lives in /admin, and the client Bearer is overridden regardless. An unpinned
+  // project, the pin lives in the panel, and the client Bearer is overridden regardless. An unpinned
   // project is a configuration bug, so we say so loudly rather than silently billing someone.
   if (provider === "claudecode" && CFG.claudecodeAccountPool && CFG.claudecodeAccountPool.length) {
     const acct = accountFor(project);
@@ -339,7 +346,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ error: {
         type: "no_account_for_project",
         message: `project "${project || "(none)"}" is not pinned to a Claude Code account`,
-        hint: "pin it in /admin (projectAccounts), or set defaultAccount",
+        hint: "pin it in the panel (Accounts → pins), or set defaultAccount",
         pinned_projects: Object.keys(pins).sort(),
       } }));
     }

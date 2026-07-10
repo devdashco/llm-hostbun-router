@@ -99,8 +99,40 @@ const routes = [
   ["GET  /local/v1/models", () => call("/local/v1/models")],
   ["GET  /prices.json", () => call("/prices.json")],
   ["GET  / (panel)", () => call("/")],
-  ["POST /admin/api/login", () => call("/admin/api/login", J({ password: "ddash" }))],
 ];
+
+// The control plane, behind the cookie. These are GET routes that read a query string via
+// url.parse() — the require for which the split dropped, so every one of them threw AFTER writing
+// headers, surfacing as a hang rather than a 500. Nothing above this line reads a query string,
+// which is exactly why the first version of this test missed it.
+const login = await fetch(`http://127.0.0.1:${PORT}/api/login`, J({ password: "ddash" }));
+const cookie = (login.headers.getSetCookie?.() || []).join("; ");
+const adminGet = (p) => fetch(`http://127.0.0.1:${PORT}${p}`, { headers: { cookie }, signal: AbortSignal.timeout(8000) })
+  .then(async (r) => { await r.arrayBuffer(); return r.status; })
+  .catch((e) => `ERR ${e.name === "TimeoutError" ? "timed out (hung)" : e.message}`);
+
+routes.push(
+  ["POST /api/login", () => Promise.resolve(login.status)],
+  ["GET  /api/state", () => adminGet("/api/state")],
+  ["GET  /api/health", () => adminGet("/api/health")],
+  ["GET  /api/calls?limit=1", () => adminGet("/api/calls?limit=1")],
+  ["GET  /api/stats", () => adminGet("/api/stats")],
+  ["GET  /api/consumers", () => adminGet("/api/consumers")],
+  ["GET  /api/developers", () => adminGet("/api/developers")],
+);
+
+// The /admin surface is gone. These assert the removal, and — more importantly — that removing it
+// did not swallow the two carve-outs: /api/v1/* is real inference traffic and /api/pricing is public.
+// Routing either into the cookie-gated admin handler would 401 callers that never had a cookie.
+const expect = async (name, p, want, init) => {
+  const got = await call(p, init);
+  if (got === want) ok(`${name} -> ${got}`);
+  else bad(name, `expected ${want}, got ${got}`);
+};
+await expect("GET  /admin/api/state is GONE", "/admin/api/state", 404);
+await expect("GET  /admin is GONE", "/admin", 404);
+await expect("GET  /api/v1/models still routes to the catalog", "/api/v1/models", 200);
+await expect("POST /api/v1/chat/completions still proxies", "/api/v1/chat/completions", 200, J(CHAT));
 
 for (const [name, run] of routes) {
   const before = log.length;

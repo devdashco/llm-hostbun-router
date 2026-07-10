@@ -23,7 +23,7 @@ const CLAUDECODE_MODEL_SEED = Object.freeze([
 // Verified one id at a time against api.anthropic.com (2026-07-09), NOT derived by stripping the
 // date: `claude-opus-4-1` 404s while `claude-opus-4-1-20250805` serves, and `claude-opus-4-8-20260528`
 // 404s while the undated `claude-opus-4-8` serves. The mapping is not mechanical. Re-verify with
-// POST /admin/api/claudecode/probe before adding one — a 404 here advertises a model that does not exist.
+// POST /api/claudecode/probe before adding one — a 404 here advertises a model that does not exist.
 const CLAUDECODE_MODEL_ALIASES = Object.freeze([
   "claude-haiku-4-5",    // 200 on a live account
   "claude-sonnet-4-5",   // 429 = exists, quota-dry
@@ -190,7 +190,7 @@ function envDefaults() {
     // project so it consumes zero tokens.
     projectRoutes: {},
     // projectAccounts: the server-side PIN, project → Max account name. This is the ONLY way an
-    // account is chosen (see accountFor). No headers, no sticky, no rotation. Edit live in /admin.
+    // account is chosen (see accountFor). No headers, no sticky, no rotation. Edit live in the panel.
     // A project with no pin (and no defaultAccount) is REFUSED with 403 rather than billed to a
     // guess. `consumerAccounts` is the old name, still read for back-compat.
     projectAccounts: {},

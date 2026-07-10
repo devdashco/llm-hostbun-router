@@ -46,11 +46,11 @@ await sleep(2500);
 
 // If login fails, every later assertion would compare against a 401 body and quietly "pass" the ones
 // that expect an error. Bail loudly instead.
-const rawLogin = curl(["-i", "-X", "POST", `${BASE}/admin/api/login`, "-d", '{"password":"ddash"}']);
+const rawLogin = curl(["-i", "-X", "POST", `${BASE}/api/login`, "-d", '{"password":"ddash"}']);
 const cookie = (rawLogin.match(/hb_admin=([^;]+)/) || [])[1] || "";
 if (!cookie) { console.error(`harness: login failed, refusing to report passes\n${rawLogin.slice(0, 300)}`); server.kill(); process.exit(2); }
 const api = (path, body) => {
-  const a = [`${BASE}/admin/api/${path}`, "-H", `cookie: hb_admin=${cookie}`];
+  const a = [`${BASE}/api/${path}`, "-H", `cookie: hb_admin=${cookie}`];
   if (body !== undefined) a.push("-X", "POST", "-d", JSON.stringify(body));
   return JSON.parse(curl(a).split("\n<")[0]);
 };
@@ -113,14 +113,17 @@ check("hash never leaves the process", JSON.stringify(api("consumers")).includes
 check("revoke", api("consumers/keys/revoke", { name: "fresh", id: k.keyId }).ok, true);
 
 console.log("admin — the gate:");
-check("unauthed state is 401", status("/admin/api/state"), "401");
-check("bad password is 401", curl(["-o", "/dev/null", "-X", "POST", `${BASE}/admin/api/login`, "-d", '{"password":"no"}']).trim().replace(/[<>]/g, ""), "401");
+check("unauthed state is 401", status("/api/state"), "401");
+check("bad password is 401", curl(["-o", "/dev/null", "-X", "POST", `${BASE}/api/login`, "-d", '{"password":"no"}']).trim().replace(/[<>]/g, ""), "401");
 check("unknown admin endpoint is 404", api("nope").error, "unknown admin endpoint");
 
 console.log("shell routes:");
 check("root serves the panel", status("/"), "200");
 check("a UI slug serves the panel", status("/routing"), "200");
-check("/admin redirects to root", status("/admin"), "308");
+// The /admin prefix is gone, not redirected. A tombstone 404 rather than a fall-through into the
+// model router, which would answer a stale POST /admin/api/login with "model_not_routable".
+check("/admin is gone", status("/admin"), "404");
+check("/admin/api/* is gone", status("/admin/api/state"), "404");
 // Not 404: an unknown path with no model falls into the resolver, which refuses ("no model
 // specified; no default route") — a 400. There is no catch-all at the root, by design.
 check("an unknown path is refused, not routed", status("/nope"), "400");

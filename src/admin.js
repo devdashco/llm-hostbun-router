@@ -1,6 +1,6 @@
 // The control-plane API. Password-gated with an HMAC cookie; every mutating route logs who and what.
 //
-// The /admin/api/* prefix is a COMPATIBILITY CONTRACT, not a security boundary — claudectl's proxy_*
+// The control plane lives at /api/*. The old /admin/api/* prefix is gone; claudectl, the statusline
 // tools hardcode it (claudectl/server/claudectl_server.py). /api/* is the alias the panel itself
 // uses. The cookie is the gate; the prefix is just a name.
 //
@@ -10,6 +10,10 @@
 //   • /routes  one project -> rule
 //   • /consumers, /consumers/keys  one registry entry
 const crypto = require("node:crypto");
+// url.parse() reads the query string on the GET endpoints (calls, stats, usage, …). The split left
+// this require behind: those routes threw AFTER the headers were written, so they surfaced as a hang
+// rather than a 500.
+const url = require("node:url");
 const fs = require("node:fs");
 const TR = require("../translate");
 const C = require("./config");
@@ -180,7 +184,7 @@ async function adminTest(model, prompt, maxTokens) {
   } catch (e) { return { ok: false, status: 0, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, error: e.message }; }
 }
 
-async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
+async function handleAdminApi(req, res, path, prefix = "/api/") {
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const sub = path.slice(prefix.length);
 
@@ -193,8 +197,8 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
     const ok = pw.length === CFG.adminPassword.length &&
       (() => { try { return crypto.timingSafeEqual(Buffer.from(pw), Buffer.from(CFG.adminPassword)); } catch { return false; } })();
     if (!ok) { console.error(`[admin] bad login ip=${ip}`); return sendJson(res, 401, { error: "wrong password" }); }
-    // Path=/ — NOT /admin. The panel is served from the root and calls /api/*, so a cookie scoped
-    // to /admin is never sent back and the login silently loops. `Secure` is set unconditionally:
+    // Path=/ — the panel is served from the root and calls /api/*, so a narrower cookie path is
+    // never sent back and the login silently loops. `Secure` is set unconditionally:
     // prod is always behind TLS, and a cookie that survives plaintext is worse than a local dev
     // annoyance (use SESSION_INSECURE=1 to test over http on localhost).
     const secure = process.env.SESSION_INSECURE === "1" ? "" : " Secure;";
@@ -943,16 +947,18 @@ async function handleAdminApi(req, res, path, prefix = "/admin/api/") {
   // ── identity registry (Postgres): developers → machines, and projects ──
   // Every write goes to the DB and re-projects into CFG; none of them can be reached through
   // `POST config`, which assigns wholesale and would wipe key hashes it never had.
-  {
-    const r = await registryRoutes(req, res, sub, ip);
-    if (r) return r;
-  }
+  // HANDLED is a sentinel, NOT the return value of sendJson() — sendJson returns undefined, so
+  // returning it would read as "not my route" and the dispatcher would then write a 404 on top of
+  // the response already sent (ERR_HTTP_HEADERS_SENT).
+  if (await registryRoutes(req, res, sub, ip) === HANDLED) return;
 
   return sendJson(res, 404, { error: "unknown admin endpoint" });
 }
 
 // Split out so the dispatcher above stays a flat list of `sub ===` checks. Returns a truthy value
 // when it handled the request, undefined when the path was not ours.
+const HANDLED = Symbol("handled");
+
 async function registryRoutes(req, res, sub, ip) {
   const REG = require("./registry");
   const body = async () => {
@@ -960,12 +966,12 @@ async function registryRoutes(req, res, sub, ip) {
     try { return JSON.parse(b.toString() || "{}"); } catch { throw new REG.RegistryError("bad json"); }
   };
   const guard = async (fn) => {
-    try { return await fn(); }
+    try { await fn(); }
     catch (e) {
-      if (e instanceof REG.RegistryError) return sendJson(res, e.status, { error: e.message, ...e.extra });
-      console.error(`[registry] ${e.message}`);
-      return sendJson(res, 500, { error: e.message });
+      if (e instanceof REG.RegistryError) sendJson(res, e.status, { error: e.message, ...e.extra });
+      else { console.error(`[registry] ${e.message}`); sendJson(res, 500, { error: e.message }); }
     }
+    return HANDLED;   // the response is written either way
   };
 
   if (sub === "developers" && req.method === "GET")
@@ -1014,7 +1020,7 @@ async function registryRoutes(req, res, sub, ip) {
       return sendJson(res, 200, { ok: true });
     });
 
-  return undefined;
+  return undefined;   // not our path — let the dispatcher keep looking
 }
 
 module.exports = { handleAdminApi, adminState, isAuthed, makeSession, COOKIE };

@@ -2,7 +2,7 @@
 // actually serve.
 //
 // A 429 from Anthropic carries no anthropic-ratelimit-* headers, so the harvested acct_limits row
-// keeps reporting its last good reading while the account is bone dry. /admin/api/limits is a floor,
+// keeps reporting its last good reading while the account is bone dry. /api/limits is a floor,
 // not a verdict. probeAccount() pings every advertised id: 404 = the model does not exist, 429 = it
 // exists and the subscription is exhausted.
 const TR = require("../translate");

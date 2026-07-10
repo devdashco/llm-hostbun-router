@@ -138,7 +138,7 @@ async function usageVerdict(project) {
 // One project → one account, decided by config alone. There is deliberately NO auto-rotation:
 // a silent account switch is a full prompt-cache miss (~12x cost) AND it makes "who spent this?"
 // unanswerable after the fact. If the pinned account is out of quota, its real 429 reaches the
-// caller. You fix that by re-pinning in /admin — not by the gateway guessing.
+// caller. You fix that by re-pinning in the panel — not by the gateway guessing.
 //
 // `acctHealth` exists for DISPLAY and DEBUGGING only. It never influences which account is chosen.
 // Synchronous read of the latest per-account headroom, because adminState() is synchronous and the
@@ -156,7 +156,7 @@ function acctHealth(org) {
 }
 
 // The account a project bills to, or null. Resolution is exactly two steps, both explicit:
-//   1. projectAccounts[project]  — the pin, edited in /admin
+//   1. projectAccounts[project]  — the pin, edited in the panel
 //   2. CFG.defaultAccount        — one named fallback, also explicit
 // No request header can override it. Deterministic: same project ⇒ same account, every time.
 // (`consumerAccounts` is the pre-rename name of `projectAccounts`; both are read during migration.)
