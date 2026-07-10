@@ -7,7 +7,7 @@
 // exists and the subscription is exhausted.
 const TR = require("../translate");
 const { CFG, persistConfig, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
-const { ORG_OF_ACCOUNT, PROBE_CACHE } = require("./db");
+const { ORG_OF_ACCOUNT, PROBE_CACHE, persistProbe } = require("./db");
 const { localTarget } = require("./routing");
 
 function localModelEntries() {
@@ -143,6 +143,11 @@ async function probeAccount(acct) {
         method: "POST", headers: TR.anthropicHeaders(acct.token), signal: AbortSignal.timeout(20000),
         body: JSON.stringify({ model: id, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
       });
+      // Anthropic stamps the org-id on every reply, 4xx included. An account with no traffic and no
+      // catalog sweep otherwise has no org-id, so its acct_limits row can never be joined and the
+      // panel shows "org unknown" forever. A probe is a reply — take it.
+      const org = r.headers.get("anthropic-organization-id");
+      if (org) ORG_OF_ACCOUNT.set(acct.name, org);
       let errType = null;
       if (!r.ok) { try { errType = ((await r.json()).error || {}).type || null; } catch {} }
       return { id, status: r.status, ok: r.ok, error: errType, ms: Date.now() - t0 };
@@ -152,6 +157,7 @@ async function probeAccount(acct) {
   console.log(`[models] probe ${acct.name}: ${usable.length}/${ids.length} usable (${usable.join(",") || "none"})`);
   const out = { account: acct.name, checkedAt: Date.now(), usable, results };
   PROBE_CACHE.set(acct.name, out);
+  persistProbe(out);   // survives the next deploy; the Map does not
   return out;
 }
 

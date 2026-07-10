@@ -44,4 +44,19 @@ reading", not `0%`.
 
 `POST /api/claudecode/probe {account}` pings every advertised model on that account and is the
 only honest source. `{all: true}` sweeps the pool. The Accounts tab has a button for it. A **404 means
-the model id does not exist**; a **429 means it exists and the subscription is dry**.
+the model id does not exist**; a **429 means it exists and the subscription is dry**. Results are
+persisted in `acct_probes` and survive a redeploy — before that they lived in a `Map`, so every
+deploy reset the whole pool to "not probed" and the only honest column was blank.
+
+`GET /api/accounts` therefore ships **one verdict per account**, computed server-side so the Overview
+banner and the Accounts table can never disagree:
+
+| health | means |
+|---|---|
+| `dry` | probed, and **not one** advertised model answered — every call to it fails now |
+| `hot` | a window is ≥90% burned, or Anthropic itself flagged `allowed_warning` |
+| `unknown` | never probed. **Not** `ok` — an exhausted account reads `0% · allowed` until probed |
+| `ok` | probed, serving, both windows have room |
+
+`summary.strandedProjects` is the one to watch: a project pinned to a `dry` account. There is no
+fallback, so those calls are failing right now.

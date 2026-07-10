@@ -52,6 +52,13 @@ function initDb() {
   // The table already exists in prod, so a CREATE TABLE IF NOT EXISTS would no-op here: it has to
   // be an explicit ADD COLUMN. Fire-and-forget, like every other write.
   dbWrite("ALTER TABLE acct_limits ADD COLUMN IF NOT EXISTS account TEXT", []);
+  // A probe is the ONLY honest answer to "can this account serve anything" (a 429 carries no
+  // anthropic-ratelimit-* headers, so acct_limits keeps reporting the last good reading). It was
+  // held in a Map, so every deploy reset the whole pool to "not probed" — the panel's most
+  // load-bearing column was blank in exactly the moment you go looking at it. Keyed by account
+  // name, not org-id: an account with no traffic has no org-id yet.
+  dbWrite(`CREATE TABLE IF NOT EXISTS acct_probes (
+    account TEXT PRIMARY KEY, checked_at BIGINT NOT NULL, usable JSONB NOT NULL, results JSONB NOT NULL)`, []);
 }
 
 // Fire-and-forget write. Never awaited on the hot path: an inference request must not wait on, or
@@ -87,15 +94,30 @@ const FACET_CACHE = { at: 0, val: null };
 // entry to its acct_limits row without the caller having to know the opaque org id.
 const ORG_OF_ACCOUNT = new Map();
 // account name → last probe result ({checkedAt, usable, results}). A probe costs a max_tokens:1 ping
-// per model, so it is never automatic — but the last answer is worth keeping and showing.
+// per model, so it is never automatic — but the last answer is worth keeping and showing. Mirrored
+// to `acct_probes` so it outlives a deploy; this Map stays the read path (adminState is sync).
 const PROBE_CACHE = new Map();
+
+// Called by probeAccount(). Awaiting a DB round-trip here would make the operator wait on Postgres
+// for an answer the probe already has, so it is fire-and-forget like every other write: the Map is
+// authoritative for this process, the table only has to be right by the next boot.
+function persistProbe(p) {
+  dbWrite(`INSERT INTO acct_probes (account,checked_at,usable,results) VALUES ($1,$2,$3,$4)
+           ON CONFLICT (account) DO UPDATE SET checked_at=EXCLUDED.checked_at, usable=EXCLUDED.usable, results=EXCLUDED.results`,
+    [p.account, p.checkedAt, JSON.stringify(p.usable), JSON.stringify(p.results)]);
+}
 
 async function primeAcctCache() {
   for (const r of await dbRows("SELECT org_id,u5,u7,s5,s7,ts,account FROM acct_limits")) {
     ACCT_CACHE.set(r.org_id, { u5: r.u5, u7: r.u7, s5: r.s5, s7: r.s7, ts: Number(r.ts) || 0 });
     if (r.account) ORG_OF_ACCOUNT.set(r.account, r.org_id);
   }
+  for (const r of await dbRows("SELECT account,checked_at,usable,results FROM acct_probes")) {
+    PROBE_CACHE.set(r.account, { account: r.account, checkedAt: Number(r.checked_at) || 0,
+      usable: r.usable || [], results: r.results || [] });
+  }
   if (ACCT_CACHE.size) console.log(`[log] primed headroom for ${ACCT_CACHE.size} account(s)`);
+  if (PROBE_CACHE.size) console.log(`[log] primed probes for ${PROBE_CACHE.size} account(s)`);
 }
 const clip = (s) => { const t = s == null ? "" : String(s); return (CONTENT_CAP > 0 && t.length > CONTENT_CAP) ? t.slice(0, CONTENT_CAP) : t; };
 
@@ -189,6 +211,6 @@ async function clearCalls() {
 }
 
 module.exports = {
-  initDb, dbUp, dbRows, dbRow, dbExec, dbWrite, recordCall, recordLimits, primeAcctCache, primeAcctCacheSoon, clearCalls,
+  initDb, dbUp, dbRows, dbRow, dbExec, dbWrite, recordCall, recordLimits, persistProbe, primeAcctCache, primeAcctCacheSoon, clearCalls,
   ACCT_CACHE, ORG_OF_ACCOUNT, PROBE_CACHE, FACET_CACHE, clip, DATABASE_URL, CONTENT_CAP,
 };

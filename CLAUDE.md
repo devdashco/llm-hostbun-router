@@ -258,7 +258,8 @@ standalone-postgres (`postgres:17-alpine`, uuid `b8ubtmws8mnt8viw9mg0syz2`) **in
 `llm-hostbun-router` project on hostbun**, reached over the internal `coolify` docker network.
 Moved off pbox on 2026-07-10 (it was `80.217.106.60:5435`, `sslmode=disable`, cleartext over the
 public internet). DSN in keyvault at `db/llmrouter/DATABASE_URL`. Tables `calls` and `acct_limits`, created by
-migration `0001_calls_and_acct_limits`. It used to be a SQLite file on the app's volume; that file is
+migration `0001_calls_and_acct_limits`, plus `acct_probes` (last probe per account, created by an
+idempotent `CREATE TABLE IF NOT EXISTS` in `initDb`). It used to be a SQLite file on the app's volume; that file is
 gone. `pg` is the router's only runtime dependency, so the Dockerfile now runs `npm ci` — if you add a
 dependency, the lockfile must be committed or the build fails.
 
@@ -327,6 +328,13 @@ dependency, the lockfile must be committed or the build fails.
   honest source; `{all:true}` sweeps the pool and the panel's Accounts tab has a button for it.
   As of 2026-07-09 the pool is nearly dry: **`william`, `kontaktemhpx` and `cmejl3` serve only
   `claude-haiku-4-5`; `philip`, `emphyx`, `claudemejlto` and `claude2mejlto` serve nothing at all.**
+  Probe results now persist in `acct_probes` and are primed at boot (2026-07-10) — they lived in a
+  `Map`, so every deploy reset the pool to "not probed" and blanked the only honest column. A probe
+  also learns the org-id off the response headers, which fills in "org unknown" for an account that
+  has never served a call. `GET /admin/api/accounts` returns a server-computed `health` per account
+  (`dry` > `hot` > `unknown` > `ok`) plus a `summary`; Overview and Accounts both render that one
+  verdict, so they cannot disagree. **`unknown` is not `ok`** — an unprobed account's bars are a floor.
+  `summary.strandedProjects` lists projects pinned to a dry account: an outage they have not hit yet.
 - **`acct_limits` is keyed by Anthropic org-id, which says nothing about which login it is.** The
   `account` column (added 2026-07-09 by an idempotent `ALTER` in `initDb`) fixes that, but it is only
   stamped by live traffic. A cold-started router learns org→account from the

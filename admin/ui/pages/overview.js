@@ -1,4 +1,5 @@
-import { html, h, useState, useEffect, useCallback, api, ago, fmtMs, fmtTime, SLOW_MS, Pill, ProviderPill, StatusPill, KV, Card, Chart, Seg, PageHead, useApp } from "../core.js";
+import { html, h, useState, useEffect, useCallback, api, ago, nfmt, fmtMs, fmtTime, SLOW_MS, Pill, ProviderPill, StatusPill, KV, Card, Chart, Seg, PageHead, useApp } from "../core.js";
+import { Bar, HealthPill } from "./accounts.js";
 
 /* ───────── OVERVIEW ───────── */
 function Overview(){
@@ -10,9 +11,13 @@ function Overview(){
   const [ovWin,setOvWin]=useState('6h');
   const [ovMetric,setOvMetric]=useState('n');
   const [cfgOpen,setCfgOpen]=useState(false);
+  const [pool,setPool]=useState(null);
   const load=useCallback(async()=>{
     try{ const [h,s]=await Promise.all([api('health'),api('stats?window=1h').catch(()=>null)]); setHealth(h); setSt1h(s); }catch(e){}
     try{ setRecent((await api('calls?limit=18')).rows||[]); }catch(e){}
+    // The pool is the only thing on this page that can be silently, totally broken while every
+    // provider probe says UP: api.anthropic.com is reachable, our subscription is just dry.
+    try{ setPool(await api('accounts')); }catch(e){}
   },[]);
   useEffect(()=>{load();},[load]);
   useEffect(()=>{ (async()=>{ try{ setSeries(await api('series?window='+ovWin+'&by=provider')); }catch(e){} })(); },[ovWin]);
@@ -23,7 +28,8 @@ function Overview(){
   const fm=state.forceModel||{};
   return html`
   <${PageHead} title="Overview" onRefresh=${load}/>
-  <${Issues} health=${health} st=${st1h} state=${state}/>
+  <${Issues} health=${health} st=${st1h} state=${state} pool=${pool}/>
+  <${Pool} d=${pool}/>
   <${Card}>
     <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
       <h3 style="margin:0">Activity <small class="hint">— when, by provider</small></h3>
@@ -53,7 +59,14 @@ function Overview(){
   <div class="grid">
     <${KV} n="Providers up">${up<3?html`<span class="down">${up} / 3</span>`:up+' / 3'}<//>
     <${KV} n="Force model">${fm.enabled?html`<span class="warnp">${fm.provider}/${fm.model}</span>`:'off'}<//>
-    <${KV} n="Accounts">${(()=>{const n=(state.claudecodeAccountPool||[]).length; return n?n+' pinned pool':html`<span class="down">none</span>`;})()}<//>
+    <${KV} n="Pool serving">${(()=>{
+      const s=pool&&pool.summary;
+      if(!s) { const n=(state.claudecodeAccountPool||[]).length; return n?n+' accounts':html`<span class="down">none</span>`; }
+      if(!s.accounts) return html`<span class="down">none</span>`;
+      // "0 / 7 probed" is honest; "0 / 7" alone reads as an outage when it is only ignorance.
+      if(s.unprobed===s.accounts) return html`<span class="mut">? / ${s.accounts}</span>`;
+      return html`<span class=${s.serving?(s.dry?'warnp':'up'):'down'}>${s.serving} / ${s.accounts}</span>`;
+    })()}<//>
     <${KV} n="Cloud policy">${state.cloudPolicy||'open'}<//>
     <${KV} n="JSON enforce">${state.jsonEnforce?'ON':'OFF'}<//>
     <${KV} n="Config">${state.configPersisted?'file-backed':'env defaults'}<//>
@@ -78,9 +91,52 @@ function Overview(){
     ${cfgOpen&&html`<pre>${JSON.stringify({forceModel:state.forceModel,modelRoutes:state.modelRoutes,projectRoutes:state.projectRoutes,projectGroups:state.projectGroups,cloudPolicy:state.cloudPolicy,cloudAllowlist:state.cloudAllowlist,defaultRoute:state.defaultRoute,localMap:state.localMap,gatedModels:state.gatedModels,bases:state.bases,jsonEnforce:state.jsonEnforce,configPersisted:state.configPersisted},null,2)}</pre>`}
   </details>`;
 }
-function Issues({health,st,state}){
+/* The claudecode pool, condensed. "Provider claudecode: UP" only means api.anthropic.com answered —
+   it says nothing about whether OUR subscriptions still serve a model. This card is the difference,
+   and it is the reason a dry account used to be invisible until a project started 429'ing. */
+function Pool({d}){
+  const {go}=useApp();
+  if(!d) return '';
+  const s=d.summary||{}, accts=d.accounts||[];
+  if(!accts.length) return '';
+  const bad=(s.dry||0)+(d.orphanPins||[]).length;
+  const stranded=s.strandedProjects||[];
+  return html`<${Card} cls=${bad?'bad':''}>
+    <div class="flex" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Claude Max pool <small class="hint">— ${s.serving??0}/${s.accounts??0} accounts serving${s.unprobed?`, ${s.unprobed} never probed`:''}</small></h3>
+      <button class="ghost sm" onClick=${()=>go('accounts')}>Accounts →</button>
+    </div>
+    ${stranded.length?html`<p class="down" style="margin:8px 0 0"><b>⛔ ${stranded.map(p=>p).join(', ')}</b> ${stranded.length>1?'are':'is'} pinned to a dry account — those calls are failing now.</p>`:''}
+    <div style="overflow:auto;margin-top:12px"><table>
+      <tr><th>health</th><th>account</th><th>serves</th><th>projects</th><th>5h</th><th>7d</th><th>24h</th></tr>
+      ${accts.map(a=>html`<tr key=${a.name} class="click" onClick=${()=>go('accounts')}>
+        <td><${HealthPill} h=${a.health}/></td>
+        <td class="mono" style="font-size:12px"><b>${a.name}</b></td>
+        <td class="mono" style="font-size:12px">${a.probe?html`<span class=${a.probe.usable.length?'up':'down'}>${a.probe.usable.length}/${a.probe.total}</span>`:html`<span class="mut" style="font-size:11px">unprobed</span>`}</td>
+        <td style="font-size:11px">${a.projects.length?a.projects.join(', '):html`<span class="mut">— unused</span>`}</td>
+        <td style="min-width:60px"><${Bar} v=${a.limits&&a.limits.u5}/></td>
+        <td style="min-width:60px"><${Bar} v=${a.limits&&a.limits.u7}/></td>
+        <td class="mono mut" style="font-size:12px;white-space:nowrap">${a.usage.calls24h?nfmt(a.usage.calls24h)+' calls':'idle'}</td>
+      </tr>`)}
+    </table></div>
+    <small class="hint">Bars are harvested off real traffic and read as a <b>floor</b>: a 429 sends no rate-limit headers, so a dry account keeps its last cheerful reading. <b>Serves</b> is the probe — the only honest column.</small>
+  </${Card}>`;
+}
+
+function Issues({health,st,state,pool}){
   const probs=[];
   ['local','claudecode','crazyrouter'].forEach(l=>{ const r=health[l]; if(r&&!r.up) probs.push(['down',`Provider ${l} is DOWN (status ${r.status||'—'}). Traffic to it will fail.`]); });
+  // Pool problems outrank provider probes: claudecode reads UP while every subscription is dry.
+  if(pool&&pool.summary){
+    const s=pool.summary, stranded=s.strandedProjects||[];
+    if(stranded.length) probs.push(['dry',`${stranded.join(', ')} ${stranded.length>1?'are':'is'} pinned to a DRY account — every claudecode call from ${stranded.length>1?'them':'it'} is failing, and there is no fallback.`]);
+    else if(s.dry) probs.push(['dry',`${s.dry} pool account(s) serve no model at all. No project is pinned to ${s.dry>1?'them':'it'} yet.`]);
+    if(s.hot) probs.push(['slow',`${s.hot} account(s) have burned ≥90% of a rate-limit window.`]);
+    if(s.accounts&&s.unprobed===s.accounts) probs.push(['probe',`No account has ever been probed. The 5h/7d bars are a floor harvested off real traffic — an exhausted account still reads 0% · allowed.`]);
+    else if(s.unprobed) probs.push(['probe',`${s.unprobed} account(s) never probed — their headroom bars are unverified.`]);
+    if(s.staleProbes) probs.push(['probe',`${s.staleProbes} probe result(s) are over 6h old; a 5h window can empty and refill in that time.`]);
+    if((pool.orphanPins||[]).length) probs.push(['err',`${pool.orphanPins.length} project pin(s) name an account that is not in the pool — those calls 403.`]);
+  }
   if(st&&st.byProvider){
     st.byProvider.forEach(r=>{ if(r.avg_ms>SLOW_MS) probs.push(['slow',`Provider ${r.provider} is slow — avg ${fmtMs(r.avg_ms)} over the last hour (${r.n} calls).`]); });
     if(st.windowJsonFails>0) probs.push(['refusal',`${st.windowJsonFails} JSON-enforce failure(s) in the last hour — usually a prose refusal, surfaced as 422. Not a proxy bug.`]);
@@ -88,11 +144,11 @@ function Issues({health,st,state}){
     if(rate>0.05 && st.windowCalls>=20) probs.push(['err',`Non-refusal error rate ${(rate*100).toFixed(0)}% over the last hour (${otherErr}/${st.windowCalls}).`]);
   }
   if(state.forceModel&&state.forceModel.enabled) probs.push(['force',`Force-model is ON → every request rewritten to ${state.forceModel.provider}/${state.forceModel.model}.`]);
-  const ic={down:'⛔',slow:'🐢',refusal:'🙅',err:'⚠️',force:'⏻'};
-  if(!probs.length) return html`<div class="banner ok"><b style="color:var(--grn)">✓ All healthy</b> <span class="mut">— providers up, no slow providers or elevated errors in the last hour.</span></div>`;
+  const ic={down:'⛔',slow:'🐢',refusal:'🙅',err:'⚠️',force:'⏻',dry:'🩸',probe:'🔎'};
+  if(!probs.length) return html`<div class="banner ok"><b style="color:var(--grn)">✓ All healthy</b> <span class="mut">— providers up, pool serving, no slow providers or elevated errors in the last hour.</span></div>`;
   return html`<div class="banner bad"><b style="color:var(--amb)">${probs.length} thing${probs.length>1?'s':''} to look at</b>
     <ul style="margin:8px 0 0;padding-left:20px;list-style:none">${probs.map(([k,m])=>html`<li style="margin:5px 0">${ic[k]||'•'} ${m}</li>`)}</ul></div>`;
 }
 
 
-export { Overview, Issues };
+export { Overview, Issues, Pool };

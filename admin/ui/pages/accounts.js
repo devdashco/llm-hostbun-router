@@ -1,4 +1,4 @@
-import { html, render, h, useState, useEffect, useCallback, api, toast, nfmt, ago, Card, PageHead, useApp } from "../core.js";
+import { html, render, h, useState, useEffect, useCallback, api, toast, nfmt, ago, Card, KV, PageHead, useApp } from "../core.js";
 
 /* ───────── Accounts: live per-account 5h/7d limits, harvested free off real traffic ───────── */
 /* Project pins. One project → one account, forever; no header can override it. Rotating accounts
@@ -55,6 +55,21 @@ const Bar=({v})=>{
   </div>`;
 };
 
+/* The verdict is computed server-side (`poolHealth`), never re-derived here — two implementations of
+   "is this account dry" is how a green Overview and a red Accounts table end up on the same screen.
+   `unknown` is drawn grey, not green: an unprobed account is not a healthy one. */
+const HEALTH={
+  dry:{t:'DRY',c:'var(--red)',w:'not one advertised model answered — every call to this account fails'},
+  hot:{t:'HOT',c:'var(--amb)',w:'a rate-limit window is ≥90% burned, or Anthropic flagged it'},
+  ok:{t:'OK',c:'var(--grn)',w:'probed, serving, and both windows have room'},
+  unknown:{t:'?',c:'var(--mut,#a1a1aa)',w:'never probed — the 5h/7d bars are a floor, not a verdict'},
+};
+const HealthPill=({h})=>{ const x=HEALTH[h]||HEALTH.unknown;
+  return html`<span class="pill" title=${x.w} style=${`background:transparent;border:1px solid ${x.c};color:${x.c};font-weight:700`}>${x.t}</span>`;
+};
+/* A probe older than this describes a window that has since emptied or refilled. Mirrors PROBE_STALE_MS. */
+const PROBE_STALE_MS=6*3600*1000;
+
 /* One row per pool account — including the ones that have never served a call. The old view read
    acct_limits directly, which is keyed by Anthropic org-id, so an account with no traffic simply
    did not exist as far as the panel was concerned. */
@@ -78,46 +93,66 @@ function Accounts(){
     }catch(e){ toast(e.message,true); } finally{ setProbing(''); }
   }
   const accts=(d&&d.accounts)||[];
+  const s=(d&&d.summary)||{};
+  const stranded=(s.strandedProjects||[]);
   return html`
   <${PageHead} title="Accounts, pins & limits" onRefresh=${load}/>
+
+  ${stranded.length?html`<div class="banner bad">
+    <b class="down">⛔ ${stranded.length} pinned project${stranded.length>1?'s are':' is'} pinned to a DRY account</b>
+    <div class="mut" style="margin-top:4px">Every claudecode call from ${stranded.map(p=>html`<code class="mono">${p}</code> `)} fails right now. There is <b>no fallback</b> — that is deliberate. Re-pin them, or wait for the account's 5h window to reset.</div>
+  </div>`:''}
+  ${d&&d.orphanPins&&d.orphanPins.length?html`<div class="banner bad">
+    <b class="down">⚠ ${d.orphanPins.length} pin(s) name an account that is not in the pool</b>
+    <div class="mut" style="margin-top:4px">Those projects <code>403</code> on every call: ${d.orphanPins.map(o=>html`<code class="mono">${o.project} → ${o.account}</code> `)}</div>
+  </div>`:''}
+
+  <div class="grid">
+    <${KV} n="Pool">${s.accounts??'…'} account${s.accounts===1?'':'s'}<//>
+    <${KV} n="Serving">${s.serving==null?'…':html`<span class=${s.serving?'up':'down'}>${s.serving} / ${s.accounts}</span>`}<//>
+    <${KV} n="Dry">${s.dry?html`<span class="down">${s.dry}</span>`:(s.dry===0?'0':'…')}<//>
+    <${KV} n="Hot">${s.hot?html`<span class="warnp">${s.hot}</span>`:(s.hot===0?'0':'…')}<//>
+    <${KV} n="Unprobed">${s.unprobed?html`<span class="mut">${s.unprobed}</span>`:(s.unprobed===0?'0':'…')}<//>
+    <${KV} n="Advertised models">${d?d.advertisedModels:'…'}<//>
+  </div>
+
   <${Pins}/>
-  ${d&&d.orphanPins&&d.orphanPins.length?html`<${Card}>
-    <p class="down" style="margin:0"><b>⚠ ${d.orphanPins.length} pin(s) name an account that is not in the pool</b> — every call from ${d.orphanPins.map(o=>o.project).join(', ')} 403s.
-    ${d.orphanPins.map(o=>html` <code class="mono">${o.project} → ${o.account}</code>`)}</p>
-  </${Card}>`:''}
+
   <${Card}>
     <div class="flex" style="justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0">Pool <small class="hint">— ${accts.length} account(s), ${d?d.advertisedModels:'…'} advertised models</small></h3>
+      <h3 style="margin:0">Pool <small class="hint">— worst first: dry, hot, unprobed, healthy</small></h3>
       <button class="ghost sm" disabled=${!!probing} onClick=${()=>probe(null)} title="ping every advertised model on every account (max_tokens:1 each)">${probing==='all'?'probing…':'⚡ Probe all accounts'}</button>
     </div>
     <p class="hint" style="margin:8px 0 0">The <b>5h</b>/<b>7d</b> bars are harvested free off the rate-limit headers of real traffic — zero probe tokens.
     <b class="warnp">Read them as a floor, not a verdict.</b> A <code>429</code> carries no <code>anthropic-ratelimit-*</code> headers, so an exhausted account teaches the table nothing and keeps its last good reading — often <code>0% · allowed</code>, harvested off a cheap model that still answers.
-    <b>Probe</b> is the only honest column: it pings every advertised model. A <code>404</code> means the id does not exist; a <code>429</code> means it exists and the subscription is dry.</p>
+    <b>Probe</b> is the only honest column: it pings every advertised model. A <code>404</code> means the id does not exist; a <code>429</code> means it exists and the subscription is dry. Probes survive a redeploy.</p>
     ${err?html`<p class="down">${err}</p>`:''}
     ${!d?html`<p class="hint">loading…</p>`:''}
     <div style="overflow:auto;margin-top:12px"><table>
-      <tr><th>account</th><th>pinned projects</th><th>5h used</th><th>7d used</th><th>status</th><th>7d resets</th>
-        <th title="all-time calls / tokens through this account">usage</th><th>last 24h</th><th>probe</th><th></th></tr>
+      <tr><th>health</th><th>account</th><th>probe <small class="hint">— usable / advertised</small></th><th>pinned projects</th><th>5h used</th><th>7d used</th><th>7d resets</th>
+        <th title="all-time calls / tokens through this account">usage</th><th>last 24h</th><th></th></tr>
       ${accts.map(a=>{
         const l=a.limits, p=probes[a.name]||a.probe;
-        const dry=p&&p.usable&&!p.usable.length;
-        return html`<tr key=${a.name}>
+        // A fresh client-side probe overrides the server's verdict — the operator just watched it run.
+        const health=p?(p.usable.length?(a.health==='hot'?'hot':'ok'):'dry'):a.health;
+        const stale=p&&(now-p.checkedAt)>PROBE_STALE_MS;
+        const total=p&&(p.total||(p.results||[]).length);
+        return html`<tr key=${a.name} style=${health==='dry'?'background:rgba(239,68,68,.06)':''}>
+          <td><${HealthPill} h=${health}/></td>
           <td class="mono"><b>${a.name}</b>${a.org?html`<div class="hint" style="font-size:10px" title=${a.org}>${a.org.slice(0,12)}…</div>`:html`<div class="hint" style="font-size:10px">org unknown</div>`}</td>
-          <td>${a.projects.length?a.projects.map(pr=>html`<span class="pill" style="background:#2a3a2a;color:#8bc88b;margin:1px">${pr}</span>`):html`<span class="mut" style="font-size:11px">— unused</span>`}</td>
-          <td style="min-width:70px"><${Bar} v=${l&&l.u5}/></td>
-          <td style="min-width:70px"><${Bar} v=${l&&l.u7}/></td>
-          <td style="font-size:12px">${!l?html`<span class="mut">—</span>`:(l.s7==='allowed_warning'||l.s5==='allowed_warning')?html`<span class="warnp">warning</span>`:html`<span class="mut">${l.status||'—'}</span>`}
-            ${l?html`<div class="hint" style="font-size:10px">${ago(l.ts)}</div>`:''}</td>
+          <td style="font-size:12px;min-width:120px">${!p?html`<span class="mut">not probed</span><div class="hint" style="font-size:10px">bars below are unverified</div>`
+            :html`<span class=${p.usable.length?'up':'down'}><b>${p.usable.length}/${total}</b></span>
+                  <div class="hint" style="font-size:10px" title=${p.usable.join(', ')||'nothing answers'}>${p.usable.length?p.usable.slice(0,2).join(', ')+(p.usable.length>2?' +'+(p.usable.length-2):''):(p.exhausted?`${p.exhausted}× 429 (dry)`:'nothing answers')}</div>
+                  <div class="hint" style=${'font-size:10px;'+(stale?'color:var(--amb)':'')}>${ago(p.checkedAt)}${stale?' · stale':''}${p.dead?` · ${p.dead}× 404`:''}</div>`}</td>
+          <td>${a.projects.length?a.projects.map(pr=>html`<span class="pill" style=${`margin:1px;background:${health==='dry'?'#3a2a2a':'#2a3a2a'};color:${health==='dry'?'#e08b8b':'#8bc88b'}`} title=${health==='dry'?'pinned to a dry account — this project is down':''}>${pr}</span>`):html`<span class="mut" style="font-size:11px">— unused</span>`}</td>
+          <td style="min-width:70px"><${Bar} v=${l&&l.u5}/>${l?html`<div class="hint" style="font-size:10px">${ago(l.ts)}</div>`:''}</td>
+          <td style="min-width:70px"><${Bar} v=${l&&l.u7}/>${l&&(l.s5==='allowed_warning'||l.s7==='allowed_warning')?html`<div class="warnp" style="font-size:10px">warning</div>`:''}</td>
           <td class="mono" style="font-size:12px">${l?rel(l.reset7):'—'}</td>
           <td class="mono" style="font-size:12px;white-space:nowrap">${nfmt(a.usage.calls)} calls<br/>
             <span class="mut">${nfmt(a.usage.tokens)} tok</span>
-            ${a.usage.rateLimited>0?html`<br/><span class="down" style="font-size:11px">${nfmt(a.usage.rateLimited)}× 429</span>`:''}</td>
+            ${a.usage.rateLimited>0?html`<br/><span class="down" style="font-size:11px" title="429s served to callers — with no fallback, each one is a failed request">${nfmt(a.usage.rateLimited)}× 429</span>`:''}</td>
           <td class="mono" style="font-size:12px;white-space:nowrap">${a.usage.calls24h?html`${nfmt(a.usage.calls24h)} calls<br/><span class="mut">${nfmt(a.usage.tokens24h)} tok</span>`:html`<span class="mut">idle</span>`}
             <div class="hint" style="font-size:10px">${ago(a.usage.lastTs)}</div></td>
-          <td style="font-size:12px">${!p?html`<span class="mut">not probed</span>`
-            :dry?html`<span class="down"><b>DRY</b></span><div class="hint" style="font-size:10px">0/${p.total||p.results.length} models</div>`
-            :html`<span class="up"><b>${p.usable.length}/${p.total||p.results.length}</b></span>
-                  <div class="hint" style="font-size:10px" title=${p.usable.join(', ')}>${p.usable.slice(0,2).join(', ')}${p.usable.length>2?' +'+(p.usable.length-2):''}</div>`}</td>
           <td><button class="ghost sm" disabled=${!!probing} onClick=${()=>probe(a.name)}>${probing===a.name?'…':'Probe'}</button></td>
         </tr>`;
       })}
@@ -127,4 +162,4 @@ function Accounts(){
   </${Card}>`;
 }
 
-export { Pins, Bar, Accounts };
+export { Pins, Bar, HealthPill, HEALTH, PROBE_STALE_MS, Accounts };

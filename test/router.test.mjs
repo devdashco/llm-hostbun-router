@@ -37,8 +37,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 copyFileSync(join(ROOT, "test/parity-seed.json"), CFG);
 const server = spawn("node", [join(ROOT, "server.js")], {
+  // A two-account pool, pointed at a dead port. The boot catalog sweep therefore fails fast against
+  // 127.0.0.1 instead of reaching api.anthropic.com — this suite makes no network calls, and a test
+  // that quietly did would spend real tokens on someone's Max plan.
   env: { ...process.env, PORT: String(PORT), CONFIG_FILE: CFG, ADMIN_PASSWORD: "ddash",
-         SESSION_INSECURE: "1", ADMIN_FILE: join(ROOT, "admin/index.html"), DATABASE_URL: "" },
+         SESSION_INSECURE: "1", ADMIN_FILE: join(ROOT, "admin/index.html"), DATABASE_URL: "",
+         ANTHROPIC_BASE: "http://127.0.0.1:1",
+         ANTHROPIC_POOL: JSON.stringify([{ name: "acctA", token: "sk-ant-oat-fake-a" }, { name: "acctB", token: "sk-ant-oat-fake-b" }]) },
   stdio: "ignore",
 });
 process.on("exit", () => server.kill());
@@ -128,6 +133,24 @@ check("/admin/api/* is gone", status("/admin/api/state"), "404");
 // Not 404: an unknown path with no model falls into the resolver, which refuses ("no model
 // specified; no default route") — a 400. There is no catch-all at the root, by design.
 check("an unknown path is refused, not routed", status("/nope"), "400");
+
+// The pool view is the one screen that answers "can we serve anything at all". Its verdict is
+// computed server-side so Overview and Accounts cannot disagree — assert the contract, not the CSS.
+console.log("accounts — the pool view:");
+{
+  const a = api("accounts");
+  const byName = Object.fromEntries(a.accounts.map((x) => [x.name, x]));
+  check("every pool account gets a row, traffic or not", a.accounts.map((x) => x.name).sort(), ["acctA", "acctB"]);
+  // Never probed, no harvested headroom → "unknown". NOT "ok": an exhausted account reads 0% ·
+  // allowed until someone probes it, so an unprobed account must never render as healthy.
+  check("an unprobed account is unknown, not ok", byName.acctA.health, "unknown");
+  check("summary counts the unprobed", [a.summary.accounts, a.summary.unprobed, a.summary.serving, a.summary.dry], [2, 2, 0, 0]);
+  api("pins", { project: "ghostproj", account: "acctA" });
+  api("config", { projectAccounts: { ghostproj: "vanished" } });   // simulate an account removed from the pool
+  const b = api("accounts");
+  check("a pin naming an absent account is reported as orphaned", b.orphanPins, [{ project: "ghostproj", account: "vanished" }]);
+  api("config", { projectAccounts: {} });
+}
 
 console.log("config — POST config REPLACES projectRoutes (documented, load-bearing):");
 api("config", { projectRoutes: { z: { provider: "local", model: "qwen3.5-9b", allowModels: ["qwen3.5-9b"] } } });

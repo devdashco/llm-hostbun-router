@@ -43,7 +43,7 @@ code{background:#1c1c20;border:1px solid var(--bd);border-radius:5px;padding:1px
 }
 /* ── primitives ── */
 .card{background:var(--card2);border:1px solid var(--bd);border-radius:14px;padding:18px;margin:14px 0}
-.card.acc{border-color:var(--acc)} .card.amb{border-color:var(--amb)}
+.card.acc{border-color:var(--acc)} .card.amb{border-color:var(--amb)} .card.bad{border-color:var(--red)}
 input,select,textarea{background:var(--bg);border:1px solid var(--bd);border-radius:8px;color:var(--fg);padding:8px 10px;font:14px ui-monospace,Menlo,monospace;width:100%}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px var(--ring)}
 label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
