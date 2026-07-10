@@ -2,6 +2,8 @@
 // Pure-ish: reads CFG, writes nothing. The extractors must never throw on a malformed body — a
 // caller sending garbage still gets proxied, and a log line is not worth a 500.
 const { CFG } = require("./config");
+// keyLabel() needs it. routing does not require telemetry, so this cannot cycle.
+const { isGated } = require("./routing");
 
 // ── error → HyperDX (OTLP logs, service.name=llm.hostbun.cc). Auth header has NO "Bearer". ──
 const HDX_KEY = process.env.HYPERDX_INGEST_API_KEY || "";

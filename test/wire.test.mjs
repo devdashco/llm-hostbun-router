@@ -80,7 +80,11 @@ if (!(await up())) {
 }
 assert.ok(!/EADDRINUSE/.test(log), "port was already taken — the test would have run against a stale server");
 
-const call = (p, init) => fetch(`http://127.0.0.1:${PORT}${p}`, init).then((r) => r.status).catch((e) => `ERR ${e.message}`);
+// Every request gets a deadline. A route that HANGS is a failure too — and a hang is exactly what a
+// half-streamed proxy response looks like, so a test without a timeout just stops, green-ish, forever.
+const call = (p, init) => fetch(`http://127.0.0.1:${PORT}${p}`, { ...init, signal: AbortSignal.timeout(8000) })
+  .then(async (r) => { await r.arrayBuffer(); return r.status; })   // drain: an unread body leaves the socket open
+  .catch((e) => `ERR ${e.name === "TimeoutError" ? "timed out (hung)" : e.message}`);
 const J = (body) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const CHAT = { model: "local", max_tokens: 4, messages: [{ role: "user", content: "hi" }] };
 
