@@ -66,7 +66,7 @@ function Accounts(){
   const [d,setD]=useState(null); const [now,setNow]=useState(Date.now()); const [err,setErr]=useState('');
   // A live reading overlaid on top of the harvested row, keyed by account. Set by refreshLimits(),
   // which pings each subscription once and reads its real `anthropic-ratelimit-unified-*` headers.
-  const [fresh,setFresh]=useState({}); const [busy,setBusy]=useState('');
+  const [fresh,setFresh]=useState({}); const [busy,setBusy]=useState(''); const [confirmRm,setConfirmRm]=useState('');
   const load=useCallback(async()=>{ try{ const r=await api('accounts'); setD(r); setNow(r.now||Date.now()); setErr(''); }catch(e){ setErr(e.message||'load failed'); } },[]);
   useEffect(()=>{ load(); const t=setInterval(load,15000); return ()=>clearInterval(t); },[load]);
   // Ping ONE account (or the whole pool) for its live window. Not fired on mount — only on click —
@@ -79,6 +79,17 @@ function Accounts(){
       const m={...fresh}; list.forEach(x=>{ m[x.account]=x; }); setFresh(m);
       const nr=list.filter(x=>!x.reading).length;
       toast(`live limits: ${list.length-nr}/${list.length} read`+(nr?` · ${nr} no reading`:''), nr>0&&nr===list.length);
+      load();
+    }catch(e){ toast(e.message,true); } finally{ setBusy(''); }
+  }
+  // Remove an account from the pool, token and all. The server refuses (409) if a project still pins
+  // it, so re-pin first; the toast surfaces that. Two-click confirm guards a destructive, irreversible
+  // action (the pool is the only copy of the token).
+  async function removeAccount(name){
+    setBusy(name); setConfirmRm('');
+    try{
+      const r=await api('accounts/remove',{method:'POST',body:JSON.stringify({name})});
+      toast(`removed ${r.removed}${r.droppedPins&&r.droppedPins.length?` · dropped pins: ${r.droppedPins.join(', ')}`:''}`);
       load();
     }catch(e){ toast(e.message,true); } finally{ setBusy(''); }
   }
@@ -133,7 +144,12 @@ function Accounts(){
             ${a.usage.rateLimited>0?html`<br/><span class="down" style="font-size:11px" title="429s served to callers — with no fallback, each one is a failed request">${nfmt(a.usage.rateLimited)}× 429</span>`:''}</td>
           <td class="mono" style="font-size:12px;white-space:nowrap">${a.usage.calls24h?html`${nfmt(a.usage.calls24h)} calls<br/><span class="mut">${nfmt(a.usage.tokens24h)} tok</span>`:html`<span class="mut">idle</span>`}
             <div class="hint" style="font-size:10px">${since(a.usage.lastTs)}</div></td>
-          <td style="width:1%"><button class="ghost sm" disabled=${!!busy} title="refresh this account's live window" onClick=${()=>refreshLimits(a.name)}>${busy===a.name?'…':'↻'}</button></td>
+          <td style="width:1%;white-space:nowrap">
+            <button class="ghost sm" disabled=${!!busy} title="refresh this account's live window" onClick=${()=>refreshLimits(a.name)}>${busy===a.name?'…':'↻'}</button>
+            ${confirmRm===a.name
+              ? html`<button class="quiet sm" disabled=${!!busy} style="color:var(--danger);font-weight:600" title="permanently remove this account and its token from the pool" onClick=${()=>removeAccount(a.name)}>Remove?</button>`
+              : html`<button class="quiet sm" disabled=${!!busy} title="remove this account from the pool" onClick=${()=>setConfirmRm(a.name)}>✕</button>`}
+          </td>
         </tr>`;
       })}
       ${d&&!accts.length?html`<tr><td colspan="7" class="hint">The account pool is empty — <code>claudecodeAccountPool</code> in <code>/data/config.json</code> holds the tokens.</td></tr>`:''}

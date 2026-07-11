@@ -439,6 +439,34 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     return sendJson(res, 200, { ok: true, persisted, account: pool[i].name });
   }
 
+  // Remove ONE account from the pool, credential and all. Filters by name server-side so every other
+  // account's token stays intact (the panel never holds them, so it could not rebuild the pool via
+  // `POST config`). Refuses if any project still pins it — removing a pinned account silently strands
+  // that project on `403 no_account_for_project` — unless `force:true`, which drops those pins too.
+  // The pool in /data/config.json is the only copy of these tokens: removing one is irreversible here.
+  if (sub === "accounts/remove" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const name = String(p.name || p.account || "").trim();
+    if (!name) return sendJson(res, 400, { error: "name required" });
+    const pool = CFG.claudecodeAccountPool || [];
+    const acct = pool.find((a) => String(a.name).toLowerCase() === name.toLowerCase());
+    if (!acct) return sendJson(res, 400, { error: `unknown account '${name}'`, accounts: pool.map((a) => a.name) });
+    const pins = CFG.projectAccounts || {};
+    const pinned = Object.keys(pins).filter((pj) => String(pins[pj]).toLowerCase() === acct.name.toLowerCase());
+    if (pinned.length && !p.force) {
+      return sendJson(res, 409, { error: `account '${acct.name}' is still pinned by ${pinned.join(", ")} — re-pin them first, or pass force:true to drop those pins`, pinned });
+    }
+    if (pinned.length) { for (const pj of pinned) delete pins[pj]; CFG.projectAccounts = pins; }
+    const next = pool.filter((a) => String(a.name).toLowerCase() !== acct.name.toLowerCase());
+    CFG.claudecodeAccountPool = next;
+    CFG.anthropicPool = next;   // legacy mirror kept in sync so a rollback still boots
+    const persisted = persistConfig();
+    console.warn(`[admin] account REMOVED name=${acct.name} ip=${ip} persisted=${persisted} droppedPins=${pinned.join(",") || "none"}`);
+    return sendJson(res, 200, { ok: true, removed: acct.name, droppedPins: pinned, remaining: next.map((a) => a.name), persisted });
+  }
+
   // Merge one alias. `POST config` assigns consumerAliases wholesale (same hazard as pins/routes).
   // Send {to:null} to drop one.
   // Alias a legacy caller name onto a canonical <consumer>[:<job>] path. Writes the DB, like every
