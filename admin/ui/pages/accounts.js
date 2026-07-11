@@ -118,7 +118,7 @@ function Accounts(){
         return html`<tr key=${a.name} class=${live?'live-row':''}>
           <td class="mono"><b>${a.name}</b>${a.org?html`<div class="hint" style="font-size:10px" title=${a.org}>${a.org.slice(0,12)}…</div>`:html`<div class="hint" style="font-size:10px">org unknown</div>`}
             ${live?html`<div class="hint" style="font-size:9.5px;color:var(--ok)">● live · ${since(fr.checkedAt)}</div>`:''}
-            ${liveNo?html`<div class="hint" style="font-size:9.5px;color:var(--warn)" title="the account answered but sent no rate-limit headers — usually a 429">live: no reading${fr.status?` (${fr.status})`:''}${fr.error?` (${fr.error})`:''}</div>`:''}</td>
+            ${liveNo?html`<div class="hint" style=${'font-size:9.5px;color:'+(fr.status===403?'var(--danger)':'var(--warn)')} title=${fr.errMsg||fr.error||'the account answered but sent no rate-limit headers — usually a 429'}>${fr.status===403?'✕ OAuth disabled':`live: no reading${fr.status?` (${fr.status})`:''}`}${fr.error?` (${fr.error})`:''}</div>`:''}</td>
           <td>${a.projects.length?a.projects.map(pr=>html`<${Chip} cls="tag ok">${pr}<//> `):html`<span class="mut" style="font-size:11px">— unused</span>`}</td>
           <td style="min-width:70px"><${Bar} v=${l&&l.u5}/>${l?html`<div class="hint" style="font-size:10px">${live?'live':since(l.ts)}</div>`:''}</td>
           <td style="min-width:70px"><${Bar} v=${l&&l.u7}/>${l&&(l.s5==='allowed_warning'||l.s7==='allowed_warning')?html`<div class="warnp" style="font-size:10px">warning</div>`:''}</td>

@@ -150,10 +150,15 @@ async function refreshAccountLimits(acct) {
     const h = (k) => r.headers.get("anthropic-ratelimit-unified-" + k);
     const num = (v) => (v == null || v === "" ? null : Number(v));
     const has = h("5h-utilization") != null || h("7d-utilization") != null;
+    // No headers means no reading. WHY matters and differs sharply: a 429 is a spent window (resets),
+    // but a 403 permission_error ("OAuth authentication is currently not allowed for this
+    // organization") is a dead account — the login itself has been disabled, and no window reset
+    // fixes it. Read the error body so the panel can tell them apart.
+    let errType = null, errMsg = null;
+    if (!has && !r.ok) { try { const b = (await r.json()).error || {}; errType = b.type || null; errMsg = b.message || null; } catch {} }
     return {
       account: acct.name, org: org || null, status: r.status, checkedAt: Date.now(), ms: Date.now() - t0,
-      // A 429 (or an account so dry even haiku is refused) carries no unified headers → reading:null,
-      // which the UI must render as "no reading", never as 0%.
+      errType, errMsg,
       reading: has ? {
         unified: h("status") || null,
         u5: num(h("5h-utilization")), s5: h("5h-status") || null, reset5: num(h("5h-reset")),
