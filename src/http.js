@@ -43,11 +43,17 @@ const readBody = (req) => new Promise((resolve) => {
   req.on("error", () => resolve(Buffer.concat(c)));
 });
 
-function sendFile(res, path, type, cors) {
+function sendFile(res, path, type, cors, cacheControl) {
   fs.readFile(path, (e, buf) => {
     if (e) { res.writeHead(404, { "content-type": "text/plain" }); return res.end("not found"); }
     const h = { "content-type": type };
     if (cors) h["access-control-allow-origin"] = "*";
+    // The panel is an unversioned ES-module graph (/ui/app.js imports ./pages/*.js by relative path,
+    // no hash). Without revalidation a browser can hold an OLD module next to a NEW one across a
+    // redeploy — e.g. a cached overview.js importing a symbol the new accounts.js no longer exports —
+    // and the whole SPA renders blank. `no-cache` forces a revalidation every load, so the graph is
+    // always internally consistent.
+    if (cacheControl) h["cache-control"] = cacheControl;
     res.writeHead(200, h);
     res.end(buf);
   });

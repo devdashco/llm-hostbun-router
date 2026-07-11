@@ -128,13 +128,13 @@ const server = http.createServer(async (req, res) => {
         return res.end("not found");
       }
       const type = rel.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
-      return sendFile(res, nodePath.join(UI_DIR, rel), type, false);
+      return sendFile(res, nodePath.join(UI_DIR, rel), type, false, "no-cache");
     }
     // The SPA pushes /calls, /accounts, … so those must serve the shell on a hard refresh.
     // Enumerated, never a catch-all: a catch-all at the root would shadow /v1/*, /local/*, and
     // every future inference path, turning a routing bug into "the model endpoint returns HTML".
     if (req.method === "GET" && (path === "/" || UI_ROUTES.has(path.replace(/\/$/, ""))))
-      return sendFile(res, ADMIN_FILE, "text/html; charset=utf-8", false);
+      return sendFile(res, ADMIN_FILE, "text/html; charset=utf-8", false, "no-cache");
   }
 
   // Docs. A docsify site: one shell plus markdown, both served out of DOCS_DIR. It is reachable two
