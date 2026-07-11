@@ -24,11 +24,17 @@ Nothing calls this router unregistered. `auth.mode = required`, so an unregister
 a warning, it gets a `401`. Registration is one call, and **issuing the key IS the registration** —
 there is no separate "create, then authenticate" step to forget.
 
-All of it is API-driven. Log in once for a cookie:
+All of it is API-driven, but **minting a key is admin-gated** — every `POST /api/consumers/keys`
+needs the control-panel password cookie. There is **no self-serve key issuance**: a developer or a
+new app does not mint its own key, it asks whoever holds the panel password (or runs the calls below).
+That is the point — a key is what makes a name mean something, so handing out the ability to create
+keys would defeat it.
+
+Log in once for the cookie, then every call reuses it:
 
 ```bash
 curl -c /tmp/c -X POST https://llm.hostbun.cc/api/login \
-  -H 'content-type: application/json' -d '{"password":"…"}'
+  -H 'content-type: application/json' -d '{"password":"…"}'      # the panel password
 API() { curl -s -b /tmp/c -H 'content-type: application/json' "$@"; }
 ```
 

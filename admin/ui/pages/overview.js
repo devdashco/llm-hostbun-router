@@ -98,20 +98,26 @@ function Pool({d}){
   const accts=d.accounts||[];
   if(!accts.length) return '';
   const bad=(d.orphanPins||[]).length;
+  const now=d.now||Date.now();
+  // The reset clock: within a day → "Wed 14:30", further out → "Jul 16 09:00".
+  const resetAt=sec=>{ if(!sec) return ''; const dt=new Date(sec*1000); const ms=sec*1000-now; if(ms<=0) return 'now';
+    const t=dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    const day=dt.toLocaleDateString([], ms<86400000?{weekday:'short'}:{month:'short',day:'numeric'});
+    return `${day} ${t}`; };
   return html`<${Card} cls=${bad?'bad':''}>
     <${CardHead} title="Claude Max pool" hint=${`${accts.length} subscription${accts.length===1?'':'s'}, ${d.advertisedModels} model ids`}
       actions=${html`<button class="ghost sm" onClick=${()=>go('accounts')}>Accounts</button>`}/>
     <div class="tablewrap"><table>
-      <tr><th>account</th><th>projects</th><th>5h</th><th>7d</th><th>24h</th></tr>
+      <tr><th>account</th><th>projects</th><th>5h · resets</th><th>7d · resets</th><th>24h</th></tr>
       ${accts.map(a=>html`<tr key=${a.name} class="click" onClick=${()=>go('accounts')}>
         <td class="mono" style="font-size:12.5px;font-weight:600">${a.name}</td>
         <td style="font-size:11.5px" class="mut">${a.projects.length?a.projects.join(', '):'— unused'}</td>
-        <td style="min-width:60px"><${Bar} v=${a.limits&&a.limits.u5}/></td>
-        <td style="min-width:60px"><${Bar} v=${a.limits&&a.limits.u7}/></td>
+        <td style="min-width:78px"><${Bar} v=${a.limits&&a.limits.u5}/>${a.limits&&a.limits.reset5?html`<div class="hint" style="font-size:9.5px" title=${'5h window resets '+new Date(a.limits.reset5*1000).toLocaleString()}>↺ ${resetAt(a.limits.reset5)}</div>`:''}</td>
+        <td style="min-width:78px"><${Bar} v=${a.limits&&a.limits.u7}/>${a.limits&&a.limits.reset7?html`<div class="hint" style="font-size:9.5px" title=${'7d window resets '+new Date(a.limits.reset7*1000).toLocaleString()}>↺ ${resetAt(a.limits.reset7)}</div>`:''}</td>
         <td class="mono mut" style="font-size:12px;white-space:nowrap">${a.usage.calls24h?nfmt(a.usage.calls24h)+' calls':'idle'}</td>
       </tr>`)}
     </table></div>
-    <small class="hint" style="display:block;margin-top:12px">The 5h/7d bars are the Claude Max usage windows, harvested off real traffic and read as a <b>floor</b>: a 429 sends no rate-limit headers, so a spent window keeps its last reading. All models are available on the subscriptions.</small>
+    <small class="hint" style="display:block;margin-top:12px">The 5h/7d bars are the Claude Max usage windows, harvested off real traffic and read as a <b>floor</b>: a 429 sends no rate-limit headers, so a spent window keeps its last reading. Open <b>Accounts</b> to pull a live reading. All models are available on the subscriptions.</small>
   </${Card}>`;
 }
 
