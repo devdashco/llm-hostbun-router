@@ -26,7 +26,7 @@ const { mintKey, sha256, parseConsumer } = require("./identity");
 const { resolveRoute, accountFor, acctHealth, isGated, localTarget, limitFor, projectUsage } = require("./routing");
 const { readBody, sendJson, mask, buildHeaders } = require("./http");
 const CC = require("./claudecode");
-const { refreshClaudecodeModels, upstreamCatalogs, localModelEntries } = CC;
+const { refreshClaudecodeModels, refreshAccountLimits, upstreamCatalogs, localModelEntries } = CC;
 
 // ─────────────────────────────────────────────────────────────────────────────
 const COOKIE = "hb_admin";
@@ -286,9 +286,28 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     });
   }
 
-  // Everything the operator needs to answer "can this account serve anything, and who is spending
-  // it". The pool is the spine — an account with no traffic and no probe still gets a row, which is
-  // exactly the case the old org-keyed limits table could not represent.
+  // Actively refresh the live usage window for one account (or the whole pool). One cheap haiku
+  // ping each, reading the `anthropic-ratelimit-unified-*` headers and writing them through the same
+  // recordLimits() the passive harvest uses — so the Accounts bars show the TRUE window on demand,
+  // not the last reading a real request happened to harvest (which freezes when an account is idle,
+  // e.g. after Anthropic refunds a window). Serial, so we hit one org's limiter at a time.
+  if (sub === "claudecode/limits" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {}; try { p = JSON.parse(body.toString()); } catch {}
+    const pool = CFG.claudecodeAccountPool || [];
+    if (p.all || !p.account) {
+      const out = [];
+      for (const a of pool) out.push(await refreshAccountLimits(a));
+      return sendJson(res, 200, { accounts: out, checkedAt: Date.now() });
+    }
+    const acct = pool.find((a) => a.name.toLowerCase() === String(p.account).trim().toLowerCase());
+    if (!acct) return sendJson(res, 400, { error: "no such account", accounts: pool.map((a) => a.name) });
+    return sendJson(res, 200, await refreshAccountLimits(acct));
+  }
+
+  // Everything the operator needs to answer "who is spending each subscription, and how much window
+  // is left". The pool is the spine — an account with no traffic still gets a row, which is exactly
+  // the case the old org-keyed limits table could not represent.
   if (sub === "accounts" && req.method === "GET") {
     const pool = CFG.claudecodeAccountPool || [];
     const pins = CFG.projectAccounts || CFG.consumerAccounts || {};

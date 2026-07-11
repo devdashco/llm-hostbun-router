@@ -64,8 +64,24 @@ const Bar=({v})=>{
    are that usage window. */
 function Accounts(){
   const [d,setD]=useState(null); const [now,setNow]=useState(Date.now()); const [err,setErr]=useState('');
+  // A live reading overlaid on top of the harvested row, keyed by account. Set by refreshLimits(),
+  // which pings each subscription once and reads its real `anthropic-ratelimit-unified-*` headers.
+  const [fresh,setFresh]=useState({}); const [busy,setBusy]=useState('');
   const load=useCallback(async()=>{ try{ const r=await api('accounts'); setD(r); setNow(r.now||Date.now()); setErr(''); }catch(e){ setErr(e.message||'load failed'); } },[]);
   useEffect(()=>{ load(); const t=setInterval(load,15000); return ()=>clearInterval(t); },[load]);
+  // Ping ONE account (or the whole pool) for its live window. Not fired on mount — only on click —
+  // so the page never spends tokens just by being opened.
+  async function refreshLimits(name){
+    setBusy(name||'all');
+    try{
+      const r=await api('claudecode/limits',{method:'POST',body:JSON.stringify(name?{account:name}:{all:true})});
+      const list=name?[r]:(r.accounts||[]);
+      const m={...fresh}; list.forEach(x=>{ m[x.account]=x; }); setFresh(m);
+      const nr=list.filter(x=>!x.reading).length;
+      toast(`live limits: ${list.length-nr}/${list.length} read`+(nr?` · ${nr} no reading`:''), nr>0&&nr===list.length);
+      load();
+    }catch(e){ toast(e.message,true); } finally{ setBusy(''); }
+  }
   const rel=ts=>{ if(!ts)return '—'; const ms=ts*1000-now; if(ms<=0)return 'now'; const h=ms/3600000; return h>=1?Math.round(h)+'h':Math.max(1,Math.round(ms/60000))+'m'; };
   const since=ts=>ts?ago(ts,now)+' ago':'never';
   const accts=(d&&d.accounts)||[];
@@ -86,20 +102,25 @@ function Accounts(){
   <${Pins}/>
 
   <${Card}>
-    <${CardHead} title="Pool" hint="Every subscription, its usage-window headroom, and who spends it."/>
-    <p class="hint" style="margin:0 0 6px">The <b>5h</b>/<b>7d</b> bars are the Claude Max usage windows, harvested free off the rate-limit headers of real traffic, at zero probe tokens.
-    <b class="warnp">Read them as a floor.</b> A <code>429</code> carries no <code>anthropic-ratelimit-*</code> headers, so a window that just emptied on the heavier models keeps its last reading, often <code>0% · allowed</code>, harvested off a cheap model that still answers. All models are available on the subscriptions; a 429 means that window is spent and resets, not that a model is gone.</p>
+    <${CardHead} title="Pool" hint="Every subscription, its usage-window headroom, and who spends it."
+      actions=${html`<button class="ghost sm" disabled=${!!busy} onClick=${()=>refreshLimits(null)} title="ping each subscription once and read its live 5h/7d usage window">${busy==='all'?'Refreshing…':'↻ Refresh limits (live)'}</button>`}/>
+    <p class="hint" style="margin:0 0 6px">The <b>5h</b>/<b>7d</b> bars are the Claude Max usage windows. Without a refresh they are <b class="warnp">harvested off real traffic and read as a floor</b> — an idle account (or one Anthropic just refunded) keeps its last reading until it serves a call. Hit <b>Refresh limits (live)</b> to ping each subscription once and pull the real window right now; a <span style="color:var(--ok)">● live</span> tag marks a row that has a fresh reading.</p>
     ${err?html`<p class="down">${err}</p>`:''}
     ${!d?html`<p class="hint">loading…</p>`:''}
     <div class="tablewrap" style="margin-top:12px"><table>
       <tr><th>account</th><th>pinned projects</th><th>5h used</th><th>7d used</th><th>7d resets</th>
-        <th title="all-time calls / tokens through this account">usage</th><th>last 24h</th></tr>
+        <th title="all-time calls / tokens through this account">usage</th><th>last 24h</th><th></th></tr>
       ${accts.map(a=>{
-        const l=a.limits;
-        return html`<tr key=${a.name}>
-          <td class="mono"><b>${a.name}</b>${a.org?html`<div class="hint" style="font-size:10px" title=${a.org}>${a.org.slice(0,12)}…</div>`:html`<div class="hint" style="font-size:10px">org unknown</div>`}</td>
+        const fr=fresh[a.name];
+        const l=(fr&&fr.reading)?{...fr.reading,status:fr.reading.unified,ts:fr.checkedAt}:a.limits;
+        const live=!!(fr&&fr.reading);
+        const liveNo=!!(fr&&!fr.reading);
+        return html`<tr key=${a.name} class=${live?'live-row':''}>
+          <td class="mono"><b>${a.name}</b>${a.org?html`<div class="hint" style="font-size:10px" title=${a.org}>${a.org.slice(0,12)}…</div>`:html`<div class="hint" style="font-size:10px">org unknown</div>`}
+            ${live?html`<div class="hint" style="font-size:9.5px;color:var(--ok)">● live · ${since(fr.checkedAt)}</div>`:''}
+            ${liveNo?html`<div class="hint" style="font-size:9.5px;color:var(--warn)" title="the account answered but sent no rate-limit headers — usually a 429">live: no reading${fr.status?` (${fr.status})`:''}${fr.error?` (${fr.error})`:''}</div>`:''}</td>
           <td>${a.projects.length?a.projects.map(pr=>html`<${Chip} cls="tag ok">${pr}<//> `):html`<span class="mut" style="font-size:11px">— unused</span>`}</td>
-          <td style="min-width:70px"><${Bar} v=${l&&l.u5}/>${l?html`<div class="hint" style="font-size:10px">${since(l.ts)}</div>`:''}</td>
+          <td style="min-width:70px"><${Bar} v=${l&&l.u5}/>${l?html`<div class="hint" style="font-size:10px">${live?'live':since(l.ts)}</div>`:''}</td>
           <td style="min-width:70px"><${Bar} v=${l&&l.u7}/>${l&&(l.s5==='allowed_warning'||l.s7==='allowed_warning')?html`<div class="warnp" style="font-size:10px">warning</div>`:''}</td>
           <td class="mono" style="font-size:12px">${l?rel(l.reset7):'—'}</td>
           <td class="mono" style="font-size:12px;white-space:nowrap">${nfmt(a.usage.calls)} calls<br/>
@@ -107,9 +128,10 @@ function Accounts(){
             ${a.usage.rateLimited>0?html`<br/><span class="down" style="font-size:11px" title="429s served to callers — with no fallback, each one is a failed request">${nfmt(a.usage.rateLimited)}× 429</span>`:''}</td>
           <td class="mono" style="font-size:12px;white-space:nowrap">${a.usage.calls24h?html`${nfmt(a.usage.calls24h)} calls<br/><span class="mut">${nfmt(a.usage.tokens24h)} tok</span>`:html`<span class="mut">idle</span>`}
             <div class="hint" style="font-size:10px">${since(a.usage.lastTs)}</div></td>
+          <td style="width:1%"><button class="ghost sm" disabled=${!!busy} title="refresh this account's live window" onClick=${()=>refreshLimits(a.name)}>${busy===a.name?'…':'↻'}</button></td>
         </tr>`;
       })}
-      ${d&&!accts.length?html`<tr><td colspan="7" class="hint">The account pool is empty — <code>claudecodeAccountPool</code> in <code>/data/config.json</code> holds the tokens.</td></tr>`:''}
+      ${d&&!accts.length?html`<tr><td colspan="8" class="hint">The account pool is empty — <code>claudecodeAccountPool</code> in <code>/data/config.json</code> holds the tokens.</td></tr>`:''}
     </table></div>
   </${Card}>`;
 }

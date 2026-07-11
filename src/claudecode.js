@@ -4,7 +4,7 @@
 // capability, and treating it as one only misled the panel).
 const TR = require("../translate");
 const { CFG, persistConfig, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
-const { ORG_OF_ACCOUNT } = require("./db");
+const { ORG_OF_ACCOUNT, recordLimits } = require("./db");
 const { localTarget } = require("./routing");
 
 function localModelEntries() {
@@ -128,8 +128,43 @@ async function mergedModels(res) {
   res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter] }));
 }
 
+// Actively read ONE account's live usage window. A single cheap haiku ping (max_tokens:1) so the
+// `anthropic-ratelimit-unified-*` headers come back fresh, then fed through the same recordLimits()
+// the passive harvest uses — so the acct_limits row the Accounts bars read is updated on demand.
+//
+// This is NOT the per-model probe that was removed: it pings ONE model, ONCE, to read the 5h/7d
+// window (the real, honest number a subscription reports), never to guess model capability. The
+// passive harvest only learns from real traffic, so an idle account's bars freeze at their last
+// reading — a manual refresh (e.g. after Anthropic refunds a window) is the only way to see truth
+// without waiting for the account to serve a call.
+async function refreshAccountLimits(acct) {
+  const t0 = Date.now();
+  try {
+    const r = await fetch(`${CFG.bases.claudecode}/v1/messages`, {
+      method: "POST", headers: TR.anthropicHeaders(acct.token), signal: AbortSignal.timeout(20000),
+      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+    });
+    const org = r.headers.get("anthropic-organization-id");
+    if (org) ORG_OF_ACCOUNT.set(acct.name, org);
+    recordLimits(r.headers, null, "claude-haiku-4-5", acct.name);   // persists to acct_limits (fire-and-forget)
+    const h = (k) => r.headers.get("anthropic-ratelimit-unified-" + k);
+    const num = (v) => (v == null || v === "" ? null : Number(v));
+    const has = h("5h-utilization") != null || h("7d-utilization") != null;
+    return {
+      account: acct.name, org: org || null, status: r.status, checkedAt: Date.now(), ms: Date.now() - t0,
+      // A 429 (or an account so dry even haiku is refused) carries no unified headers → reading:null,
+      // which the UI must render as "no reading", never as 0%.
+      reading: has ? {
+        unified: h("status") || null,
+        u5: num(h("5h-utilization")), s5: h("5h-status") || null, reset5: num(h("5h-reset")),
+        u7: num(h("7d-utilization")), s7: h("7d-status") || null, reset7: num(h("7d-reset")),
+      } : null,
+    };
+  } catch (e) { return { account: acct.name, error: e.message, checkedAt: Date.now(), ms: Date.now() - t0, reading: null }; }
+}
+
 module.exports = {
   localModelEntries, upstreamCatalogs, mergedModels, fetchAccountModels, fetchAnthropicModels,
-  refreshClaudecodeModels, claudecodeCatalog: () => claudecodeCatalog,
+  refreshClaudecodeModels, refreshAccountLimits, claudecodeCatalog: () => claudecodeCatalog,
   CLAUDECODE_MODEL_REFRESH_MS,
 };

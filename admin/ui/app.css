@@ -200,6 +200,7 @@ tbody tr,tr{transition:background var(--fast)}
 tr.click{cursor:pointer}
 tr.click:hover td{background:var(--surface-2)}
 tr.danger-row td{background:oklch(0.645 0.205 25 / .07)}
+tr.live-row td{background:oklch(0.740 0.160 152 / .06)}
 td.num,td .num{font-variant-numeric:tabular-nums}
 
 /* ── badges — one primitive; .pill and .chip are size variants ────────────── */
