@@ -82,8 +82,14 @@ function Accounts(){
       load();
     }catch(e){ toast(e.message,true); } finally{ setBusy(''); }
   }
-  const rel=ts=>{ if(!ts)return '—'; const ms=ts*1000-now; if(ms<=0)return 'now'; const h=ms/3600000; return h>=1?Math.round(h)+'h':Math.max(1,Math.round(ms/60000))+'m'; };
+  const rel=ts=>{ if(!ts)return '—'; const ms=ts*1000-now; if(ms<=0)return 'now'; const h=ms/3600000; return h<48?(h>=1?Math.round(h)+'h':Math.max(1,Math.round(ms/60000))+'m'):(h/24).toFixed(1)+'d'; };
   const since=ts=>ts?ago(ts,now)+' ago':'never';
+  // The actual reset clock: within a day → "Wed 14:30", further out → "Jul 16 09:00". Full locale
+  // timestamp on hover. A window resets to 0% at this moment, so it is the real "when can I use it".
+  const resetAt=sec=>{ if(!sec) return '—'; const d=new Date(sec*1000); const ms=sec*1000-now; if(ms<=0) return 'now';
+    const time=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    const day=d.toLocaleDateString([], ms<86400000?{weekday:'short'}:{month:'short',day:'numeric'});
+    return `${day} ${time}`; };
   const accts=(d&&d.accounts)||[];
   const s=(d&&d.summary)||{};
   return html`
@@ -108,7 +114,7 @@ function Accounts(){
     ${err?html`<p class="down">${err}</p>`:''}
     ${!d?html`<p class="hint">loading…</p>`:''}
     <div class="tablewrap" style="margin-top:12px"><table>
-      <tr><th>account</th><th>pinned projects</th><th>5h used</th><th>7d used</th><th>7d resets</th>
+      <tr><th>account</th><th>pinned projects</th><th>5h used · resets</th><th>7d used · resets</th>
         <th title="all-time calls / tokens through this account">usage</th><th>last 24h</th><th></th></tr>
       ${accts.map(a=>{
         const fr=fresh[a.name];
@@ -120,9 +126,8 @@ function Accounts(){
             ${live?html`<div class="hint" style="font-size:9.5px;color:var(--ok)">● live · ${since(fr.checkedAt)}</div>`:''}
             ${liveNo?html`<div class="hint" style=${'font-size:9.5px;color:'+(fr.status===403?'var(--danger)':'var(--warn)')} title=${fr.errMsg||fr.error||'the account answered but sent no rate-limit headers — usually a 429'}>${fr.status===403?'✕ OAuth disabled':`live: no reading${fr.status?` (${fr.status})`:''}`}${fr.error?` (${fr.error})`:''}</div>`:''}</td>
           <td>${a.projects.length?a.projects.map(pr=>html`<${Chip} cls="tag ok">${pr}<//> `):html`<span class="mut" style="font-size:11px">— unused</span>`}</td>
-          <td style="min-width:70px"><${Bar} v=${l&&l.u5}/>${l?html`<div class="hint" style="font-size:10px">${live?'live':since(l.ts)}</div>`:''}</td>
-          <td style="min-width:70px"><${Bar} v=${l&&l.u7}/>${l&&(l.s5==='allowed_warning'||l.s7==='allowed_warning')?html`<div class="warnp" style="font-size:10px">warning</div>`:''}</td>
-          <td class="mono" style="font-size:12px">${l?rel(l.reset7):'—'}</td>
+          <td style="min-width:96px"><${Bar} v=${l&&l.u5}/>${l&&l.reset5?html`<div class="hint" style="font-size:10px" title=${'5h window resets '+new Date(l.reset5*1000).toLocaleString()}>↺ ${resetAt(l.reset5)} <span class="mut">· ${rel(l.reset5)}</span></div>`:(l?html`<div class="hint" style="font-size:10px">${live?'live':since(l.ts)}</div>`:'')}</td>
+          <td style="min-width:96px"><${Bar} v=${l&&l.u7}/>${l&&l.reset7?html`<div class="hint" style="font-size:10px" title=${'7d window resets '+new Date(l.reset7*1000).toLocaleString()}>↺ ${resetAt(l.reset7)} <span class="mut">· ${rel(l.reset7)}</span></div>`:''}${l&&(l.s5==='allowed_warning'||l.s7==='allowed_warning')?html`<div class="warnp" style="font-size:10px">warning</div>`:''}</td>
           <td class="mono" style="font-size:12px;white-space:nowrap">${nfmt(a.usage.calls)} calls<br/>
             <span class="mut">${nfmt(a.usage.tokens)} tok</span>
             ${a.usage.rateLimited>0?html`<br/><span class="down" style="font-size:11px" title="429s served to callers — with no fallback, each one is a failed request">${nfmt(a.usage.rateLimited)}× 429</span>`:''}</td>
@@ -131,7 +136,7 @@ function Accounts(){
           <td style="width:1%"><button class="ghost sm" disabled=${!!busy} title="refresh this account's live window" onClick=${()=>refreshLimits(a.name)}>${busy===a.name?'…':'↻'}</button></td>
         </tr>`;
       })}
-      ${d&&!accts.length?html`<tr><td colspan="8" class="hint">The account pool is empty — <code>claudecodeAccountPool</code> in <code>/data/config.json</code> holds the tokens.</td></tr>`:''}
+      ${d&&!accts.length?html`<tr><td colspan="7" class="hint">The account pool is empty — <code>claudecodeAccountPool</code> in <code>/data/config.json</code> holds the tokens.</td></tr>`:''}
     </table></div>
   </${Card}>`;
 }

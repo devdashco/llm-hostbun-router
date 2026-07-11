@@ -18,7 +18,7 @@ refs may still linger in sibling repos.
   | `routing.js` | pins, allowlists, groups, usage limits, account pinning |
   | `http.js` | `readBody`, `buildHeaders`, `proxy()`, JSON enforcement |
   | `db.js` | Postgres call log + harvested account headroom |
-  | `claudecode.js` | Anthropic catalog, per-account probes |
+  | `claudecode.js` | Anthropic model catalog, per-account live usage-limit refresh |
   | `admin.js` | the control-plane API behind the password cookie |
   | `telemetry.js` | call-log row shaping, HyperDX error shipping |
   | `pricing.js` | USD estimates (crazyrouter only) |
@@ -258,9 +258,9 @@ standalone-postgres (`postgres:17-alpine`, uuid `b8ubtmws8mnt8viw9mg0syz2`) **in
 `llm-hostbun-router` project on hostbun**, reached over the internal `coolify` docker network.
 Moved off pbox on 2026-07-10 (it was `80.217.106.60:5435`, `sslmode=disable`, cleartext over the
 public internet). DSN in keyvault at `db/llmrouter/DATABASE_URL`. Tables `calls` and `acct_limits`, created by
-migration `0001_calls_and_acct_limits`, plus `acct_probes` (last probe per account, created by an
-idempotent `CREATE TABLE IF NOT EXISTS` in `initDb`). It used to be a SQLite file on the app's volume; that file is
-gone. `pg` is the router's only runtime dependency, so the Dockerfile now runs `npm ci` — if you add a
+migration `0001_calls_and_acct_limits`. (An `acct_probes` table existed until 2026-07-11 for the
+removed per-model probe; `initDb` no longer creates it, and any leftover table in prod just sits
+unused.) It used to be a SQLite file on the app's volume; that file is gone. `pg` is the router's only runtime dependency, so the Dockerfile now runs `npm ci` — if you add a
 dependency, the lockfile must be committed or the build fails.
 
 **The config still lives on the volume** — `/data/config.json`. That is where the account tokens are.
@@ -313,28 +313,39 @@ dependency, the lockfile must be committed or the build fails.
   `claude-opus-4-5`) are served but unlisted — and `claude-haiku-4-5` is what every caller sends.
   They live in `CLAUDECODE_MODEL_ALIASES`. **Do not derive them by stripping the date**:
   `claude-opus-4-1` 404s while `claude-opus-4-1-20250805` serves, and `claude-opus-4-8-20260528`
-  404s while undated `claude-opus-4-8` serves. Verify each with `claudecode/probe` — a **404 means
-  the id does not exist**; a **429 means it exists and the subscription is dry**.
+  404s while undated `claude-opus-4-8` serves. Verify a new id with a single native `/v1/messages`
+  call before adding it — a **404 means the id does not exist**; a **429 means it exists and the
+  subscription's usage window is spent** (not that the id is wrong).
 - **Everything before 4.5 is 404 on a Max OAuth token** (`claude-3-*`, `claude-3-5-*`, `opus-4`,
   `sonnet-4`). Not missing from our catalog — not ours to call. Don't go looking for them.
 - **`claudecodeModels` is no longer hand-typed.** `CLAUDECODE_MODEL_SEED` in `server.js` is a floor;
   `refreshClaudecodeModels()` reconciles it against `api.anthropic.com/v1/models` at boot and every 6h,
   and the config load *unions* rather than overwrites. **The catalog is per-account** — `philip` lists
   `claude-opus-4-1`, `cmejl3` 404s it — so an advertised id can still be absent on the pinned account.
-- **A 429 from Anthropic carries no `anthropic-ratelimit-*` headers.** The headroom harvest therefore
-  learns nothing from an exhausted account and keeps reporting its last good reading — usually `0% ·
-  allowed`, harvested off a cheap model that still answers. `/admin/api/limits` is a floor, not a
-  verdict. `POST /admin/api/claudecode/probe {account}` pings every advertised model and is the only
-  honest source; `{all:true}` sweeps the pool and the panel's Accounts tab has a button for it.
-  As of 2026-07-09 the pool is nearly dry: **`william`, `kontaktemhpx` and `cmejl3` serve only
-  `claude-haiku-4-5`; `philip`, `emphyx`, `claudemejlto` and `claude2mejlto` serve nothing at all.**
-  Probe results now persist in `acct_probes` and are primed at boot (2026-07-10) — they lived in a
-  `Map`, so every deploy reset the pool to "not probed" and blanked the only honest column. A probe
-  also learns the org-id off the response headers, which fills in "org unknown" for an account that
-  has never served a call. `GET /admin/api/accounts` returns a server-computed `health` per account
-  (`dry` > `hot` > `unknown` > `ok`) plus a `summary`; Overview and Accounts both render that one
-  verdict, so they cannot disagree. **`unknown` is not `ok`** — an unprobed account's bars are a floor.
-  `summary.strandedProjects` lists projects pinned to a dry account: an outage they have not hit yet.
+- **The per-model probe was removed (2026-07-11).** It pinged every advertised id per account and
+  read a 429 as "this account can't serve this model", surfacing a "Serves X/13" column and a
+  `dry`/`hot`/`thin` health verdict. But these are **Claude Max subscriptions**: a 429 is a **usage
+  window** (rolling 5h + weekly), not a capability. Every account serves every model when its window
+  has headroom — proven by a single sequential opus request 429'ing exactly like the 13-wide probe
+  burst, and a 63-call account 429'ing like a hammered one. Gone with it: `probeAccount`, the
+  `acct_probes` table, `POST /api/claudecode/probe`, and the `health`/`servingModels`/
+  `strandedProjects` fields. **Do not reintroduce a "which models does this account serve" check** —
+  it measures cooldown and calls it capability.
+- **The honest signal is the usage window + reset time, refreshed on demand.** `/admin/api/limits`
+  (and the `limits` field on `/admin/api/accounts`) is the 5h/7d utilisation harvested for free off
+  `anthropic-ratelimit-unified-*` headers on real traffic. **A 429 carries no such headers**, and the
+  harvest only learns from calls an account actually serves, so an **idle** account — or one Anthropic
+  **refunded/reset** — keeps its last reading. `limits: null` is "no reading", never `0%`.
+  `POST /admin/api/claudecode/limits {account}` (or `{all:true}`) is the **live** read:
+  `refreshAccountLimits()` pings each subscription **once** (`claude-haiku-4-5`, `max_tokens:1`) purely
+  to pull fresh headers, feeds them through the same `recordLimits()` the passive harvest uses, and
+  returns `{reading:{u5,u7,reset5,reset7,...}}` — or `null` with a reason. The Accounts tab has a
+  **"↻ Refresh limits (live)"** button + per-row ↻, and renders `reset5`/`reset7` as clock/date.
+- **A 403 `permission_error` is a dead login, not a spent window.** `"OAuth authentication is
+  currently not allowed for this organization"` means the subscription itself is disabled (cancelled
+  or refunded) — no reset fixes it. The refresh surfaces it distinctly (panel: **✕ OAuth disabled**,
+  red), vs a 429 which just waits for `reset`. Seen live 2026-07-11: **`claude2mejlto`** (pinned to
+  `pmac`/`pmac-claude`) went OAuth-disabled; those projects 403 until re-pinned.
 - **`acct_limits` is keyed by Anthropic org-id, which says nothing about which login it is.** The
   `account` column (added 2026-07-09 by an idempotent `ALTER` in `initDb`) fixes that, but it is only
   stamped by live traffic. A cold-started router learns org→account from the

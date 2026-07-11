@@ -9,7 +9,7 @@ more; it 308s to `/`. Changes apply instantly, with no redeploy, and persist on 
 | Calls | Every request with its full prompt and reply, searchable |
 | Consumers | The registry: who calls, what it costs, who holds a key |
 | Stats | Usage by project, model, provider |
-| Accounts | Per-account 5h/7d headroom, project pins, model probes |
+| Accounts | Per-account 5h/7d usage windows (with reset times), project pins, live limit refresh |
 | Routing | Per-project pins and allowlists, groups, usage limits, resolve tracer |
 | Models & test | Merged catalog, one-shot test call |
 | Crazyrouter | Key status, credit limit, usage |
@@ -20,8 +20,9 @@ Secrets are masked everywhere. The API never returns a key hash, a Max token, or
 ## The JSON API
 
 The panel uses the same API you can: `POST /api/login`, then `/api/{state, config, health,
-models, resolve, test, calls, stats, series, limits, consumers, routes, pins, accounts}`. `/api/*` is
-an alias for the same handler. The `claudectl` plugin drives exactly these.
+models, resolve, test, calls, stats, series, limits, consumers, routes, pins, accounts,
+claudecode/limits}`. `/api/*` is an alias for the same handler. The `claudectl` plugin drives exactly
+these.
 
 ### Three endpoints merge, on purpose
 
@@ -35,33 +36,35 @@ delete every sibling. So these exist, and they merge:
 | `POST /api/consumers` | `{name, kind, owner?}` | One registry entry |
 | `POST /api/consumers/keys` | `{name, kind?, owner?}` | Issue a key. Creates the consumer if absent. |
 
-### Reading headroom honestly
+### Reading usage limits honestly
 
-`GET /api/limits` reports the 5h/7d utilisation harvested for free from Anthropic's response
-headers. **A 429 from Anthropic carries no rate-limit headers**, so an exhausted account keeps
-reporting its last good reading. `limits` is a floor, not a verdict, and `limits: null` means "no
-reading", not `0%`.
+Every account is a **Claude Max subscription**. Its 5h and 7d **usage windows** come from Anthropic's
+`anthropic-ratelimit-unified-*` response headers.
 
-`POST /api/claudecode/probe {account}` pings every advertised model on that account and is the
-only honest source. `{all: true}` sweeps the pool. The Accounts tab has a button for it. A **404 means
-the model id does not exist**; a **429 means it exists and the subscription is dry**. Results are
-persisted in `acct_probes` and survive a redeploy — before that they lived in a `Map`, so every
-deploy reset the whole pool to "not probed" and the only honest column was blank.
+`GET /api/limits` reports the utilisation **harvested for free** from real traffic. That harvest only
+learns from calls the account actually serves, so an **idle** account (or one Anthropic just
+**refunded** or reset) keeps reporting its last reading until it serves again. Treat it as a floor:
+`limits: null` means "no reading", not `0%`.
 
-`GET /api/accounts` therefore ships **one verdict per account**, computed server-side so the Overview
-banner and the Accounts table can never disagree:
+`POST /api/claudecode/limits {account}` (or `{all: true}`) is the **on-demand live read**: it pings
+each subscription **once** (one `claude-haiku-4-5` call, `max_tokens:1`) purely to pull the current
+window headers, then updates the row. The Accounts tab's **"↻ Refresh limits (live)"** button and the
+per-row **↻** run exactly this. It returns, per account:
 
-| health | means |
-|---|---|
-| `dry` | probed, and **not one** advertised model answered — every call to it fails now |
-| `hot` | a window is ≥90% burned, or Anthropic itself flagged `allowed_warning` |
-| `thin` | serves something, but ≥1 model that **exists** on the org 429s. Ask it for opus and the call fails. A 404 doesn't count — that id was never ours |
-| `unknown` | never probed. **Not** `ok` — an exhausted account reads `0% · allowed` until probed |
-| `ok` | probed, and every model that exists on the org answers |
+- `reading` — `{u5, u7, reset5, reset7, s5, s7, unified}`. `u5`/`u7` are 0–1 utilisation; `reset5`/`reset7`
+  are unix seconds (the panel shows the **reset clock/date**). `null` when the account sent no headers.
+- `status` / `errType` / `errMsg` — why there is no reading. The two cases are **not** the same:
+  - **429** — the window is spent. It **resets** at `reset5`/`reset7`; nothing is wrong with the login.
+  - **403 `permission_error`** (`"OAuth authentication is currently not allowed for this organization"`)
+    — the **login itself is disabled** (e.g. the subscription was cancelled or refunded). No reset fixes
+    it; the account is dead until re-enabled. The panel shows this as **✕ OAuth disabled**, in red.
 
-`summary.servingModels` is the number that matters most: model ids that answer on **at least one**
-account. As of 2026-07-10 it is **2 of 13** — every account serves haiku and 429s everything else,
-which is seven green-looking rows and no opus anywhere.
+> This is **not** a per-model probe. An earlier "Serves X/13" probe pinged every model id and read a
+> 429 as "this account can't serve this model" — but these are subscriptions, so a 429 is a usage
+> window, not a capability. Every account can serve every model when its window has headroom. That
+> probe (and its `dry`/`hot`/`thin` verdict) was removed on 2026-07-11; the honest signal is the usage
+> window + reset time above.
 
-`summary.strandedProjects` is the one to watch: a project pinned to a `dry` account. There is no
-fallback, so those calls are failing right now.
+`GET /api/accounts` returns one row per account: `limits` (the harvested window, live-refreshable),
+`projects` (who is pinned to it), `usage` (all-time + 24h call/token counts), and `org`. `orphanPins`
+lists any pin naming an account no longer in the pool.

@@ -2,6 +2,7 @@
 - [Quick start](quickstart.md)
 - [Identity: projects, jobs, keys](identity.md)
 - [Routing and providers](routing.md)
+- [Accounts, limits &amp; pinning](accounts.md)
 - [Endpoints](endpoints.md)
 - [What gets stored](storage.md)
 - [Control panel](admin.md)
