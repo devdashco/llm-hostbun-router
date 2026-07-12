@@ -128,8 +128,12 @@ const server = http.createServer(async (req, res) => {
     // The Next export's assets: /_next/*, favicon.ico, *.svg, *.txt (RSC payloads), etc. Anything
     // with a file extension is served from PANEL_DIR by type. Guarded against traversal: the resolved
     // path must stay inside PANEL_DIR (kills "..", encoded or not). _next/static is content-hashed so
-    // it caches hard; everything else revalidates.
-    if (req.method === "GET" && /\.[a-z0-9]+$/i.test(path) && !path.includes("..")) {
+    // it caches hard; everything else revalidates. EXCLUDE /docs/* and /prices*: docs are also served
+    // at llm.hostbun.cc/docs/*.md (below) and /prices.json is the public price file — a bare
+    // "any extension → PANEL_DIR" rule shadowed both (they 404'd out of /srv/panel). Bug shipped in
+    // f60abb8, fixed here.
+    if (req.method === "GET" && /\.[a-z0-9]+$/i.test(path) && !path.includes("..")
+        && !path.startsWith("/docs/") && path !== "/prices.json") {
       const abs = nodePath.normalize(nodePath.join(PANEL_DIR, decodeURIComponent(path)));
       if (!abs.startsWith(PANEL_DIR + nodePath.sep)) {
         res.writeHead(404, { "content-type": "text/plain" });

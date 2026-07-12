@@ -19,7 +19,7 @@ const BASE = `http://localhost:${PORT}`;
 
 const server = spawn("node", [join(ROOT, "server.js")], {
   env: { ...process.env, PORT: String(PORT), CONFIG_FILE: "/tmp/llm-docs-test.json", ADMIN_PASSWORD: "test-only",
-         ADMIN_FILE: join(ROOT, "admin/index.html"), DOCS_FILE: join(ROOT, "docs/index.html"), DATABASE_URL: "" },
+         DOCS_FILE: join(ROOT, "docs/index.html"), DATABASE_URL: "" },
   stdio: "ignore",
 });
 process.on("exit", () => server.kill());

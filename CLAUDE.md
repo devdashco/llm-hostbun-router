@@ -25,12 +25,17 @@ refs may still linger in sibling repos.
 - **`CFG` is mutated in place, never reassigned** (`setCFG()`). Every module holds the same reference;
   `CFG = merged` left the router reading a detached copy — the panel saved and changed nothing.
 - `translate.js` — OpenAI ↔ Anthropic translation. Pure, unit-tested.
-- `admin/` — password-gated SPA (Preact + htm, vendored inline, no CDN). pw `ddash`. Served at the
-  site **root** `/`. **There is no `/admin` anything** — the prefix was deleted on 2026-07-10 and
-  `/admin*` is a tombstone 404. The JSON control plane is `/api/*`. claudectl, the statusline and the
-  `cccc` TUI were repointed first (claudectl `ba3a6bf`). Two carve-outs are load-bearing: `/api/v1/*`
-  is real inference (`base_url=…/api`) and `/api/pricing` is public — routing either into the
-  cookie-gated handler 401s callers that never had a cookie.
+- `panel/` — password-gated SPA, **Next.js 16 + Tailwind + shadcn/ui**, built as a **static export**
+  (`output: 'export'`, `panel/out/`) and served by the router from `PANEL_DIR` (`/srv/panel`). pw
+  `ddash`. Served at the site **root** `/`. Replaced the old Preact+htm `admin/` on 2026-07-12
+  (commit `f60abb8`; `admin/` deleted at cutover). Same contract: same-origin `/api/*`, the
+  `hb_admin` cookie, no CDN / zero external requests at runtime (system font, no `next/font`), and the
+  runtime image stays **pg-only** — the Next build is a Docker build stage, not a runtime. server.js
+  serves `/_next/*` + assets by extension (traversal-guarded) and the enumerated `UI_ROUTES` slugs →
+  `out/<slug>/index.html`. **There is no `/admin` anything** — `/admin*` is a tombstone 404. Two
+  carve-outs are load-bearing: `/api/v1/*` is real inference (`base_url=…/api`) and `/api/pricing` is
+  public — routing either into the cookie-gated handler 401s callers that never had a cookie. Build
+  locally: `npm run build:panel`; preview against prod's API: `node panel/scripts/preview.mjs`.
 
 - `docs/` — **docsify** site: `index.html` shell + markdown pages + `_sidebar.md`, docsify vendored in
   `docs/vendor/` (no CDN, `noEmoji: true` because emoji shortcodes fetch images from githubassets).
@@ -247,9 +252,11 @@ Run `node translate.test.js` before touching it. 14 tests, no deps.
 ## Deploy
 
 Pushing does **not** reliably auto-build — the app's `watch_paths` lists `server.js`, `Dockerfile`,
-`entrypoint.sh`, `gen-prices.sh`, `README.md`, `admin/**`, `docs/**`, and **not `translate.js`**, so a
+`entrypoint.sh`, `gen-prices.sh`, `README.md`, `panel/**`, `docs/**`, and **not `translate.js`**, so a
 push that only touches the translator is silently ignored. Trigger the Coolify deploy for app uuid
-`d11s05nc130l2kjzr6anpebr` (token in keyvault), then **verify — never stop at `git push`**: wait for
+`d11s05nc130l2kjzr6anpebr` (token in keyvault `coolify/hostbun/api-token`;
+`curl "https://coolify.hostbun.cc/api/v1/deploy?uuid=d11s05nc130l2kjzr6anpebr&force=true" -H "Authorization: Bearer <tok>"`),
+then **verify — never stop at `git push`**: wait for
 `running:healthy`, read the boot line in the logs (`llm-gateway on :80 | providers: …`), then curl a
 real request. The headroom sidecar is app `i7pfies89s3maf390ye3rllk`. Both live in Coolify project
 `llm-hostbun-router`, alongside the `llm-proxy-archive` service (uuid `ysjpmznhdq1auwk9f3lqv8hk`).

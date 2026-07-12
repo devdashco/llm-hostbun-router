@@ -6,10 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/imports.test.mjs && node translate.test.js && node test/wire.test.mjs && node test/router.test.mjs && node test/ui.test.mjs",
+    "test": "node test/imports.test.mjs && node translate.test.js && node test/wire.test.mjs && node test/router.test.mjs",
     "test:translate": "node translate.test.js",
     "test:router": "node test/router.test.mjs",
-    "test:ui": "node test/ui.test.mjs",
     "test:docs": "node test/docs.test.mjs",
     "test:wire": "node test/wire.test.mjs",
     "test:imports": "node test/imports.test.mjs",

@@ -22,8 +22,6 @@ COPY translate.js /app/translate.js
 # new require'd file crash-looped the container on boot.
 COPY src /app/src
 COPY docs /srv/docs
-# admin/ is kept as an unused fallback until the Next panel is verified in prod (then deleted).
-COPY admin /srv/admin
 # The built Next export → /srv/panel, which server.js serves (PANEL_DIR). ADD A COPY like this for
 # any new required path, or the container is missing it at runtime.
 COPY --from=panel /panel/out /srv/panel
