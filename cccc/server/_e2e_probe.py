@@ -1,27 +1,26 @@
-"""E2E probe: hit GET /v1/accounts on the claude host with the upstream bearer.
-Verifies the wrapper is reachable AND the bearer is accepted (not just liveness),
-so bad wiring => Coolify rolls back instead of shipping a broken server."""
+"""E2E probe: hit GET /v1/models on the llm.hostbun.cc router (public, no auth).
+200 = the router is reachable and serving, so bad wiring => Coolify rolls back
+instead of shipping a broken server. (claude.hostbun.cc is retired — the old
+/v1/accounts probe is gone with it.)"""
 import os
 import httpx
 
-CLAUDE_HOST = os.environ.get("CLAUDE_HOST", "https://claude.hostbun.cc").rstrip("/")
-UPSTREAM_BEARER = os.environ.get("UPSTREAM_BEARER", "ddash")
+LLM_HOST = os.environ.get("LLM_HOST", "https://llm.hostbun.cc").rstrip("/")
 
 
 def probe() -> dict:
     try:
-        r = httpx.get(f"{CLAUDE_HOST}/v1/accounts",
-                      headers={"Authorization": f"Bearer {UPSTREAM_BEARER}",
-                               "Accept": "application/json"},
+        r = httpx.get(f"{LLM_HOST}/v1/models",
+                      headers={"Accept": "application/json"},
                       timeout=20.0)
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"{CLAUDE_HOST} unreachable: {type(e).__name__}: {e}"[:200]}
+        return {"ok": False, "error": f"{LLM_HOST} unreachable: {type(e).__name__}: {e}"[:200]}
     if r.status_code != 200:
         return {"ok": False, "status": r.status_code,
-                "error": f"/v1/accounts returned {r.status_code} (bearer rejected?)"}
+                "error": f"/v1/models returned {r.status_code}"}
     try:
-        accts = r.json().get("accounts", [])
+        models = r.json().get("data", []) or []
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"bad json: {e}"[:150]}
-    return {"ok": True, "n_accounts": len(accts),
-            "names": [a.get("name") for a in accts]}
+    return {"ok": True, "n_models": len(models),
+            "ids": [m.get("id") for m in models][:20]}

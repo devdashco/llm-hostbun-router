@@ -57,6 +57,8 @@ Four suites, no network, no database. Run before every push.
   Traversal is tested over a raw socket: `fetch()` strips `..` before the request leaves the process,
   so a traversal test written with `fetch` asserts nothing.
 - `docs/` — static docs, served at `docs.llm.hostbun.cc`.
+- `cccc/` — the fleet control surface (TUI, statusline, claudectl plugin/MCP) — see the
+  "`cccc/`" section at the bottom. Not watched by Coolify; ships via `cccc/deploy.sh`.
 - `headroom-svc/` — optional Python compression sidecar. Separate Coolify app, **same repo**
   (base dir `headroom-svc`). OFF unless `HEADROOM_URL` is set. **Never** applied to `claudecode` —
   it rewrites the prompt and would miss the prompt cache, costing more than it saves.
@@ -378,31 +380,35 @@ dependency, the lockfile must be committed or the build fails.
 3. ~~**`local` thinking default.**~~ **Done 2026-07-09** — `applyLocalThinkingDefault()`.
 4. **Consumption views** — per project / group / account / model, from the existing `calls` table.
 
-## Connection to `devdashco/claudectl`
+## `cccc/` — the control surface (lives in this repo since 2026-07-12)
 
-`claudectl` (local clone: `~/Documents/GitHub/claudectl`) is the **control plane** for this router.
-It ships a Claude Code plugin (MCP tools + skills), the `cccc` terminal dashboard, and is deployed as
-the `mcp-claudectl` Coolify app at `claudectl.hostbun.cc`.
+`cccc` moved in from `devdashco/claudectl` (that repo now holds only the cmux Dock /
+`cmuxdock` plugin). It ships the `cccc` curses TUI, the shared statusline, a Claude Code plugin
+with a local stdio `claudectl` MCP (~48 tools), and shell glue — all driving this router's
+`/api/*` control plane (cookie login at `POST /api/login`). See `cccc/README.md`.
 
-Its `proxy_*` MCP tools drive this repo over the admin API — they log in at `POST /admin/api/login`
-(password `ADMIN_PASSWORD`) and then hit `/admin/api/<sub>`:
-
-| Tool | What it reads/writes here |
+| Surface | What it reads/writes here |
 |------|---------------------------|
 | `proxy_state`, `proxy_config`, `proxy_reset_config` | the live `CFG` (providers, overrides, forceModel) |
+| `proxy_pin`, `proxy_route`, TUI "switch" | merge-safe `POST /api/pins` / `POST /api/routes` |
 | `proxy_health`, `proxy_models`, `proxy_resolve`, `proxy_test` | provider health, merged catalog, route a model id |
 | `proxy_stats`, `proxy_calls`, `proxy_clear_calls` | the Postgres call log + per-project usage |
-| `proxy_limits` | live 5h/7d headroom per account, harvested free from response headers |
+| `proxy_limits`, `live_limits`, TUI "⚡ LIVE limit check" | harvested `/api/limits` + live `POST /api/claudecode/limits` |
+| `accounts_list`, `account_add/delete/switch` | the pool via `/api/accounts*` + `/api/pins` |
 
 Consequences worth remembering:
 
-- **Config changes via `proxy_config` are the same writes as the `/admin` UI.** They land in
-  `/data/config.json` and survive restarts. Don't hand-edit the volume.
-- **The account pool is shared.** The `accounts_*` tools and this router's `claudecodeAccountPool`
-  describe the same Claude Max logins. Exhausting a 5h window in one shows up in the other.
-- **`claudectl` is currently broken against this router.** Its `accounts_*` / `live_limits` /
-  `window_status` tools call `/v1/accounts/*` — an API the **old wrapper had and this router does
-  not**. Its `server/_e2e_probe.py` also still probes `claude.hostbun.cc`, which is dead, so
-  **every `claudectl` deploy fails** until it is repointed. Fixing that needs open-work item 2.
-- If you change an admin API route, a provider id, or the `CFG` shape, **check
-  `claudectl/server/claudectl_server.py`** — it hardcodes these paths and will break silently.
+- **Config changes via `proxy_config` are the same writes as the panel.** They land in
+  `/data/config.json` and survive restarts. Don't hand-edit the volume. Pins/routes go through
+  the merge-safe endpoints, never `POST /api/config` (it replaces the maps wholesale).
+- **`cccc/server/claudectl_server.py` is canonical**; `cccc/plugins/claudectl/mcp/claudectl_server.py`
+  is a byte-identical bundle (the plugin cache imports it; a full checkout imports `server/`).
+  `cccc/deploy.sh` resyncs — fix in `server/`, then copy.
+- If you change an admin API route, a provider id, or the `CFG` shape, **grep `cccc/`** — the TUI,
+  statusline and MCP server hardcode these paths and will break silently.
+- The old remote MCP app (`mcp-claudectl`, `claudectl.hostbun.cc`) still runs an old build and now
+  matters only as the `/presence` fleet registry the statusline POSTs to. It deploys from the OLD
+  repo, which no longer contains the server — port presence to the router or retire the app.
+- `cccc/deploy.sh` pushes master then ssh's the fleet (`pbox`, `wmac` → `~/.llm-hostbun-router`)
+  to hard-reset + re-run `cccc/install.sh`. Coolify does NOT watch `cccc/**`; router deploys are
+  unaffected by cccc-only pushes (and vice versa — a cccc change needs `deploy.sh`, not Coolify).

@@ -1,8 +1,8 @@
 {
   "name": "claudectl",
   "version": "0.7.2",
-  "description": "One local `claudectl` MCP (~48 tools): Claude subscription accounts + live limits + switch/prime via the llm.hostbun.cc router AND terminal steer/restart across boxes + plugin/marketplace/mcp mgmt. Plus skills and the cccc TUI. (The cmux Dock split into the devdashco/claudectl repo as its own `cmuxdock` plugin.)",
+  "description": "One local `claudectl` MCP: Claude Max account pool + live 5h/7d limits + pin/switch via the llm.hostbun.cc router /api/* control plane (accounts_list, live_limits, account_add/delete/switch, proxy_pin/proxy_route, routing/stats/call-log) AND terminal steer/restart across boxes + plugin/marketplace/mcp mgmt. Plus skills and the cccc TUI. (The cmux Dock split into the devdashco/claudectl repo as its own `cmuxdock` plugin.)",
   "author": { "name": "devdashco" },
-  "keywords": ["claude","accounts","subscription","rate-limit","loadbalance","llm","proxy","routing","cccc"],
+  "keywords": ["claude","accounts","subscription","rate-limit","pins","llm","router","routing","cccc"],
   "license": "MIT"
 }

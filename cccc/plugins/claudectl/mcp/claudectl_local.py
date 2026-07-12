@@ -7,8 +7,10 @@ Consolidation: the plugin used to ship TWO servers — a remote HTTP `claudectl`
 server named `claudectl` that installs on your machine and provides the whole SDK:
 
   * account / limit / proxy tools  — reused verbatim from `server/claudectl_server.py`
-    (httpx → claude.hostbun.cc / llm.hostbun.cc; your laptop can reach those hosts
-    directly, so they don't need the deployed container anymore).
+    (httpx → llm.hostbun.cc ONLY: the account tools now drive the router's
+    /api/* control plane — the claude.hostbun.cc wrapper is retired. Your
+    laptop can reach the router directly, so they don't need the deployed
+    container anymore).
   * terminals + plugin/marketplace tools — reused from `ccc_terminals_mcp.py`
     (local cmux + ssh→tmux; a remote container could never reach these).
 
@@ -32,9 +34,9 @@ REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 sys.path.insert(0, HERE)                          # bundled claudectl_server + ccc_terminals_mcp
 sys.path.insert(0, os.path.join(REPO, "server"))  # dev: canonical server/ wins if present
 
-# Default the upstream bearer the same way the deployed server does, so the
-# account tools authenticate to the wrappers without extra local config.
-os.environ.setdefault("UPSTREAM_BEARER", "ddash")
+# Default the router admin password the same way the deployed server does, so
+# the account/proxy tools authenticate to llm.hostbun.cc without extra config.
+os.environ.setdefault("ADMIN_PASSWORD", "ddash")
 
 try:
     from claudectl_server import mcp  # FastMCP("claudectl") + all account/proxy tools
