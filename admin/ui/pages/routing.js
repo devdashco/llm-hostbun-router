@@ -79,11 +79,10 @@ function Routing(){
   useEffect(()=>{ (async()=>{ try{ const s=await api('stats?window=all'); setKnown((s.byProject||[]).map(r=>r.project).filter(Boolean)); }catch(e){} })(); },[]);
   function seed(s){ return { bases:clone(s.bases), claudePrefix:s.claudePrefix, jsonEnforce:!!s.jsonEnforce, jsonMaxRetries:s.jsonMaxRetries,
     gatedModels:(s.gatedModels||[]).slice(), localMap:clone(s.localMap), modelRoutes:clone(s.modelRoutes), projectRoutes:clone(s.projectRoutes),
-    projectGroups:clone(s.projectGroups||[]), projectLimits:clone(s.projectLimits), projectLimitDefault:clone(s.projectLimitDefault||{window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'}),
+    projectLimits:clone(s.projectLimits), projectLimitDefault:clone(s.projectLimitDefault||{window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'}),
     forceModel:clone(s.forceModel), cloudPolicy:s.cloudPolicy||'open', cloudAllowlist:(s.cloudAllowlist||[]).slice(),
     defaultRoute:clone(s.defaultRoute) }; }
   const set=(k,v)=>setD(x=>({...x,[k]:v}));
-  const matchGroup=pkey=>{ const p=String(pkey||'').toLowerCase(); for(const g of d.projectGroups||[]) for(const pre of g.prefixes||[]) if(p===pre||p.startsWith(pre)) return g; return null; };
   // Every REGISTERED consumer, plus anything the log has seen, plus anything already ruled. Seen
   // names are collapsed to the consumer (before the ':') — a rule resolves at consumer level, so
   // listing one row per job invited a pin on `promopilot:generatetext` that covers nothing else.
@@ -103,7 +102,7 @@ function Routing(){
   const catalogOpts=['claudecode','crazyrouter','local'].flatMap(p=>catalog[p].map(model=>({provider:p,model})));
 
   async function save(){
-    const patch={ bases:d.bases, localMap:d.localMap, modelRoutes:d.modelRoutes, projectRoutes:d.projectRoutes, projectGroups:d.projectGroups,
+    const patch={ bases:d.bases, localMap:d.localMap, modelRoutes:d.modelRoutes, projectRoutes:d.projectRoutes,
       forceModel:{enabled:d.forceModel.enabled,provider:d.forceModel.provider||'claudecode',model:(d.forceModel.model||'').trim()},
       cloudPolicy:d.cloudPolicy, cloudAllowlist:d.cloudAllowlist, defaultRoute:{provider:d.defaultRoute.provider||'none',model:(d.defaultRoute.model||'').trim()},
       claudePrefix:(d.claudePrefix||'').trim()||'claude', jsonEnforce:d.jsonEnforce, jsonMaxRetries:parseInt(d.jsonMaxRetries||2,10),
@@ -122,13 +121,13 @@ function Routing(){
 
   const stg=state.knownLocalIds||{};
   return html`
-  <${PageHead} title="Routing" desc="Where a request goes, and what it is allowed to reach. A per-project rule beats its group, and a group beats the defaults."/>
+  <${PageHead} title="Routing" desc="Where a request goes, and what it is allowed to reach. A per-project rule (exact path, then consumer) beats the defaults."/>
   <${Card} cls="acc">
     <${CardHead} title="Per-project model"
       hint=${html`<b>Model</b> pins the request and rewrites it. <b>Allowed</b> only restricts, and refuses on a mismatch — it never substitutes. A rule also covers that consumer's jobs (<span class="mono">name:job</span>).`}/>
     <div class="tablewrap"><table><tr><th style="width:32%">Project</th><th style="width:40%">Model (pin)</th><th>Allowed (providers / models)</th></tr>
-      ${projNames.length?projNames.map(k=>{ const cur=d.projectRoutes[k]; const grp=(cur&&(cur.provider||cur.block))?null:matchGroup(k);
-        const pill=(cur&&(cur.provider||cur.block))?html`<${RulePill} cur=${cur}/>`:(grp?html`<span class="pill ${grp.block?'down':(providerCls[grp.provider]||'')}" title=${'from group '+grp.name}>${grp.block?'blocked':grp.provider} · grp</span>`:html`<${RulePill} cur=${null}/>`);
+      ${projNames.length?projNames.map(k=>{ const cur=d.projectRoutes[k];
+        const pill=html`<${RulePill} cur=${(cur&&(cur.provider||cur.block))?cur:null}/>`;
         const setRule=rule=>{ const pr=clone(d.projectRoutes); if(!rule)delete pr[k]; else pr[k]=rule; set('projectRoutes',pr); };
         return html`<tr><td class="mono">${k}
             ${!state.consumers?.[k]&&html` <${Chip} cls="down" title="seen in the call log but not in the consumer registry">unregistered<//>`}
@@ -141,24 +140,6 @@ function Routing(){
           <td><${AllowCell} cur=${cur} catalog=${catalog} onChange=${setRule}/></td></tr>`;
       }):html`<tr><td colspan="3" class="hint">No projects seen yet. They appear once an app calls the router with a key or an <code>X-Project</code> header.</td></tr>`}
     </table></div>
-  </${Card}>
-
-  <${Card} cls="acc">
-    <${CardHead} title="Project groups" hint="Bundle projects by name prefix and route or block them together. A per-project model above overrides its group."/>
-    <div class="tablewrap"><table><tr><th style="width:22%">Group</th><th style="width:34%">Prefixes</th><th>Model / action</th><th style="width:40px"></th></tr>
-      ${(d.projectGroups||[]).length?(d.projectGroups||[]).map((g,i)=>html`<tr>
-        <td class="mono">${g.name}</td>
-        <td><input class="mono" style="width:100%" value=${(g.prefixes||[]).join(', ')} onChange=${e=>{ const gs=clone(d.projectGroups); gs[i].prefixes=e.target.value.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean); set('projectGroups',gs); }}/></td>
-        <td><div class="flex"><span style="flex:0 0 104px"><${RulePill} cur=${g.block?{block:true}:(g.provider?{provider:g.provider,model:g.model}:null)}/></span>
-          <${RuleSelect} cur=${g.block?{block:true}:(g.provider?{provider:g.provider,model:g.model}:null)} opts=${catalogOpts} onChange=${rule=>{ const gs=clone(d.projectGroups); const {name,prefixes}=gs[i]; gs[i]=rule?Object.assign({name,prefixes},rule):{name,prefixes,block:false,provider:'',model:''}; set('projectGroups',gs); }}/></div></td>
-        <td><span class="x" onClick=${()=>{ const gs=clone(d.projectGroups); gs.splice(i,1); set('projectGroups',gs); }}>✕</span></td>
-      </tr>`):html`<tr><td colspan="4" class="hint">No groups yet. Add one below.</td></tr>`}
-    </table></div>
-    <div class="row" style="margin-top:12px">
-      <input placeholder="group name (e.g. seoul)" style="flex:1;min-width:150px" value=${ng.name} onInput=${e=>setNg({...ng,name:e.target.value})}/>
-      <input placeholder="prefixes, comma-sep (e.g. seoul:)" style="flex:2;min-width:180px" value=${ng.prefix} onInput=${e=>setNg({...ng,prefix:e.target.value})}/>
-      <button class="ghost" style="flex:0 0 auto" onClick=${()=>{ const name=ng.name.trim(); const prefixes=ng.prefix.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean); if(!name){toast('group name required',true);return;} if(!prefixes.length){toast('at least one prefix required',true);return;} if((d.projectGroups||[]).some(g=>g.name.toLowerCase()===name.toLowerCase())){toast('group name already exists',true);return;} set('projectGroups',[...(d.projectGroups||[]),{name,prefixes,block:true}]); setNg({name:'',prefix:''}); toast('added (unsaved) — defaults to block; pick a model, then Save routing'); }}>Add group</button>
-    </div>
   </${Card}>
 
   <${Card} cls="amb">

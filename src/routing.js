@@ -246,6 +246,6 @@ function baseRoute(m, key) {
 
 module.exports = {
   resolveRoute, baseRoute, providerRoute, defaultRouteResolved, projectRule, projectRuleFor,
-  matchProjectGroup, enforceAllow, accountFor, autoAccount, acctHealth, limitFor, projectUsage, usageVerdict,
+  enforceAllow, accountFor, autoAccount, acctHealth, limitFor, projectUsage, usageVerdict,
   localTarget, isClaudeModel, isGated, sleep,
 };
