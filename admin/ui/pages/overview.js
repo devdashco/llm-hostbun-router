@@ -106,10 +106,10 @@ function Pool({d}){
     return `${day} ${t}`; };
   return html`<${Card} cls=${bad?'bad':''}>
     <${CardHead} title="Claude Max pool" hint=${`${accts.length} subscription${accts.length===1?'':'s'}, ${d.advertisedModels} model ids`}
-      actions=${html`<button class="ghost sm" onClick=${()=>go('accounts')}>Accounts</button>`}/>
+      actions=${html`<button class="ghost sm" onClick=${()=>go('identity','accounts')}>Accounts</button>`}/>
     <div class="tablewrap"><table>
       <tr><th>account</th><th>projects</th><th>5h · resets</th><th>7d · resets</th><th>24h</th></tr>
-      ${accts.map(a=>html`<tr key=${a.name} class="click" onClick=${()=>go('accounts')}>
+      ${accts.map(a=>html`<tr key=${a.name} class="click" onClick=${()=>go('identity','accounts')}>
         <td class="mono" style="font-size:12.5px;font-weight:600">${a.name}</td>
         <td style="font-size:11.5px" class="mut">${a.projects.length?a.projects.join(', '):'— unused'}</td>
         <td style="min-width:78px"><${Bar} v=${a.limits&&a.limits.u5}/>${a.limits&&a.limits.reset5?html`<div class="hint" style="font-size:9.5px" title=${'5h window resets '+new Date(a.limits.reset5*1000).toLocaleString()}>↺ ${resetAt(a.limits.reset5)}</div>`:''}</td>

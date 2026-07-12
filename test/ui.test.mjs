@@ -103,9 +103,11 @@ if (loggedOut) {
   check("logs in and mounts the shell", shell, shell ? "" : root().textContent.slice(0, 160));
 
   if (shell) {
-    // NAV is the panel's own list of pages. Every entry must render; a page in the nav that throws on
-    // mount is exactly the "page that doesn't work" this test exists to catch.
-    const slugs = ["overview", "calls", "consumers", "stats", "accounts", "routing", "models", "crazyrouter", "secrets"];
+    // NAV is the panel's own list of pages, plus every legacy slug that must still resolve (they
+    // alias onto a page + tab). Every entry must render; a page in the nav that throws on mount is
+    // exactly the "page that doesn't work" this test exists to catch.
+    const slugs = ["overview", "calls", "routing", "identity", "settings",
+                   "stats", "consumers", "calls", "accounts", "models", "crazyrouter", "secrets"];
     for (const slug of slugs) {
       const before = pageErrors.length;
       window.history.pushState({}, "", `/${slug}`);
@@ -114,6 +116,19 @@ if (loggedOut) {
       const clean = pageErrors.length === before;
       check(`page /${slug} mounts clean`, mounted && clean, clean ? "" : pageErrors.slice(before).join(" | "));
     }
+    // A legacy slug must land on the right TAB of its new page, not just any tab. /accounts was
+    // reached from /calls above, so the alias — not a leftover mount — chose what rendered. The URL
+    // now reads /settings?t=secrets (last alias in the loop), and the page shows the secrets content.
+    check("legacy slug rewrites the URL onto its new page + tab",
+      /\/settings\b/.test(window.location.pathname) && /t=secrets/.test(window.location.search),
+      `url was: ${window.location.pathname}${window.location.search}`);
+    const secretsTab = await until(() => /Admin password/i.test(root().textContent));
+    check("legacy /secrets lands on the Secrets tab of Settings", secretsTab);
+    // And the tab strip itself switches content: click "Crazyrouter" on Settings.
+    const tabBtn = [...window.document.querySelectorAll(".tabs button")].find((b) => /crazyrouter/i.test(b.textContent));
+    if (tabBtn) tabBtn.click();
+    const swapped = await until(() => /Update key/i.test(root().textContent));
+    check("clicking a tab swaps the sub-page", !!tabBtn && swapped);
   }
 }
 

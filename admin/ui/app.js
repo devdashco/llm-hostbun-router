@@ -2,7 +2,7 @@
 // page that exists but is unreachable would be obvious in this one file.
 import {
   html, render, useState, useEffect, useCallback,
-  api, setOnUnauth, Svg, NAV, BASE, slugFor, nameFor, Ctx,
+  api, setOnUnauth, Svg, NAV, SLUG_ALIAS, BASE, nameFor, Tabs, useTab, Ctx,
 } from "./core.js";
 import { CallDrawer } from "./drawer.js";
 import { Overview } from "./pages/overview.js";
@@ -15,8 +15,29 @@ import { Models } from "./pages/models.js";
 import { Crazyrouter } from "./pages/crazyrouter.js";
 import { Secrets } from "./pages/secrets.js";
 
-const PAGES = { overview: Overview, calls: Calls, consumers: Consumers, stats: Stats,
-                accounts: Accounts, routing: Routing, models: Models, crazyrouter: Crazyrouter, secrets: Secrets };
+/* A page made of former pages: one tab strip, then the chosen sub-page exactly as it was.
+   Each sub-page keeps its own PageHead (title, refresh, its own controls). */
+function Tabbed({def,items}){
+  const [tab,setTab]=useTab(def);
+  const cur=items.find(([v])=>v===tab)||items[0];
+  const Sub=cur[2];
+  return html`<div style="margin-bottom:16px"><${Tabs} val=${cur[0]} onChange=${setTab} items=${items.map(([v,l])=>[v,l])}/></div><${Sub} key=${cur[0]}/>`;
+}
+const OverviewPage = () => html`<${Tabbed} def="health"    items=${[['health','Health',Overview],['usage','Usage',Stats]]}/>`;
+const RoutingPage  = () => html`<${Tabbed} def="rules"     items=${[['rules','Rules',Routing],['models','Models & test',Models]]}/>`;
+const IdentityPage = () => html`<${Tabbed} def="consumers" items=${[['consumers','Consumers',Consumers],['accounts','Accounts',Accounts]]}/>`;
+const SettingsPage = () => html`<${Tabbed} def="crazyrouter" items=${[['crazyrouter','Crazyrouter',Crazyrouter],['secrets','Secrets & gate',Secrets]]}/>`;
+
+const PAGES = { overview: OverviewPage, calls: Calls, routing: RoutingPage, identity: IdentityPage, settings: SettingsPage };
+
+/* Read the slug off the URL; an old slug 301s client-side onto its new page + tab. */
+function resolveSlug(){
+  let s=location.pathname.replace(BASE,'').replace(/^\/+/,'').split('/')[0]||'overview';
+  if(SLUG_ALIAS[s]){ const [ns,t]=SLUG_ALIAS[s];
+    try{ const u=new URL(location.href); u.pathname=BASE+'/'+ns; if(t)u.searchParams.set('t',t); history.replaceState({},'',u); }catch{}
+    return ns; }
+  return NAV.some(x=>x.slug===s)?s:'overview';
+}
 
 function Shell({slug,go,children}){
   const [sbOpen,setSbOpen]=useState(false);
@@ -66,12 +87,18 @@ function Login({onOk}){
 function App(){
   const [authed,setAuthed]=useState(null); // null=checking
   const [state,setState]=useState(null);
-  const [slug,setSlug]=useState(()=>{ let s=location.pathname.replace(BASE,'').replace(/^\/+/,'').split('/')[0]||'overview'; return NAV.some(x=>x.slug===s)?s:'overview'; });
+  // slug + the ?t= tab travel together: the page is keyed on both, so any navigation that changes
+  // either remounts the page and it re-reads the URL. That is what makes a legacy-slug redirect
+  // between two tabs of the SAME page (e.g. /crazyrouter → /secrets) actually switch tabs.
+  const readTab=()=>{ try{ return new URL(location.href).searchParams.get('t')||''; }catch{ return ''; } };
+  const [slug,setSlug]=useState(resolveSlug);
+  const [tabKey,setTabKey]=useState(readTab);
   const [callId,setCallId]=useState(null);
   const boot=useCallback(async()=>{ try{ const s=await api('state'); setState(s); setAuthed(true); }catch(e){ setAuthed(false); } },[]);
   useEffect(()=>{ setOnUnauth(()=>setAuthed(false)); boot(); },[boot]);
-  useEffect(()=>{ const h=()=>{ let s=location.pathname.replace(BASE,'').replace(/^\/+/,'').split('/')[0]||'overview'; setSlug(NAV.some(x=>x.slug===s)?s:'overview'); }; window.addEventListener('popstate',h); return ()=>window.removeEventListener('popstate',h); },[]);
-  const go=useCallback(s=>{ history.pushState({},'',BASE+'/'+s); setSlug(s); document.title='hostbun · '+nameFor(s); },[]);
+  useEffect(()=>{ const h=()=>{ setSlug(resolveSlug()); setTabKey(readTab()); }; window.addEventListener('popstate',h); return ()=>window.removeEventListener('popstate',h); },[]);
+  // go(slug[, tab]) — tab lands in ?t= before the page mounts, so useTab reads it on first render.
+  const go=useCallback((s,t)=>{ history.pushState({},'',BASE+'/'+s+(t?'?t='+t:'')); setSlug(s); setTabKey(t||''); document.title='hostbun · '+nameFor(s); },[]);
   useEffect(()=>{ document.title='hostbun · '+nameFor(slug); },[slug]);
   const reload=useCallback(s=>{ if(s)setState(s); else boot(); },[boot]);
 
@@ -79,11 +106,12 @@ function App(){
   if(!authed) return html`<${Login} onOk=${boot}/>`;
   if(!state) return html`<div class="mut" style="padding:40px;text-align:center">loading…</div>`;
   const Page=PAGES[slug]||Overview;
-  // gotoCalls: drill into the call log with a filter (project= or q=). Calls remounts on nav and reads these.
-  const gotoCalls=(params)=>{ try{ const u=new URL(location.href); u.searchParams.delete('project'); u.searchParams.delete('q'); Object.entries(params||{}).forEach(([k,v])=>{ if(v) u.searchParams.set(k,v); }); history.replaceState({},'',u); }catch{} go('calls'); };
+  // gotoCalls: drill into the call log with a filter (project= or q=). Navigate FIRST — go() pushes a
+  // clean /calls URL — then stamp the params on it, before preact renders and Calls reads them on mount.
+  const gotoCalls=(params)=>{ go('calls'); try{ const u=new URL(location.href); Object.entries(params||{}).forEach(([k,v])=>{ if(v) u.searchParams.set(k,v); }); history.replaceState({},'',u); }catch{} };
   const ctx={ state, reload, go, openCall:setCallId, gotoCalls };
   return html`<${Ctx.Provider} value=${ctx}>
-    <${Shell} slug=${slug} go=${go}><${Page}/></${Shell}>
+    <${Shell} slug=${slug} go=${go}><${Page} key=${slug+':'+tabKey}/></${Shell}>
     <${CallDrawer} id=${callId} onClose=${()=>setCallId(null)}/>
   </${Ctx.Provider}>`;
 }

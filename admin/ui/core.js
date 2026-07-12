@@ -56,19 +56,20 @@ const ICON = {
 const Svg = ({n}) => html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" dangerouslySetInnerHTML=${{__html:ICON[n]||''}}></svg>`;
 
 const NAV = [
-  {sec:'Monitor'},
   {name:'Overview',slug:'overview',icon:'grid'},
   {name:'Calls',slug:'calls',icon:'list'},
-  {name:'Stats',slug:'stats',icon:'chart'},
-  {sec:'Control'},
-  {name:'Consumers',slug:'consumers',icon:'users'},
-  {name:'Accounts',slug:'accounts',icon:'key'},
   {name:'Routing',slug:'routing',icon:'route'},
-  {name:'Models & test',slug:'models',icon:'box'},
-  {sec:'Settings'},
-  {name:'Crazyrouter',slug:'crazyrouter',icon:'cloud'},
-  {name:'Secrets',slug:'secrets',icon:'lock'},
+  {name:'Identity',slug:'identity',icon:'users'},
+  {name:'Settings',slug:'settings',icon:'lock'},
 ];
+// Old page slugs live on as redirects: bookmarks and muscle memory predate the consolidation.
+// Each maps to [new slug, tab within it].
+const SLUG_ALIAS = {
+  stats:['overview','usage'],
+  consumers:['identity','consumers'], accounts:['identity','accounts'],
+  models:['routing','models'],
+  crazyrouter:['settings','crazyrouter'], secrets:['settings','secrets'],
+};
 const BASE='';   // the panel lives at the site root; there is no /admin path any more
 const slugFor = n => (NAV.find(x=>x.name===n)||{}).slug||'overview';
 const nameFor = s => (NAV.find(x=>x.slug===s)||{}).name||'Overview';
@@ -171,6 +172,15 @@ const Tabs = ({items,val,onChange,disabled}) => html`<div class="tabs">
 </div>`;
 const Seg = Tabs;   // legacy name
 
+/* Tab-within-a-page state, mirrored to ?t= so a tab survives reload and can be linked to. Only ever
+   read on mount: the app shell keys each page by slug+tab, so any navigation that changes ?t=
+   (including a legacy-slug redirect between two tabs of the SAME page) remounts and re-reads. */
+const useTab = (def) => {
+  const [tab,setTabState]=useState(()=>{ try{ return new URL(location.href).searchParams.get('t')||def; }catch{ return def; } });
+  const setTab=v=>{ try{ const u=new URL(location.href); u.searchParams.set('t',v); history.replaceState({},'',u); }catch{} setTabState(v); };
+  return [tab,setTab];
+};
+
 /* ───────── app context ───────── */
 const Ctx = createContext(null);
 const useApp = () => useContext(Ctx);
@@ -192,8 +202,8 @@ export {
   api, toast, setOnUnauth,
   clone, nfmt, usd, ago, fmtMs, fmtTime, SLOW_MS,
   providerCls, PALETTE, PROVIDER_COLOR, seriesColor, OK, WARN, DANGER, ACCENT, ORANGE, VIOLET,
-  ICON, Svg, NAV, BASE, slugFor, nameFor,
+  ICON, Svg, NAV, SLUG_ALIAS, BASE, slugFor, nameFor,
   Pill, Chip, Dot, ProviderPill, StatusPill, KV, Card, CardHead, ParamBadges, TriSel, FacetSel,
-  METRIC_LABEL, buildChart, Chart, Tabs, Seg, PageHead,
+  METRIC_LABEL, buildChart, Chart, Tabs, Seg, useTab, PageHead,
   Ctx, useApp,
 };

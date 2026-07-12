@@ -74,7 +74,8 @@ function Consumers(){
   }
   const since=ts=>ts?ago(ts):'never';
   const unreg=(reg&&reg.unregistered)||[], regd=(reg&&reg.registered)||[];
-  const kindOf=k=>(u&&u.byKind.find(x=>x.key===k))||{calls:0,tokens:0};
+  // With the DB down, /usage answers {dbReady:false} and nothing else — every rollup is absent.
+  const kindOf=k=>(u&&u.byKind&&u.byKind.find(x=>x.key===k))||{calls:0,tokens:0};
   return html`
   <${PageHead} title="Consumers" desc="Who calls the router, what it costs them, and whether they hold a key." onRefresh=${load}/>
   ${err?html`<div class="alert bad">${err}</div>`:''}
@@ -166,7 +167,7 @@ function Consumers(){
   <${Card}>
     <${CardHead} title="Consumption"
       actions=${html`<${Tabs} val=${win} onChange=${setWin} items=${USAGE_WINDOWS}/>`}/>
-    ${!u?html`<p class="hint">loading…</p>`:html`
+    ${!u?html`<p class="hint">loading…</p>`:u.dbReady===false?html`<div class="alert bad">The call DB is unavailable, so there is no consumption to roll up.</div>`:html`
     ${/* Plain stat blocks, not cards. A card inside a card is always a mistake. */''}
     <div class="grid" style="margin-bottom:24px">
       ${['dev','app','unregistered'].map(k=>html`<div class="kv">
