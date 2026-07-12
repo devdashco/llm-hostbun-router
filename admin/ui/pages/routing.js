@@ -10,18 +10,28 @@ const BLOCK_VAL='__block__';
 const valToRule=v=>{ if(!v)return null; if(v===BLOCK_VAL)return{block:true}; const [provider,...rest]=v.split('|'); return{provider,model:rest.join('|')}; };
 const ruleToVal=cur=>(cur&&!cur.block)?`${cur.provider}|${cur.model}`:(cur&&cur.block?BLOCK_VAL:'');
 function RulePill({cur}){ if(cur&&cur.block)return html`<${Pill} cls="down">blocked<//>`; if(cur)return html`<${ProviderPill} provider=${cur.provider}/>`; return html`<${Pill} cls="neutral" title="normal routing applies">auto<//>`; }
-function RuleSelect({cur,onChange}){
-  const sel=ruleToVal(cur); const extra=(cur&&!cur.block&&!PROJ_MODELS.some(p=>p.provider===cur.provider&&p.model===cur.model));
+/* opts = live catalog [{provider,model}], grouped into <optgroup> by provider.
+   Falls back to the static PROJ_MODELS seed when the catalog hasn't loaded yet. */
+function RuleSelect({cur,onChange,opts}){
+  const list=(opts&&opts.length)?opts:PROJ_MODELS;
+  const sel=ruleToVal(cur); const extra=(cur&&!cur.block&&!list.some(p=>p.provider===cur.provider&&p.model===cur.model));
+  const byProv={}; list.forEach(p=>{ (byProv[p.provider]||(byProv[p.provider]=[])).push(p.model); });
   return html`<select value=${sel} onChange=${e=>onChange(valToRule(e.target.value))} style="flex:1">
     <option value="">auto — normal routing</option>
     <option value=${BLOCK_VAL}>block — reject, 0 tokens</option>
     ${extra&&html`<option value=${sel}>${cur.provider}: ${cur.model||"(keep caller's)"}</option>`}
-    ${PROJ_MODELS.map(p=>{const v=`${p.provider}|${p.model}`; return html`<option value=${v}>${p.provider}: ${p.model}</option>`;})}
+    ${Object.keys(byProv).map(prov=>html`<optgroup label=${prov}>
+      ${byProv[prov].map(m=>html`<option value=${`${prov}|${m}`}>${m}</option>`)}
+    </optgroup>`)}
   </select>`;
 }
 /* Allowlist editor. Independent of the pin: the pin rewrites, the allowlist only refuses.
    Empty = no restriction (never "nothing allowed"). Edits the same rule object the pin lives in. */
-function AllowCell({cur,models,onChange}){
+/* Allowlist picker — click chips to enable providers/models. No free text.
+   `catalog` is {provider:[modelId,…]}. Empty selection = no restriction. Any
+   already-allowed id missing from the catalog still shows (checked) so a stale
+   pick is visible and removable, never silently dropped. */
+function AllowCell({cur,catalog,onChange}){
   const [open,setOpen]=useState(false);
   const ap=(cur&&cur.allowProviders)||[], am=(cur&&cur.allowModels)||[];
   const blocked=cur&&cur.block;
@@ -29,20 +39,24 @@ function AllowCell({cur,models,onChange}){
     ['allowProviders','allowModels'].forEach(k=>{ if(!next[k]||!next[k].length) delete next[k]; });
     onChange((next.provider||next.block||next.allowProviders||next.allowModels)?next:null); };
   const toggleP=p=>emit({allowProviders:ap.includes(p)?ap.filter(x=>x!==p):[...ap,p]});
+  const toggleM=m=>emit({allowModels:am.includes(m)?am.filter(x=>x!==m):[...am,m]});
   const summary=blocked?'—':(!ap.length&&!am.length)?'any':[ap.length&&`${ap.length} provider${ap.length>1?'s':''}`,am.length&&`${am.length} model${am.length>1?'s':''}`].filter(Boolean).join(' · ');
   if(blocked) return html`<span class="hint">blocked — nothing runs</span>`;
+  const provs=['claudecode','crazyrouter','local'];
+  const known=new Set(provs.flatMap(p=>(catalog[p]||[])));
+  const extras=am.filter(m=>!known.has(m)); // allowed but not in the live catalog
   return html`<div>
     <button class="ghost sm" onClick=${()=>setOpen(!open)}>${open?'▾':'▸'} ${summary}</button>
-    ${open&&html`<div style="margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:var(--r);min-width:220px;background:var(--sunken)">
-      <div style="display:flex;gap:14px;flex-wrap:wrap">
-        ${['claudecode','crazyrouter','local'].map(p=>html`<label style="font-size:12px;display:inline-flex;gap:6px;align-items:center;white-space:nowrap;margin:0">
-          <input type="checkbox" checked=${ap.includes(p)} onChange=${()=>toggleP(p)}/>${p}</label>`)}
-      </div>
-      <input class="mono" style="width:100%;margin-top:8px;font-size:12px;box-sizing:border-box" placeholder="allowed model ids, comma-sep — empty = any"
-        value=${am.join(', ')} onChange=${e=>emit({allowModels:e.target.value.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean)})}
-        list="allow-models"/>
-      <datalist id="allow-models">${models.map(m=>html`<option value=${m}/>`)}</datalist>
-      <small class="hint">Empty = no restriction. A call that resolves outside the list is rejected, never rewritten.</small>
+    ${open&&html`<div style="margin-top:8px;padding:12px;border:1px solid var(--border);border-radius:var(--r);min-width:260px;background:var(--sunken)">
+      <div class="lbl" style="font:11px var(--mono);color:var(--fg-mut);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">Providers</div>
+      <div class="pick-wrap">${provs.map(p=>html`<span class="pick ${ap.includes(p)?'on':''} ${providerCls[p]||''}" onClick=${()=>toggleP(p)}>${p}</span>`)}</div>
+      ${provs.map(prov=>{ const ms=(catalog[prov]||[]); if(!ms.length)return null; return html`<div class="pick-grp">
+        <div class="lbl">${prov} models</div>
+        <div class="pick-wrap">${ms.map(m=>html`<span class="pick ${am.includes(m)?'on':''}" onClick=${()=>toggleM(m)}>${m}</span>`)}</div>
+      </div>`; })}
+      ${extras.length&&html`<div class="pick-grp"><div class="lbl">other (not in catalog)</div>
+        <div class="pick-wrap">${extras.map(m=>html`<span class="pick on" title="click to remove" onClick=${()=>toggleM(m)}>${m}</span>`)}</div></div>`}
+      <small class="hint" style="display:block;margin-top:10px">Nothing selected = no restriction. A call that resolves outside the picked set is rejected, never rewritten.</small>
     </div>`}
   </div>`;
 }
@@ -71,8 +85,16 @@ function Routing(){
   const projNames=[...new Set([...registered,...known.map(p=>String(p).split(':')[0]),...Object.keys(d.projectRoutes||{})]
     .filter(p=>p&&p!=='(none)'))].sort();
   const seenSet=new Set(known.map(p=>String(p).split(':')[0]));
-  const allModels=[...new Set([...(state.claudecodeModels||[]),...Object.values(state.localMap||{}),...(state.gatedModels||[]),
-    ...PROJ_MODELS.map(p=>p.model)])].sort();
+  // Live per-provider catalog — the source for every model picker below (pin + allowlist).
+  // claudecode: the reconciled Anthropic catalog. local: caller-facing aliases. crazyrouter:
+  // the billing allowlist plus the static seed. Deduped, so a picker never lists nonsense.
+  const uniq=a=>[...new Set(a.filter(Boolean))].sort();
+  const catalog={
+    claudecode: uniq([...(state.claudecodeModels||[]), ...PROJ_MODELS.filter(p=>p.provider==='claudecode').map(p=>p.model)]),
+    crazyrouter: uniq([...(state.cloudAllowlist||[]), ...PROJ_MODELS.filter(p=>p.provider==='crazyrouter').map(p=>p.model)]),
+    local: uniq([...Object.keys(state.localMap||{}), ...PROJ_MODELS.filter(p=>p.provider==='local').map(p=>p.model)]),
+  };
+  const catalogOpts=['claudecode','crazyrouter','local'].flatMap(p=>catalog[p].map(model=>({provider:p,model})));
 
   async function save(){
     const patch={ bases:d.bases, localMap:d.localMap, modelRoutes:d.modelRoutes, projectRoutes:d.projectRoutes, projectGroups:d.projectGroups,
@@ -107,10 +129,10 @@ function Routing(){
             ${!seenSet.has(k)&&html` <${Chip} title="registered, no traffic yet">idle<//>`}</td>
           <td><div class="flex"><span style="flex:0 0 104px">${pill}</span>
           ${/* keep any allowlist when the pin changes — they are separate axes of the same rule */''}
-          <${RuleSelect} cur=${(cur&&(cur.provider||cur.block))?cur:null} onChange=${rule=>{
+          <${RuleSelect} cur=${(cur&&(cur.provider||cur.block))?cur:null} opts=${catalogOpts} onChange=${rule=>{
             const keep=cur?{...(cur.allowProviders?{allowProviders:cur.allowProviders}:{}),...(cur.allowModels?{allowModels:cur.allowModels}:{})}:{};
             const next=rule?{...rule,...(rule.block?{}:keep)}:(Object.keys(keep).length?keep:null); setRule(next); }}/></div></td>
-          <td><${AllowCell} cur=${cur} models=${allModels} onChange=${setRule}/></td></tr>`;
+          <td><${AllowCell} cur=${cur} catalog=${catalog} onChange=${setRule}/></td></tr>`;
       }):html`<tr><td colspan="3" class="hint">No projects seen yet. They appear once an app calls the router with a key or an <code>X-Project</code> header.</td></tr>`}
     </table></div>
   </${Card}>
@@ -122,7 +144,7 @@ function Routing(){
         <td class="mono">${g.name}</td>
         <td><input class="mono" style="width:100%" value=${(g.prefixes||[]).join(', ')} onChange=${e=>{ const gs=clone(d.projectGroups); gs[i].prefixes=e.target.value.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean); set('projectGroups',gs); }}/></td>
         <td><div class="flex"><span style="flex:0 0 104px"><${RulePill} cur=${g.block?{block:true}:(g.provider?{provider:g.provider,model:g.model}:null)}/></span>
-          <${RuleSelect} cur=${g.block?{block:true}:(g.provider?{provider:g.provider,model:g.model}:null)} onChange=${rule=>{ const gs=clone(d.projectGroups); const {name,prefixes}=gs[i]; gs[i]=rule?Object.assign({name,prefixes},rule):{name,prefixes,block:false,provider:'',model:''}; set('projectGroups',gs); }}/></div></td>
+          <${RuleSelect} cur=${g.block?{block:true}:(g.provider?{provider:g.provider,model:g.model}:null)} opts=${catalogOpts} onChange=${rule=>{ const gs=clone(d.projectGroups); const {name,prefixes}=gs[i]; gs[i]=rule?Object.assign({name,prefixes},rule):{name,prefixes,block:false,provider:'',model:''}; set('projectGroups',gs); }}/></div></td>
         <td><span class="x" onClick=${()=>{ const gs=clone(d.projectGroups); gs.splice(i,1); set('projectGroups',gs); }}>✕</span></td>
       </tr>`):html`<tr><td colspan="4" class="hint">No groups yet. Add one below.</td></tr>`}
     </table></div>

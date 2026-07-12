@@ -224,6 +224,15 @@ td.num,td .num{font-variant-numeric:tabular-nums}
 .tag.bad{color:var(--danger);background:oklch(0.645 0.205 25 / .13)}
 .tag.info{color:var(--accent);background:oklch(0.660 0.135 252 / .14)}
 .dot{width:6px;height:6px;border-radius:999px;flex:0 0 auto;display:inline-block}
+/* ── pick: click-to-toggle model/provider chip (routing allowlist) ─────────── */
+.pick{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;font:11.5px var(--mono);
+  padding:2px 9px;border:1px solid var(--border);border-radius:999px;color:var(--fg-mut);background:var(--sunken);white-space:nowrap}
+.pick:hover{border-color:var(--border-2);color:var(--fg)}
+.pick.on{color:var(--fg);border-color:var(--accent);background:oklch(0.660 0.135 252 / .16)}
+.pick.on::before{content:"✓";font-weight:700;color:var(--accent)}
+.pick-grp{margin-top:8px}
+.pick-grp>.lbl{font:11px var(--mono);color:var(--fg-mut);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em}
+.pick-wrap{display:flex;gap:6px;flex-wrap:wrap}
 
 /* ── stats ────────────────────────────────────────────────────────────────── */
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;
