@@ -440,6 +440,17 @@ def _live_worker():
 
 
 # ---------------------------------------------------------------- data
+def _date_compact(iso: str | None) -> str:
+    """Local reset DATE for the accounts row: 'Mon 13 Jul'. The countdown next to
+    it already carries the hour precision; the row needs the calendar day."""
+    if not iso:
+        return ""
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%a %d %b")
+    except Exception:
+        return ""
+
+
 def _countdown(iso: str | None) -> str:
     if not iso:
         return "—"
@@ -672,6 +683,7 @@ def fetch() -> dict:
             "u7": (u7 * 100 if isinstance(u7, (int, float)) else None),
             "r7": _countdown(iso7),
             "c7": _clock(iso7),
+            "d7": _date_compact(iso7),   # reset DATE for the row ('Mon 13 Jul')
             "wk_left": _remain_frac(iso7),       # 0..1 of the 7d window LEFT
             "machines": machines_by.get(name, []),   # boxes currently on this account
         })
@@ -1288,8 +1300,8 @@ def run(stdscr):
             put(4, 0, ("  bars = % USED (green ok · yellow busy · red almost gone)  ·  "
                        "WEEKLY is the binding limit  ·  ★ pinned acct  ● gateway active")[:w], C_DIM)
             # column x-positions must mirror the row draw below: mark(2) + name(12)
-            # + ·org(6) + state(9) + weekly bar(11) + " · reset"(9) + " " + 5h bar(11)
-            put(5, 0, f"  {'ACCOUNT':<12}{'ORG':<6}{'STATE':<9}{'WEEKLY':<11}{' · RESETS':<9} {'5-HOUR':<11}  BOX",
+            # + ·org(6) + state(9) + weekly bar(11) + " · reset"(9) + " date"(11) + " " + 5h bar(11)
+            put(5, 0, f"  {'ACCOUNT':<12}{'ORG':<6}{'STATE':<9}{'WEEKLY':<11}{' · RESETS':<9}{' (DATE)':<11} {'5-HOUR':<11}  BOX",
                 C_ACCENT | curses.A_UNDERLINE)
             if data["err"]:
                 put(h - 5, 2, f"! {data['err']}"[:w - 3], C_HOT)
@@ -1331,6 +1343,7 @@ def run(stdscr):
                 else:
                     reset = (r.get("r7") or "").replace(" ", "") or "—"
                 x = put(y, x, f" · {reset:<6}", C_DIM | rev)
+                x = put(y, x, f" {r.get('d7') or '':<10}", C_DIM | rev)
                 # 5-HOUR: used-bar + %
                 x = put(y, x, " ", rev)
                 x = draw_used_bar(y, x, u5, rev)
