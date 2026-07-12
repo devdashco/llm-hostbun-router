@@ -23,7 +23,7 @@ const DB = require("./db");
 const { dbUp, dbRow, dbRows, ACCT_CACHE, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
 const { priceMap, costUsd } = require("./pricing");
 const { mintKey, sha256, parseConsumer } = require("./identity");
-const { resolveRoute, accountFor, acctHealth, isGated, localTarget, limitFor, projectUsage } = require("./routing");
+const { resolveRoute, accountFor, autoAccount, acctHealth, isGated, localTarget, limitFor, projectUsage } = require("./routing");
 const { readBody, sendJson, mask, buildHeaders } = require("./http");
 const CC = require("./claudecode");
 const { refreshClaudecodeModels, refreshAccountLimits, upstreamCatalogs, localModelEntries } = CC;
@@ -88,6 +88,10 @@ function adminState() {
     projectAccounts: CFG.projectAccounts,
     consumerAccounts: CFG.consumerAccounts,   // legacy alias, same map
     defaultAccount: CFG.defaultAccount,
+    // "pinned" (default) or "soonest-weekly-reset". autoAccount = what the picker would choose right
+    // now (null when off or no usable weekly reading — then pins decide, exactly as before).
+    accountStrategy: CFG.accountStrategy || "pinned",
+    autoAccount: CFG.accountStrategy === "soonest-weekly-reset" ? ((autoAccount() || {}).name || null) : null,
     projectGroups: CFG.projectGroups,
     projectLimits: CFG.projectLimits,
     projectLimitDefault: CFG.projectLimitDefault,
@@ -588,6 +592,21 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
 
   // Auth mode. Separate + logged, like `consumers/enforce`: going to "required" 401s every caller
   // that has not been issued a key, so the panel refuses to do it blind.
+  // Account-selection strategy. Its own logged endpoint (like auth/enforce), never POST config:
+  // flipping it is a deliberate act — it changes WHICH subscription every app bills to.
+  if (sub === "claudecode/strategy" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    if (!["pinned", "soonest-weekly-reset"].includes(p.mode))
+      return sendJson(res, 400, { error: "mode must be pinned | soonest-weekly-reset" });
+    CFG.accountStrategy = p.mode;
+    const persisted = persistConfig();
+    const auto = p.mode === "soonest-weekly-reset" ? ((autoAccount() || {}).name || null) : null;
+    console.warn(`[admin] accountStrategy=${p.mode} auto=${auto || "-"} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, { ok: true, persisted, mode: p.mode, autoAccount: auto });
+  }
+
   if (sub === "auth" && req.method === "POST") {
     const body = await readBody(req);
     let p = {};

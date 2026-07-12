@@ -4,7 +4,7 @@
 // capability, and treating it as one only misled the panel).
 const TR = require("../translate");
 const { CFG, persistConfig, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
-const { ORG_OF_ACCOUNT, recordLimits } = require("./db");
+const { ORG_OF_ACCOUNT, ACCT_DEAD, recordLimits } = require("./db");
 const { localTarget } = require("./routing");
 
 function localModelEntries() {
@@ -156,6 +156,10 @@ async function refreshAccountLimits(acct) {
     // fixes it. Read the error body so the panel can tell them apart.
     let errType = null, errMsg = null;
     if (!has && !r.ok) { try { const b = (await r.json()).error || {}; errType = b.type || null; errMsg = b.message || null; } catch {} }
+    // Feed the auto account picker's dead-login set: a 403 permission_error is a cancelled/disabled
+    // subscription (no reset revives it); a fresh reading proves the login is alive again.
+    if (errType === "permission_error") ACCT_DEAD.add(acct.name);
+    else if (has) ACCT_DEAD.delete(acct.name);
     return {
       account: acct.name, org: org || null, status: r.status, checkedAt: Date.now(), ms: Date.now() - t0,
       errType, errMsg,

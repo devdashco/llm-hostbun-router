@@ -164,6 +164,64 @@ check("the pin is applied before the allowlist judges it", route("claude-haiku-4
 // panel could save, report success, and change nothing.
 check("a config write is visible to the router", api("state").projectRoutes.z.provider, "local");
 
+// ── account strategy: soonest-weekly-reset ──────────────────────────────────
+// HTTP surface against the subprocess first, then the picker in-process: it orders on ACCT_CACHE
+// weekly readings, which only live traffic or a DB can seed — neither exists in the subprocess, so
+// requiring src/ directly is the only hermetic way to feed it data.
+console.log("account strategy — the opt-in weekly-reset picker:");
+check("default strategy is pinned", api("state").accountStrategy, "pinned");
+check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" }).error, "mode must be pinned | soonest-weekly-reset");
+{
+  const r = api("claudecode/strategy", { mode: "soonest-weekly-reset" });
+  check("flipping the strategy answers with the pick", [r.ok, r.mode, r.autoAccount], [true, "soonest-weekly-reset", null]); // no readings → null
+  check("the flip is visible in state", api("state").accountStrategy, "soonest-weekly-reset");
+  api("claudecode/strategy", { mode: "pinned" });
+}
+
+{
+  const { createRequire } = await import("node:module");
+  const req = createRequire(import.meta.url);
+  const { CFG } = req(join(ROOT, "src/config.js"));
+  const { ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT } = req(join(ROOT, "src/db.js"));
+  const { accountFor } = req(join(ROOT, "src/routing.js"));
+  const now = Math.floor(Date.now() / 1000);
+  const reading = (o) => ({ u5: 0.1, u7: 0.1, reset5: now + 3600, reset7: now + 86400, s5: "allowed", s7: "allowed", ts: Date.now(), ...o });
+  CFG.claudecodeAccountPool = [{ name: "early", org: "org-early", token: "x" },
+                               { name: "late", org: "org-late", token: "x" },
+                               { name: "spent", org: "org-spent", token: "x" }];
+  CFG.projectAccounts = { someapp: "late", somedev: "late" };
+  CFG.consumers = { someapp: { kind: "app", keys: [] }, somedev: { kind: "dev", owner: "p", keys: [] } };
+  CFG.defaultAccount = "";
+  CFG.accountStrategy = "soonest-weekly-reset";
+  for (const n of ["early", "late", "spent"]) ORG_OF_ACCOUNT.set(n, "org-" + n);
+
+  // No readings at all → never hop blind: the pin decides, exactly as before.
+  check("no weekly reading anywhere → the pin decides", accountFor("someapp").name, "late");
+
+  ACCT_CACHE.set("org-early", reading({ u5: 0.5, u7: 0.5 }));
+  ACCT_CACHE.set("org-late",  reading({ reset7: now + 6 * 86400 }));
+  ACCT_CACHE.set("org-spent", reading({ u7: 1, s7: "rejected", reset7: now + 1800 }));
+  // `spent` resets soonest but its weekly is rejected; `early` is the soonest USABLE reset.
+  check("an app gets the soonest usable weekly reset", accountFor("someapp").name, "early");
+  check("a job inherits its consumer's auto pick", accountFor("someapp:worker").name, "early");
+  check("a dev keeps its pin — a human's session never hops", accountFor("somedev").name, "late");
+  // A currently-spent 5h window disqualifies until it rolls.
+  ACCT_CACHE.set("org-early", reading({ u5: 1, s5: "rejected", u7: 0.5 }));
+  check("a spent 5h window is skipped until it rolls", accountFor("someapp").name, "late");
+  // A dead login is never a candidate, whatever its reset says.
+  ACCT_CACHE.set("org-early", reading({}));
+  ACCT_DEAD.add("early");
+  check("a dead login (OAuth disabled) is never picked", accountFor("someapp").name, "late");
+  ACCT_DEAD.delete("early");
+  // reset7 in the past = the window rolled and the reading is stale — not a candidate.
+  ACCT_CACHE.set("org-early", reading({ reset7: now - 60 }));
+  check("a rolled-over reading is stale, not a candidate", accountFor("someapp").name, "late");
+  // Strategy off → the invariant, untouched.
+  CFG.accountStrategy = "pinned";
+  ACCT_CACHE.set("org-early", reading({}));
+  check("strategy pinned → the pin, always", accountFor("someapp").name, "late");
+}
+
 server.kill();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

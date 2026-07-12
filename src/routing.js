@@ -7,7 +7,7 @@
 //     cache (~12x cost) and makes "who spent this?" unanswerable after the fact.
 const { CFG, normProvider, isImageModel, WINDOW_MS } = require("./config");
 const { parseConsumer } = require("./identity");
-const { dbUp, dbRow, dbRows, ACCT_CACHE } = require("./db");
+const { dbUp, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT } = require("./db");
 
 const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCase()] || null);
 // A `claude*` model id means the claudecode provider (our Max account pool → api.anthropic.com).
@@ -155,15 +155,60 @@ function acctHealth(org) {
   } catch { return { util: 0, hot: false, ts: 0, stale: true }; }
 }
 
+// ── auto account selection (opt-in, 2026-07-12) ────────────────────────────
+// CFG.accountStrategy = "soonest-weekly-reset": APP consumers (registry kind "app") are served by
+// the pool account whose WEEKLY (7d) window resets soonest and is usable right now. Rationale: the
+// account about to reset forfeits its unused headroom at the reset, so burning it first wastes least.
+//
+// This is a deliberate, narrow exception to "one project → one account, no rotation":
+//   • it orders on harvested reset7 timestamps, which only move when a window actually rolls — so
+//     the selection hops roughly WEEKLY, not per request (a per-request rotation is the ~12x
+//     prompt-cache blowout the invariant forbids);
+//   • attribution survives: every call still logs `claudecode:<account>` in key_label;
+//   • devs (kind "dev") and unregistered consumers are untouched — a human's session never hops;
+//   • it is data-driven only: an account with no weekly reading is NOT a candidate, and if no
+//     account has one, selection returns null and the pin decides. Never hop blind.
+// "Usable" = login alive (not ACCT_DEAD), weekly not spent, and 5h window not currently rejected.
+let _autoName = null;   // last pick, for change-logging only
+function autoAccount() {
+  const now = Date.now();
+  let best = null, bestReset = Infinity;
+  for (const a of CFG.claudecodeAccountPool || []) {
+    if (ACCT_DEAD.has(a.name)) continue;                          // dead login — no reset revives it
+    const org = ORG_OF_ACCOUNT.get(a.name) || a.org;
+    const r = org ? ACCT_CACHE.get(org) : null;
+    if (!r || !r.reset7) continue;                                // no weekly reading → not a candidate
+    const reset7ms = r.reset7 * 1000;                             // anthropic resets are epoch SECONDS
+    if (reset7ms <= now) continue;                                // window already rolled; reading is stale
+    if (r.s7 === "rejected" || (r.u7 || 0) >= 1) continue;        // weekly spent — 429s until reset7
+    if ((r.s5 === "rejected" || (r.u5 || 0) >= 1) && (!r.reset5 || r.reset5 * 1000 > now)) continue; // 5h spent right now
+    if (reset7ms < bestReset || (reset7ms === bestReset && best && a.name < best.name)) { best = a; bestReset = reset7ms; }
+  }
+  if (best && best.name !== _autoName) {
+    console.log(`[route] auto account -> ${best.name} (weekly reset ${new Date(bestReset).toISOString()})`);
+    _autoName = best.name;
+  }
+  return best;
+}
+
 // The account a project bills to, or null. Resolution is exactly two steps, both explicit:
 //   1. projectAccounts[project]  — the pin, edited in the panel
 //   2. CFG.defaultAccount        — one named fallback, also explicit
 // No request header can override it. Deterministic: same project ⇒ same account, every time.
+// Exception: accountStrategy "soonest-weekly-reset" auto-selects for APP consumers (see autoAccount).
 // (`consumerAccounts` is the pre-rename name of `projectAccounts`; both are read during migration.)
 function accountFor(project) {
   const pool = CFG.claudecodeAccountPool || [];
   if (!pool.length) return null;
   const p = String(project == null ? "" : project).trim().toLowerCase();
+  if (CFG.accountStrategy === "soonest-weekly-reset") {
+    const { consumer: c0 } = parseConsumer(p);
+    const reg = (CFG.consumers || {})[c0];
+    if (reg && reg.kind === "app") {
+      const auto = autoAccount();
+      if (auto) return auto;    // no usable weekly reading anywhere → fall through to the pin
+    }
+  }
   const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
   // Try the exact path first, then fall back to the consumer. A pin is a property of WHO is calling,
   // not of which workload they are running: pinning `promopilot` must cover `promopilot:l2_metadata`
@@ -213,6 +258,6 @@ function baseRoute(m, key) {
 
 module.exports = {
   resolveRoute, baseRoute, providerRoute, defaultRouteResolved, projectRule, projectRuleFor,
-  matchProjectGroup, enforceAllow, accountFor, acctHealth, limitFor, projectUsage, usageVerdict,
+  matchProjectGroup, enforceAllow, accountFor, autoAccount, acctHealth, limitFor, projectUsage, usageVerdict,
   localTarget, isClaudeModel, isGated, sleep,
 };

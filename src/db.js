@@ -82,14 +82,20 @@ async function dbExec(sql, params = []) {
 // a freshly restarted container still shows real headroom before the first Anthropic response lands.
 const ACCT_CACHE = new Map();
 
+// Accounts whose login itself is dead (403 permission_error: "OAuth authentication is currently not
+// allowed for this organization"). A 429 waits for a reset; this does not — no window reset revives
+// a cancelled subscription. Marked/cleared by refreshAccountLimits(); read by the auto account
+// picker so it never selects a corpse. In-memory only: a restart re-learns it on the next sweep.
+const ACCT_DEAD = new Set();
+
 const FACET_CACHE = { at: 0, val: null };
 // account name → Anthropic org-id, learned off response headers. Lets the accounts view join a pool
 // entry to its acct_limits row without the caller having to know the opaque org id.
 const ORG_OF_ACCOUNT = new Map();
 
 async function primeAcctCache() {
-  for (const r of await dbRows("SELECT org_id,u5,u7,s5,s7,ts,account FROM acct_limits")) {
-    ACCT_CACHE.set(r.org_id, { u5: r.u5, u7: r.u7, s5: r.s5, s7: r.s7, ts: Number(r.ts) || 0 });
+  for (const r of await dbRows("SELECT org_id,u5,u7,reset5,reset7,s5,s7,ts,account FROM acct_limits")) {
+    ACCT_CACHE.set(r.org_id, { u5: r.u5, u7: r.u7, reset5: r.reset5, reset7: r.reset7, s5: r.s5, s7: r.s7, ts: Number(r.ts) || 0 });
     if (r.account) ORG_OF_ACCOUNT.set(r.account, r.org_id);
   }
   if (ACCT_CACHE.size) console.log(`[log] primed headroom for ${ACCT_CACHE.size} account(s)`);
@@ -121,7 +127,9 @@ function recordLimits(headers, project, model, account) {
         project || null, model || null, account || null],
     );
     // Keep the in-process snapshot warm so acctHealth() stays synchronous (adminState is not async).
-    ACCT_CACHE.set(org, { u5: num(u5), u7: num(u7), s5: h("anthropic-ratelimit-unified-5h-status") || null,
+    ACCT_CACHE.set(org, { u5: num(u5), u7: num(u7),
+      reset5: num(h("anthropic-ratelimit-unified-5h-reset")), reset7: num(h("anthropic-ratelimit-unified-7d-reset")),
+      s5: h("anthropic-ratelimit-unified-5h-status") || null,
       s7: h("anthropic-ratelimit-unified-7d-status") || null, ts: Date.now() });
   } catch { /* never let limit-harvest break a request */ }
 }
@@ -187,5 +195,5 @@ async function clearCalls() {
 
 module.exports = {
   initDb, dbUp, dbRows, dbRow, dbExec, dbWrite, recordCall, recordLimits, primeAcctCache, primeAcctCacheSoon, clearCalls,
-  ACCT_CACHE, ORG_OF_ACCOUNT, FACET_CACHE, clip, DATABASE_URL, CONTENT_CAP,
+  ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE, clip, DATABASE_URL, CONTENT_CAP,
 };

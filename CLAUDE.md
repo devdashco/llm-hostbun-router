@@ -122,6 +122,13 @@ These are load-bearing decisions, not oversights. Each one was a bug once.
 1. **One project → one account. No rotation, ever.** `accountFor(project)` reads
    `projectAccounts[project] || defaultAccount`. No header can override it. Rotating accounts blows
    the per-org prompt cache (~12× cost) and makes "who spent this?" unanswerable after the fact.
+   **One narrow, opt-in exception (2026-07-12):** `accountStrategy: "soonest-weekly-reset"` serves
+   **app**-kind consumers from the usable account whose 7d window resets soonest (`autoAccount()` in
+   `routing.js`; flipped via `POST /api/claudecode/strategy`, shown in `state.autoAccount`). It hops
+   roughly weekly (reset7 timestamps only move when a window rolls), never per request; devs keep
+   their pins; attribution still lands in `key_label`; with no weekly reading anywhere it falls back
+   to the pin — it never hops blind. When the strategy is on, `server.js` sweeps
+   `refreshAccountLimits()` over the pool every 30 min so every account's reset7 stays honest.
 2. **No fallback. Anywhere.** A 429 means the pinned account is out of quota → the caller is told.
    A 5xx means upstream failed → the caller is told. Answering anyway with a different model on a
    different provider (the old wrapper→crazyrouter path) hid both the cost and the truth.

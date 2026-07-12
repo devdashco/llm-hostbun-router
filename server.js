@@ -44,7 +44,7 @@ const { initDb, primeAcctCacheSoon, recordCall } = require("./src/db");
 const { extractProject, parseConsumer, authenticate, consumerEntry, startKeyUseFlush } = require("./src/identity");
 const { resolveRoute, accountFor, usageVerdict, sleep, isGated } = require("./src/routing");
 const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL, jsonEnforce, wantsJsonFormat } = require("./src/http");
-const { mergedModels, refreshClaudecodeModels, CLAUDECODE_MODEL_REFRESH_MS } = require("./src/claudecode");
+const { mergedModels, refreshClaudecodeModels, refreshAccountLimits, CLAUDECODE_MODEL_REFRESH_MS } = require("./src/claudecode");
 const { handleAdminApi } = require("./src/admin");
 const { PRICES_FILE } = require("./src/pricing");
 // Used on every refusal path (missing project, unknown consumer, bad key, unpinned account) and by
@@ -408,4 +408,11 @@ server.listen(PORT, () => {
   // and a failure leaves the seed in place rather than an empty list.
   refreshClaudecodeModels("boot").catch((e) => console.error(`[models] boot refresh: ${e.message}`));
   setInterval(() => refreshClaudecodeModels("interval").catch(() => {}), CLAUDECODE_MODEL_REFRESH_MS).unref();
+  // Auto account selection orders on each account's weekly reset, but the passive harvest only
+  // learns from accounts that serve traffic — with a single selected account, everyone else's
+  // reading would freeze. Sweep the pool (one 1-token haiku ping each, serial) so reset7 stays
+  // honest. Gated per tick, so flipping the strategy in the panel starts/stops it without a deploy.
+  const sweepLimits = async () => { for (const a of CFG.claudecodeAccountPool || []) await refreshAccountLimits(a); };
+  setTimeout(() => { if (CFG.accountStrategy === "soonest-weekly-reset") sweepLimits().catch(() => {}); }, 5000).unref();
+  setInterval(() => { if (CFG.accountStrategy === "soonest-weekly-reset") sweepLimits().catch(() => {}); }, 30 * 60 * 1000).unref();
 });

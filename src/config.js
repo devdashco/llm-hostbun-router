@@ -201,6 +201,11 @@ function envDefaults() {
     // defaultAccount: the one named account unpinned projects fall back to. "" = refuse instead.
     // Explicit by design — an empty default means a misconfigured caller fails loudly, not silently.
     defaultAccount: process.env.DEFAULT_ACCOUNT || "",
+    // accountStrategy: how the claudecode account is chosen for APP consumers (registry kind "app").
+    //   "pinned"              — projectAccounts only (the invariant default; devs always use this).
+    //   "soonest-weekly-reset" — apps are served by the usable account whose 7d window resets
+    //                            soonest (see autoAccount in routing.js). Opt-in, deliberate.
+    accountStrategy: process.env.ACCOUNT_STRATEGY === "soonest-weekly-reset" ? "soonest-weekly-reset" : "pinned",
     // projectGroups: bundle many projects (e.g. all seoul:* providers) under one rule. Each entry is
     // { name, prefixes:[...], provider?, model?, block? }. A project matches when its slug equals or
     // starts with any prefix (so "seoul:" catches seoul:probe, seoul:l1_metadata, …). block:true
@@ -409,6 +414,7 @@ function mergeConfig(base, saved) {
     if (Object.keys(pins).length) { c.projectAccounts = pins; c.consumerAccounts = pins; }
   }
   if (typeof saved.defaultAccount === "string") c.defaultAccount = saved.defaultAccount.trim();
+  if (["pinned", "soonest-weekly-reset"].includes(saved.accountStrategy)) c.accountStrategy = saved.accountStrategy;
   if (Array.isArray(saved.projectGroups)) {
     const pg = [];
     const seen = new Set();
