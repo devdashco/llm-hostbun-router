@@ -1025,6 +1025,13 @@ _SETUP_ITEMS = [
      "latest verdict; this shows the full report."),
     ("doctor --fix (enable missing LSPs)", "doctor_fix",
      "Enable the missing LSP plugins doctor found, at user scope, then re-check."),
+    ("route: gateway ⇄ direct (toggle)", "toggle_direct",
+     "Toggle DELIBERATE direct-connect. ON = bypass the llm.hostbun.cc router and hit "
+     "api.anthropic.com straight on the keychain login (faster; loses per-consumer "
+     "tracking for that window). OFF = route through the gateway as usual. Writes/removes "
+     "~/.claude-accounts/.cccc-force-direct, honored by every new shell (gateway-route.sh) "
+     "BEFORE the health probe, so it wins even when the router is up. Open a new pane / "
+     "re-source rc for running panes to pick it up."),
     ("update this tool (sync)", "sync",
      "git-pull this cccc checkout onto the latest code and re-vendor. Asks whether "
      "to also restart running ccc windows. Launch already auto-syncs when behind."),
@@ -1281,6 +1288,21 @@ def run(stdscr):
         elif action == "panes":
             _run_external(stdscr, ["python3", _PANES_SCRIPT])
             stdscr.timeout(REFRESH_MS)
+        elif action == "toggle_direct":
+            flag = os.path.expanduser("~/.claude-accounts/.cccc-force-direct")
+            route = os.path.expanduser("~/.claude/.cctl-route")
+            if os.path.exists(flag):
+                os.remove(flag)
+                try:                                  # blank the cache so next shell re-probes now
+                    os.remove(route)
+                except FileNotFoundError:
+                    pass
+                ok("route: GATEWAY — direct-connect off · new panes route through llm.hostbun.cc")
+            else:
+                os.makedirs(os.path.dirname(flag), exist_ok=True)
+                open(flag, "w").close()
+                ok("route: DIRECT — bypassing router · new panes hit api.anthropic.com "
+                   "(open a new pane / re-source rc for running ones)")
         elif action == "sync":
             restart = _confirm(stdscr, "sync: git-pull this checkout. also restart ccc panes onto new code?")
             busy("syncing (git pull + re-vendor)…")

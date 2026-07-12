@@ -33,6 +33,19 @@ _cctl_gateway_route() {
         marker="$HOME/.claude/.cctl-route" ttl=45 now state="" ts st key consumer
   now=$(date +%s 2>/dev/null) || return 0
 
+  # DELIBERATE force-direct override (TUI: Setup → direct-connect toggle, or
+  # `touch ~/.claude-accounts/.cccc-force-direct`). Router up but slow → the user
+  # would rather hit api.anthropic.com straight. Checked BEFORE the health probe and
+  # independent of the TTL cache, so it wins even when the router is reachable. Writes
+  # marker state `direct` (NOT `down`) so the statusline shows a plain `·direct`, not
+  # the loud red router-down fallback tag. `rm` the file (or toggle off) to route again.
+  if [ -f "$acctdir/.cccc-force-direct" ]; then
+    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_CUSTOM_HEADERS 2>/dev/null || true
+    mkdir -p "$HOME/.claude" 2>/dev/null
+    printf '%s\t%s\n' "$now" "direct" > "$marker" 2>/dev/null || true
+    return 0
+  fi
+
   # cached verdict (marker doubles as the TTL cache) — don't curl on every new shell.
   if [ -r "$marker" ]; then
     IFS='	' read -r ts st < "$marker" 2>/dev/null

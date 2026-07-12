@@ -468,28 +468,33 @@ def _route_tag(where: str) -> str:
     return f"{_DIM}·{where}{_RST}"
 
 
-def _gateway_fell_back() -> bool:
-    """True when THIS box is CONFIGURED to route through llm.hostbun.cc but the fail-open
-    resolver (shell/gateway-route.sh) currently has it going DIRECT because the router is
-    unreachable. `~/.claude-accounts/.cccc-key` present = configured for the gateway;
-    `~/.claude/.cctl-route` "ts<TAB>state" written by the resolver = its last verdict.
-    Distinguishes a fallback from a box that is deliberately direct — the whole reason to
-    surface it loudly. Any missing/garbled file → not a fallback (never cry wolf)."""
+def _route_state() -> str:
+    """The resolver's last verdict for a gateway-configured box, or "" when this box
+    isn't a gateway box at all. `~/.claude-accounts/.cccc-key` present = configured for
+    the gateway; `~/.claude/.cctl-route` "ts<TAB>state" = what shell/gateway-route.sh
+    last decided — `up` (routing), `down` (failed open, router unreachable), or `direct`
+    (DELIBERATE force-direct, user chose to bypass; ~/.claude-accounts/.cccc-force-direct).
+    Any missing/garbled file → "" (never cry wolf)."""
     if not os.path.exists(os.path.join(HOME, ".claude-accounts", ".cccc-key")):
-        return False
+        return ""
     try:
         with open(os.path.join(HOME, ".claude", ".cctl-route")) as f:
-            state = (f.read().split("\t", 1) + [""])[1].strip()
+            return (f.read().split("\t", 1) + [""])[1].strip()
     except (OSError, IndexError):
-        return False
-    return state == "down"
+        return ""
 
 
 def _direct_route_tag() -> str:
-    """`·direct` normally — but a LOUD red `⚠router-down·direct` when this gateway box has
-    failed open to the direct keychain login, so the lost tracking window is never silent."""
-    if _gateway_fell_back():
+    """`·direct` for a plain login box. A gateway box that's currently direct gets a
+    distinct tag so the reason is never ambiguous:
+      router-down fallback (state `down`) → LOUD red `⚠router-down·direct`
+      deliberate force-direct (state `direct`) → yellow `·direct⏵bypass` (chose to skip
+        the router for speed; per-consumer tracking is off for this window)."""
+    st = _route_state()
+    if st == "down":
         return f"{_RED}⚠router-down·direct{_RST}"
+    if st == "direct":
+        return f"{_YEL}·direct⏵bypass{_RST}"
     return _route_tag("direct")
 
 
