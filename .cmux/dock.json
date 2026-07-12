@@ -11,6 +11,13 @@
       "cwd": ".",
       "height": 260,
       "command": "until npm run dev; do echo '[dock] router exited \u2014 restarting in 2s (Ctrl-C to stop)'; sleep 2; done"
+    },
+    {
+      "id": "router-prod",
+      "title": "\ud83d\udda5 Router :8787 (prod data)",
+      "cwd": ".",
+      "height": 260,
+      "command": "until npm run dev:prod; do echo '[dock] router exited \u2014 restarting in 2s (Ctrl-C to stop)'; sleep 2; done"
     }
   ],
   "links": [
