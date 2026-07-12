@@ -468,6 +468,31 @@ def _route_tag(where: str) -> str:
     return f"{_DIM}·{where}{_RST}"
 
 
+def _gateway_fell_back() -> bool:
+    """True when THIS box is CONFIGURED to route through llm.hostbun.cc but the fail-open
+    resolver (shell/gateway-route.sh) currently has it going DIRECT because the router is
+    unreachable. `~/.claude-accounts/.cccc-key` present = configured for the gateway;
+    `~/.claude/.cctl-route` "ts<TAB>state" written by the resolver = its last verdict.
+    Distinguishes a fallback from a box that is deliberately direct — the whole reason to
+    surface it loudly. Any missing/garbled file → not a fallback (never cry wolf)."""
+    if not os.path.exists(os.path.join(HOME, ".claude-accounts", ".cccc-key")):
+        return False
+    try:
+        with open(os.path.join(HOME, ".claude", ".cctl-route")) as f:
+            state = (f.read().split("\t", 1) + [""])[1].strip()
+    except (OSError, IndexError):
+        return False
+    return state == "down"
+
+
+def _direct_route_tag() -> str:
+    """`·direct` normally — but a LOUD red `⚠router-down·direct` when this gateway box has
+    failed open to the direct keychain login, so the lost tracking window is never silent."""
+    if _gateway_fell_back():
+        return f"{_RED}⚠router-down·direct{_RST}"
+    return _route_tag("direct")
+
+
 def _account():
     """(icon, name, note) for the account serving THIS pane — RAW name so the caller
     can colour it by how hot the account is. `note` is a pre-styled dim suffix: a ✓ once
@@ -518,8 +543,8 @@ def _account():
         note = f"{_GRN}✓{_RST}"
         if star and star != verified:                   # keychain token ≠ cccc's ★ → drift
             note += f"{_YEL}→{star}{_RST}"
-        return ("👤", verified, note + _route_tag("direct"))
-    return ("👤", star or email or "login", _route_tag("direct"))
+        return ("👤", verified, note + _direct_route_tag())
+    return ("👤", star or email or "login", _direct_route_tag())
 
 
 def _limit_seg(label: str, node: dict) -> str:

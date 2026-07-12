@@ -1,24 +1,41 @@
 # gateway-route.sh — route local Claude Code through the llm.hostbun.cc gateway,
-# FAIL-OPEN. Source this from your shell rc INSTEAD of a hard-coded
-# `export ANTHROPIC_BASE_URL=…`.
+# FAIL-OPEN. Source this from your shell rc (install.sh wires it into ~/.zshenv,
+# which EVERY zsh — including cmux Dock / non-interactive panes — sources) INSTEAD
+# of hard-coding ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json.
 #
-# Why: the gateway (llm.hostbun.cc) gives us routing + per-consumer account lock +
-# full usage tracking. But making it the base URL unconditionally means a gateway
-# hiccup breaks EVERY local claude. Fail-open fixes that: if the gateway answers,
-# route through it; if it doesn't, leave ANTHROPIC_BASE_URL unset so claude talks
-# to api.anthropic.com directly and keeps working (we just lose tracking for that
-# window). The check result is cached briefly so we don't curl on every new shell.
+# WHY it can't live in settings.json: settings.json `env` OVERRIDES the shell env
+# (verified), and it's static JSON — so a hard-coded base URL there can never fall
+# back when the router is down; every local `claude` on this box just breaks. This
+# function decides the base URL per shell instead:
+#   router up   → export gateway identity (base URL + this box's sk-llm key + headers)
+#   router down → UNSET all three → `claude` talks to api.anthropic.com directly on
+#                 the keychain OAuth login (same Max subscription, we just lose
+#                 per-consumer tracking for that window). Never breaks.
 #
-# Same file works on every box (pmac dev clone, pbox/wmac deploy clone); each box's
-# account + identity ride in ~/.claude/settings.json env.ANTHROPIC_CUSTOM_HEADERS
-# (X-Consumer / X-Project), written by cccc. Account selection is the router's
-# server-side pin map (/api/pins) — headers can't override it. This only decides base URL.
+# For the fallback to be usable, ~/.claude/settings.json env must NOT pin
+# ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN (install.sh migrates them out). Account
+# selection stays the router's SERVER-side pin (/api/pins) — headers can't override
+# it; this only decides base URL + whether to send our key at all.
+#
+# Identity (per box, written by install.sh):
+#   ~/.claude-accounts/.cccc-key      the box's sk-llm-… consumer key (0600). Optional:
+#                                     absent → route through the gateway keyless (auth
+#                                     `optional` mode) or not at all.
+#   ~/.claude-accounts/.cccc-machine  the consumer id (→ X-Consumer / X-Project:<id>-claude)
+#
+# State marker for the statusline — ~/.claude/.cctl-route, "ts<TAB>state":
+#   the statusline reads it (plus whether .cccc-key exists) to tell a DELIBERATE
+#   direct box from one that FELL BACK because the router is down, and flags the
+#   latter loudly instead of a silent `·direct`.
 
 _cctl_gateway_route() {
-  local url="https://llm.hostbun.cc" cache="$HOME/.claude/.cctl-gw" ttl=45 now state="" ts st
+  local url="${CCCC_GATEWAY_BASE:-https://llm.hostbun.cc}" acctdir="$HOME/.claude-accounts" \
+        marker="$HOME/.claude/.cctl-route" ttl=45 now state="" ts st key consumer
   now=$(date +%s 2>/dev/null) || return 0
-  if [ -r "$cache" ]; then
-    IFS='	' read -r ts st < "$cache" 2>/dev/null
+
+  # cached verdict (marker doubles as the TTL cache) — don't curl on every new shell.
+  if [ -r "$marker" ]; then
+    IFS='	' read -r ts st < "$marker" 2>/dev/null
     [ -n "$ts" ] && [ "$((now - ts))" -lt "$ttl" ] && state="$st"
   fi
   if [ -z "$state" ]; then
@@ -27,13 +44,28 @@ _cctl_gateway_route() {
     else
       state=down
     fi
-    printf '%s\t%s\n' "$now" "$state" > "$cache" 2>/dev/null || true
+    mkdir -p "$HOME/.claude" 2>/dev/null
+    printf '%s\t%s\n' "$now" "$state" > "$marker" 2>/dev/null || true
   fi
+
   if [ "$state" = up ]; then
     export ANTHROPIC_BASE_URL="$url"
+    [ -r "$acctdir/.cccc-key" ] && key=$(cat "$acctdir/.cccc-key" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$key" ]; then
+      export ANTHROPIC_AUTH_TOKEN="$key"
+    else
+      unset ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+    fi
+    consumer=$(cat "$acctdir/.cccc-machine" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$consumer" ]; then
+      export ANTHROPIC_CUSTOM_HEADERS="X-Consumer: $consumer
+X-Project: $consumer-claude"
+    fi
   else
-    # gateway unreachable → go direct so claude never breaks on our account.
-    unset ANTHROPIC_BASE_URL 2>/dev/null || true
+    # gateway unreachable → go direct so claude never breaks. Drop OUR key too: it's a
+    # router credential, worthless (401) against api.anthropic.com — unset it so claude
+    # uses the keychain OAuth login instead.
+    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_CUSTOM_HEADERS 2>/dev/null || true
   fi
 }
 

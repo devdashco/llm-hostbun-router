@@ -1,4 +1,4 @@
-import { html, useState, useEffect, useCallback, api, nfmt, usd, ago, fmtMs, fmtTime, seriesColor, Chip, ProviderPill, KV, Card, CardHead, Chart, Tabs, PageHead, useApp } from "../core.js";
+import { html, useState, useEffect, useCallback, api, nfmt, usd, ago, fmtMs, fmtTime, seriesColor, Chip, ProviderPill, KindPill, KV, Card, CardHead, Chart, Tabs, PageHead, useApp } from "../core.js";
 
 /* ───────── STATS ───────── */
 const WIN_ITEMS=[['15m','Last 15 min'],['1h','Last hour'],['6h','Last 6h'],['24h','Last 24h'],['7d','Last 7d'],['30d','Last 30d'],['all','All time']];
@@ -10,9 +10,14 @@ function Stats(){
   const [metric,setMetric]=useState('tok'); const [by,setBy]=useState('provider');
   const [sort,setSort]=useState({key:'tok',dir:-1});
   const [open,setOpen]=useState({});   // consumer -> jobs expanded
+  const [usage,setUsage]=useState(null);   // /usage: identity rollups (kind, developer, account×kind)
   const load=useCallback(async()=>{ try{ setS(await api('stats?window='+encodeURIComponent(win))); }catch(e){} },[win]);
   useEffect(()=>{load();},[load]);
   useEffect(()=>{ (async()=>{ try{ setSeries(await api('series?window='+encodeURIComponent(win)+'&by='+by)); }catch(e){} })(); },[win,by]);
+  // The identity breakdown (dev/app, per developer, account×kind) comes from /usage, whose windows
+  // are a subset — map the stats window onto the nearest one.
+  useEffect(()=>{ const uw={'15m':'1h','1h':'1h','6h':'24h','24h':'24h','7d':'7d','30d':'30d','all':'30d'}[win]||'24h';
+    (async()=>{ try{ setUsage(await api('usage?win='+uw)); }catch(e){} })(); },[win]);
   return html`
   <${PageHead} title="Usage" desc="Where the tokens went: by provider, project, client and model."
     onRefresh=${load}
@@ -71,13 +76,33 @@ function Stats(){
         return html`<tr><td class="mono" style="font-size:12px">${r.req_model||'-'}</td><td><${ProviderPill} provider=${r.provider}/></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono mut" style="font-size:12px">${nfmt(r.ptok)} → ${nfmt(r.ctok)}</td><td class="mono" style="font-size:12px">${r.cr>0?html`<span style="color:var(--ok)">${nfmt(r.cr)}</span> <span class="mut">${hit}%</span>`:html`<span class="mut">—</span>`}</td><td class="mono">${usd(r.usd)}</td><td class="mono">${fmtMs(r.avg_ms)}</td></tr>`;})}
     </table></div>
   </${Card}>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px">
-    <${Card}><${CardHead} title="By provider"/><div class="tablewrap"><table><tr><th>provider</th><th>calls</th><th>tokens</th><th>avg</th><th>err</th></tr>
-      ${(s.byProvider||[]).map(r=>html`<tr><td><${ProviderPill} provider=${r.provider}/></td><td class="mono">${r.n}</td><td class="mono">${(r.tok||0).toLocaleString()}</td><td class="mono">${fmtMs(r.avg_ms)}</td><td class="mono" style=${r.errors>0?'color:var(--danger)':''}>${r.errors??'—'}</td></tr>`)}
-    </table></div></${Card}>
-    <${Card}><${CardHead} title="By account"/><div class="tablewrap"><table><tr><th>key</th><th>calls</th></tr>
-      ${(s.byKey||[]).map(r=>html`<tr><td class="mono" style="font-size:12px">${r.key_label||''}</td><td class="mono">${r.n}</td></tr>`)}
-    </table></div></${Card}>
+  ${/* Identity breakdowns (from /usage): who — by kind, by person, and whether an app is eating a
+       subscription. The old "By provider" table here duplicated the share-bars above; gone. */''}
+  <${Card}>
+    <${CardHead} title="By kind" hint=${html`<b>dev</b> = people's machines · <b>app</b> = deployed code · <b>unregistered</b> = seen in the log, not in the registry. Registration lives on the <a href="/identity" onClick=${e=>{e.preventDefault();go('identity','consumers');}}>Consumers</a> tab.`}/>
+    ${usage&&usage.dbReady!==false?html`<div class="grid">
+      ${['dev','app','unregistered'].map(k=>{ const r=(usage.byKind||[]).find(x=>x.key===k)||{calls:0,tokens:0};
+        return html`<div class="kv"><div class="n"><${KindPill} kind=${k}/></div>
+          <div class="v">${nfmt(r.tokens)}<span class="mut" style="font-size:12px;font-weight:400"> tok</span></div>
+          <div class="mut mono" style="font-size:11.5px;margin-top:2px">${nfmt(r.calls)} calls</div></div>`;
+      })}
+    </div>`:html`<span class="mut">loading…</span>`}
+  </${Card}>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px">
+    <${Card}><${CardHead} title="By developer" hint="Every machine a person owns, summed."/>
+      <div class="tablewrap"><table><tr><th>owner</th><th>calls</th><th>tokens</th><th>err</th></tr>
+        ${((usage&&usage.byOwner)||[]).length?usage.byOwner.map(o=>html`<tr key=${o.key}>
+          <td class="mono"><b>${o.key}</b></td><td class="mono">${nfmt(o.calls)}</td>
+          <td class="mono">${nfmt(o.tokens)}</td><td class="mono ${o.errors?'down':'mut'}">${o.errors}</td></tr>`)
+          :html`<tr><td colspan="4" class="hint">No dev traffic, or no dev consumer has an owner yet.</td></tr>`}
+      </table></div></${Card}>
+    <${Card}><${CardHead} title="By account × kind" hint="Is an app starving your Claude Code?"/>
+      <div class="tablewrap"><table><tr><th>account</th><th>kind</th><th>calls</th><th>tokens</th></tr>
+        ${((usage&&usage.byAccountKind)||[]).length?usage.byAccountKind.map(r=>html`<tr key=${r.account+r.kind}>
+          <td class="mono"><b>${r.account}</b></td><td><${KindPill} kind=${r.kind}/></td>
+          <td class="mono">${nfmt(r.calls)}</td><td class="mono">${nfmt(r.tokens)}</td></tr>`)
+          :html`<tr><td colspan="4" class="hint">No attributed claudecode traffic in this window.</td></tr>`}
+      </table></div></${Card}>
   </div>
   `}`;
 }

@@ -98,6 +98,12 @@ const ProjectChip = ({p}) => {
   if(i<0) return html`<${Chip} cls="tag">${p}<//>`;
   return html`<${Chip} cls="tag">${p.slice(0,i)}<span style="opacity:.55;font-weight:400">:${p.slice(i+1)}</span><//>`;
 };
+/* Consumer kind badge: dev (a person's machine) / app (deployed code) / unregistered (in the log,
+   not in the registry). Shared because both the Consumers registry and the Usage breakdowns show it. */
+const KindPill = ({kind}) => {
+  const cls={dev:'tag info',app:'tag ok',unregistered:'tag bad'}[kind]||'tag';
+  return html`<span class=${'pill '+cls}>${kind}</span>`;
+};
 const KV = ({n,children}) => html`<div class="kv"><div class="n">${n}</div><div class="v">${children}</div></div>`;
 const Card = ({cls,children}) => html`<div class="card ${cls||''}">${children}</div>`;
 /* Section header: title, one line of why-it-matters, and the actions that belong to it. */
@@ -212,7 +218,7 @@ export {
   clone, nfmt, usd, ago, fmtMs, fmtTime, SLOW_MS,
   providerCls, PALETTE, PROVIDER_COLOR, seriesColor, OK, WARN, DANGER, ACCENT, ORANGE, VIOLET,
   ICON, Svg, NAV, SLUG_ALIAS, BASE, slugFor, nameFor,
-  Pill, Chip, Dot, ProviderPill, StatusPill, ProjectChip, KV, Card, CardHead, ParamBadges, TriSel, FacetSel,
+  Pill, Chip, Dot, ProviderPill, StatusPill, ProjectChip, KindPill, KV, Card, CardHead, ParamBadges, TriSel, FacetSel,
   METRIC_LABEL, buildChart, Chart, Tabs, Seg, useTab, PageHead,
   Ctx, useApp,
 };

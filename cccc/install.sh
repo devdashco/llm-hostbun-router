@@ -179,6 +179,58 @@ else:
 PY
 true
 
+# --- 2b'. gateway FAIL-OPEN routing (dynamic base URL; direct keychain fallback) ---
+# Moves the gateway identity OUT of the static settings.json env — which OVERRIDES the
+# shell and is plain JSON, so it can never fail over — and INTO the files the fail-open
+# resolver (shell/gateway-route.sh) reads. Result: router up → route through it; router
+# down → UNSET the gateway env → `claude` talks to api.anthropic.com on the keychain
+# OAuth login (never breaks). The statusline flags the fallback loudly.
+#
+# OPT-IN (CLAUDECTL_GATEWAY_ROUTE=1) on purpose: it depends on the box SOURCING its shell
+# rc before launching claude. Interactive dev boxes do; a daemon that execs claude from a
+# launcher that skips rc would fall to direct and MISBILL. So we don't flip it fleet-wide —
+# enable it per box (deploy.sh can pass it) once you've confirmed rc is sourced there.
+if [ "${CLAUDECTL_GATEWAY_ROUTE:-0}" = "1" ] && [ -f "$DIR/shell/gateway-route.sh" ]; then
+  python3 - "$HOME/.claude/settings.json" "$HOME/.claude-accounts" <<'PY' && say "gateway identity migrated out of settings.json env (fail-open ready)" || true
+import json, os, sys
+path, acctdir = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f: cfg = json.load(f)
+except (OSError, json.JSONDecodeError): cfg = {}
+env = cfg.get("env")
+if not isinstance(env, dict): sys.exit(1)
+os.makedirs(acctdir, exist_ok=True)
+tok = env.get("ANTHROPIC_AUTH_TOKEN")
+if isinstance(tok, str) and tok.startswith("sk-llm-"):        # our router key → key file (0600)
+    kp = os.path.join(acctdir, ".cccc-key")
+    with open(kp, "w") as f: f.write(tok.strip())
+    os.chmod(kp, 0o600)
+for ln in (env.get("ANTHROPIC_CUSTOM_HEADERS") or "").splitlines():   # X-Consumer → machine id
+    if ln.lower().startswith("x-consumer:"):
+        name = ln.split(":", 1)[1].strip()
+        mp = os.path.join(acctdir, ".cccc-machine")
+        cur = open(mp).read().strip() if os.path.exists(mp) else ""
+        if name and not cur:
+            with open(mp, "w") as f: f.write(name)
+changed = False
+for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"):
+    if k in env: del env[k]; changed = True                # the resolver owns these now
+if changed:
+    with open(path, "w") as f: json.dump(cfg, f, indent=2)
+else:
+    sys.exit(1)
+PY
+  true
+  RESOLVER="$DIR/shell/gateway-route.sh"; RMARK="# cccc gateway fail-open route"
+  _rcs="$HOME/.zshenv"; [ "$(uname 2>/dev/null)" = Linux ] && _rcs="$_rcs $HOME/.bashrc"
+  for rc in $_rcs; do
+    if ! grep -qF "$RMARK" "$rc" 2>/dev/null; then
+      printf '\n[ -f "%s" ] && . "%s"  %s\n' "$RESOLVER" "$RESOLVER" "$RMARK" >> "$rc"
+      say "sourced gateway fail-open resolver in $rc"
+    fi
+  done
+fi
+
 # --- 2c. strip ALL retired claudectl crons (no background sync/switch) -----
 if command -v crontab >/dev/null 2>&1; then
   CUR="$(crontab -l 2>/dev/null || true)"
