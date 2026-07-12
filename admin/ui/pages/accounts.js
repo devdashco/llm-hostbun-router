@@ -63,12 +63,15 @@ const Bar=({v})=>{
    (rolling 5h + weekly), not a capability, and reading it as one only ever misled. The bars below
    are that usage window. */
 function Accounts(){
-  const [d,setD]=useState(null); const [now,setNow]=useState(Date.now()); const [err,setErr]=useState('');
+  const [d,setD]=useState(null); const [now,setNow]=useState(Date.now()); const [off,setOff]=useState(0); const [err,setErr]=useState('');
   // A live reading overlaid on top of the harvested row, keyed by account. Set by refreshLimits(),
   // which pings each subscription once and reads its real `anthropic-ratelimit-unified-*` headers.
   const [fresh,setFresh]=useState({}); const [busy,setBusy]=useState(''); const [confirmRm,setConfirmRm]=useState('');
-  const load=useCallback(async()=>{ try{ const r=await api('accounts'); setD(r); setNow(r.now||Date.now()); setErr(''); }catch(e){ setErr(e.message||'load failed'); } },[]);
+  const load=useCallback(async()=>{ try{ const r=await api('accounts'); setD(r); if(r.now) setOff(r.now-Date.now()); setErr(''); }catch(e){ setErr(e.message||'load failed'); } },[]);
   useEffect(()=>{ load(); const t=setInterval(load,15000); return ()=>clearInterval(t); },[load]);
+  // Tick every second so the countdowns move. Anchored to server time via `off` (r.now - Date.now())
+  // so a skewed client clock never makes a window look reset early or late.
+  useEffect(()=>{ const t=setInterval(()=>setNow(Date.now()+off),1000); return ()=>clearInterval(t); },[off]);
   // Ping ONE account (or the whole pool) for its live window. Not fired on mount — only on click —
   // so the page never spends tokens just by being opened.
   async function refreshLimits(name){
@@ -101,6 +104,28 @@ function Accounts(){
     const time=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     const day=d.toLocaleDateString([], ms<86400000?{weekday:'short'}:{month:'short',day:'numeric'});
     return `${day} ${time}`; };
+  // Full local date+time, e.g. "Sat, Jul 12, 14:30" — shown so there is no ambiguity about WHICH day.
+  const resetFull=sec=>sec?new Date(sec*1000).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+  // Live countdown to the reset, ticking each second. "2d 4h", "3h 42m 10s", "8m 03s", "now".
+  const countdown=sec=>{ if(!sec) return ''; let s=Math.floor(sec-now/1000); if(s<=0) return 'now';
+    const dd=Math.floor(s/86400); s-=dd*86400; const h=Math.floor(s/3600); s-=h*3600; const m=Math.floor(s/60); s-=m*60;
+    const p=n=>String(n).padStart(2,'0');
+    if(dd>0) return `${dd}d ${h}h ${p(m)}m`;
+    if(h>0) return `${h}h ${p(m)}m ${p(s)}s`;
+    return `${m}m ${p(s)}s`; };
+  // Anthropic's per-window status → a short label + colour. `allowed_warning` = close to the cap.
+  const statusLabel=st=>{ if(!st||st==='allowed') return null; if(st==='allowed_warning') return {t:'warning',c:'var(--warn)'};
+    if(st==='rejected'||st==='blocked') return {t:st,c:'var(--danger)'}; return {t:st,c:'var(--fg-sub)'}; };
+  // One usage window (5h or 7d): utilisation bar + %, its status, the reset clock/date, and a live
+  // countdown that ticks down to the reset. Full date on hover so "Sat" is never ambiguous.
+  const windowCell=(u,resetSec,st)=>{ const sl=statusLabel(st); const pct=u==null?null:Math.round(u*100);
+    return html`
+      <div class="flex" style="align-items:baseline;gap:6px">
+        <div style="flex:1;min-width:52px"><${Bar} v=${u}/></div>
+        ${sl?html`<span style=${'font-size:9.5px;font-weight:600;color:'+sl.c}>${sl.t}</span>`:''}
+      </div>
+      ${resetSec?html`<div class="hint" style="font-size:10px" title=${'resets '+resetFull(resetSec)}>↺ ${resetAt(resetSec)}</div>
+        <div class="mono" style="font-size:10.5px;color:var(--accent);font-weight:600" title=${'resets '+resetFull(resetSec)}>in ${countdown(resetSec)}</div>`:''}`; };
   const accts=(d&&d.accounts)||[];
   const s=(d&&d.summary)||{};
   return html`
@@ -125,7 +150,7 @@ function Accounts(){
     ${err?html`<p class="down">${err}</p>`:''}
     ${!d?html`<p class="hint">loading…</p>`:''}
     <div class="tablewrap" style="margin-top:12px"><table>
-      <tr><th>account</th><th>pinned projects</th><th>5h used · resets</th><th>7d used · resets</th>
+      <tr><th>account</th><th>pinned projects</th><th title="rolling 5-hour window: used %, status, reset time + live countdown">5h window</th><th title="rolling 7-day window: used %, status, reset time + live countdown">7d window</th>
         <th title="all-time calls / tokens through this account">usage</th><th>last 24h</th><th></th></tr>
       ${accts.map(a=>{
         const fr=fresh[a.name];
@@ -134,11 +159,12 @@ function Accounts(){
         const liveNo=!!(fr&&!fr.reading);
         return html`<tr key=${a.name} class=${live?'live-row':''}>
           <td class="mono"><b>${a.name}</b>${a.org?html`<div class="hint" style="font-size:10px" title=${a.org}>${a.org.slice(0,12)}…</div>`:html`<div class="hint" style="font-size:10px">org unknown</div>`}
-            ${live?html`<div class="hint" style="font-size:9.5px;color:var(--ok)">● live · ${since(fr.checkedAt)}</div>`:''}
+            ${live?html`<div class="hint" style="font-size:9.5px;color:var(--ok)">● live · ${since(fr.checkedAt)}</div>`
+              :(l&&l.ts?html`<div class="hint" style="font-size:9.5px" title="last reading harvested off real traffic — click ↻ for a live read">as of ${since(l.ts)}</div>`:'')}
             ${liveNo?html`<div class="hint" style=${'font-size:9.5px;color:'+(fr.status===403?'var(--danger)':'var(--warn)')} title=${fr.errMsg||fr.error||'the account answered but sent no rate-limit headers — usually a 429'}>${fr.status===403?'✕ OAuth disabled':`live: no reading${fr.status?` (${fr.status})`:''}`}${fr.error?` (${fr.error})`:''}</div>`:''}</td>
           <td>${a.projects.length?a.projects.map(pr=>html`<${Chip} cls="tag ok">${pr}<//> `):html`<span class="mut" style="font-size:11px">— unused</span>`}</td>
-          <td style="min-width:96px"><${Bar} v=${l&&l.u5}/>${l&&l.reset5?html`<div class="hint" style="font-size:10px" title=${'5h window resets '+new Date(l.reset5*1000).toLocaleString()}>↺ ${resetAt(l.reset5)} <span class="mut">· ${rel(l.reset5)}</span></div>`:(l?html`<div class="hint" style="font-size:10px">${live?'live':since(l.ts)}</div>`:'')}</td>
-          <td style="min-width:96px"><${Bar} v=${l&&l.u7}/>${l&&l.reset7?html`<div class="hint" style="font-size:10px" title=${'7d window resets '+new Date(l.reset7*1000).toLocaleString()}>↺ ${resetAt(l.reset7)} <span class="mut">· ${rel(l.reset7)}</span></div>`:''}${l&&(l.s5==='allowed_warning'||l.s7==='allowed_warning')?html`<div class="warnp" style="font-size:10px">warning</div>`:''}</td>
+          <td style="min-width:132px">${l?windowCell(l.u5,l.reset5,l.s5):html`<span class="hint" style="font-size:11px">no reading</span>`}</td>
+          <td style="min-width:132px">${l?windowCell(l.u7,l.reset7,l.s7):''}</td>
           <td class="mono" style="font-size:12px;white-space:nowrap">${nfmt(a.usage.calls)} calls<br/>
             <span class="mut">${nfmt(a.usage.tokens)} tok</span>
             ${a.usage.rateLimited>0?html`<br/><span class="down" style="font-size:11px" title="429s served to callers — with no fallback, each one is a failed request">${nfmt(a.usage.rateLimited)}× 429</span>`:''}</td>
