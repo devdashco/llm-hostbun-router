@@ -1287,7 +1287,9 @@ def run(stdscr):
                 C_ACTIVE if loc else C_WARN)
             put(4, 0, ("  bars = % USED (green ok · yellow busy · red almost gone)  ·  "
                        "WEEKLY is the binding limit  ·  ★ pinned acct  ● gateway active")[:w], C_DIM)
-            put(5, 0, f"  {'ACCOUNT':<12}{'STATE':<9}{'WEEKLY (binding)':<22}{'5-HOUR':<11}BOX",
+            # column x-positions must mirror the row draw below: mark(2) + name(12)
+            # + ·org(6) + state(9) + weekly bar(11) + " · reset"(9) + " " + 5h bar(11)
+            put(5, 0, f"  {'ACCOUNT':<12}{'ORG':<6}{'STATE':<9}{'WEEKLY':<11}{' · RESETS':<9} {'5-HOUR':<11}  BOX",
                 C_ACCENT | curses.A_UNDERLINE)
             if data["err"]:
                 put(h - 5, 2, f"! {data['err']}"[:w - 3], C_HOT)
