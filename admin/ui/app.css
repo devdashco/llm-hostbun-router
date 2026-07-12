@@ -226,12 +226,30 @@ td.num,td .num{font-variant-numeric:tabular-nums}
 .dot{width:6px;height:6px;border-radius:999px;flex:0 0 auto;display:inline-block}
 /* ── pick: click-to-toggle model/provider chip (routing allowlist) ─────────── */
 .pick{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;font:11.5px var(--mono);
-  padding:2px 9px;border:1px solid var(--border);border-radius:999px;color:var(--fg-mut);background:var(--sunken);white-space:nowrap}
+  padding:3px 10px;border:1px solid var(--border);border-radius:999px;color:var(--fg-mut);background:var(--sunken);
+  white-space:nowrap;transition:border-color .12s ease,color .12s ease,background .12s ease;line-height:1.35}
 .pick:hover{border-color:var(--border-2);color:var(--fg)}
+.pick:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .pick.on{color:var(--fg);border-color:var(--accent);background:oklch(0.660 0.135 252 / .16)}
-.pick.on::before{content:"✓";font-weight:700;color:var(--accent)}
-.pick-grp{margin-top:8px}
-.pick-grp>.lbl{font:11px var(--mono);color:var(--fg-mut);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em}
+.pick.on::before{content:"✓";font-weight:700;font-size:10px;color:var(--accent)}
+/* provider-tinted picks inherit the identity colour when active */
+.pick.on.local{border-color:var(--p-local);background:oklch(0.740 0.160 152 / .14)}
+.pick.on.local::before{color:var(--p-local)}
+.pick.on.claudecode{border-color:var(--p-claudecode);background:oklch(0.730 0.160 52 / .14)}
+.pick.on.claudecode::before{color:var(--p-claudecode)}
+.pick.on.crazyrouter{border-color:var(--p-crazyrouter);background:oklch(0.660 0.135 252 / .16)}
+.pick.on.crazyrouter::before{color:var(--p-crazyrouter)}
+/* the allowlist popover: a real panel, anchored under its trigger */
+.picker{margin-top:8px;padding:14px;border:1px solid var(--border-2);border-radius:var(--r-lg);
+  min-width:280px;max-width:440px;background:var(--panel);box-shadow:0 8px 28px oklch(0 0 0 / .38)}
+.picker-grp{margin-top:14px}
+.picker-grp:first-child{margin-top:0}
+.picker-grp .lbl{display:flex;align-items:center;gap:8px;font:11px var(--mono);color:var(--fg-mut);
+  margin-bottom:7px;text-transform:uppercase;letter-spacing:.05em}
+.picker-grp .lbl .sp{flex:1}
+.picker-grp .lbl button{font:10.5px var(--mono);padding:1px 7px;color:var(--fg-mut);
+  background:transparent;border:1px solid var(--border);border-radius:999px}
+.picker-grp .lbl button:hover{color:var(--fg);border-color:var(--border-2)}
 .pick-wrap{display:flex;gap:6px;flex-wrap:wrap}
 
 /* ── stats ────────────────────────────────────────────────────────────────── */

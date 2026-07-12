@@ -38,25 +38,16 @@ function projectRule(rule, m, label) {
   if (!rule.provider) return null;
   return providerRoute(rule.provider, rule.model || m, `override: ${label}`);
 }
-// First projectGroup whose prefix matches this project slug (exact or startsWith). null if none.
-function matchProjectGroup(pkey) {
-  for (const g of CFG.projectGroups || [])
-    for (const pre of g.prefixes || [])
-      if (pkey === pre || pkey.startsWith(pre)) return g;
-  return null;
-}
-
-// The rule that governs `pkey`, resolved exactly like accountFor(): exact path, then the consumer,
-// then a group. A rule is a property of WHO calls, not of which workload they run — before this,
+// The rule that governs `pkey`, resolved exactly like accountFor(): exact path, then the consumer.
+// A rule is a property of WHO calls, not of which workload they run — before this,
 // `projectRoutes.promopilot` matched only the literal string `promopilot` and every job under it
-// (`promopilot:generatetext`) silently ignored the pin.
+// (`promopilot:generatetext`) silently ignored the pin. Grouping many consumers under one rule is
+// the consumer's job (name them alike, pin each) — not the router's.
 function projectRuleFor(pkey) {
   const pr = CFG.projectRoutes || {};
   if (pr[pkey]) return { rule: pr[pkey], label: `project ${pkey}` };
   const { consumer } = parseConsumer(pkey);
   if (consumer && pr[consumer]) return { rule: pr[consumer], label: `consumer ${consumer}` };
-  const g = matchProjectGroup(pkey);
-  if (g) return { rule: g, label: `group ${g.name}` };
   return null;
 }
 

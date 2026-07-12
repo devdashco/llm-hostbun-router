@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Recurring incremental archive run — the scheduled entrypoint (pbox crontab / scriptbox).
+# Recurring incremental archive run — the scheduled entrypoint (Coolify scriptbox-pbox task).
 #
-# Loads S3 + router config, runs the incremental archiver (resume from the bucket cursor), appends to
-# a rotating log, and — if BEACON_URL is set — reports start/finish/fail so the run shows up in
-# scriptbox monitoring and fires an alert if it ever stops reporting.
+# Loads S3 + router + beacon config, then runs the incremental archiver (resume from the bucket
+# cursor), appending to a rotating log. The archiver itself reports to the beacon control plane via
+# the node client (registers, heartbeats, finish/fail) — this wrapper only sources config and env.
 #
 # Config source, in order of preference:
 #   1. keyvault key `llm-archive/config` (a JSON blob) — fetched at runtime, nothing secret on disk
@@ -14,7 +14,6 @@ cd "$(dirname "$0")/.."                       # repo root
 REPO="$(pwd)"
 LOG="${LLM_ARCHIVE_LOG:-$HOME/.llm-archive/archive.log}"
 mkdir -p "$(dirname "$LOG")"
-SLUG="llm-hostbun-archive"
 
 # Single-instance: an incremental run can outlast the hourly tick (a big catch-up), and two writers
 # racing on the bucket cursor could rewind it. flock makes an overlapping cron fire a no-op.
@@ -42,27 +41,15 @@ if [ -z "${S3_ACCESS_KEY:-}" ] || [ -z "${S3_SECRET_KEY:-}" ]; then
   exit 2
 fi
 
-# ── beacon: report run status ────────────────────────────────────────────────
-# The beacon (scriptbox-mcp) heartbeats via an upsert to /v1/register with x-api-key: a status field
-# plus a message. Best-effort — a beacon hiccup must never fail the archive. $1=status, $2=message.
-beacon() {
-  [ -n "${BEACON_URL:-}" ] && [ -n "${BEACON_KEY:-}" ] || return 0
-  local body; body="$(node -e 'const[s,st,m]=process.argv.slice(1);process.stdout.write(JSON.stringify({slug:s,last_status:st,last_run:new Date().toISOString(),message:m||""}))' "$SLUG" "$1" "${2:-}")"
-  curl -fsS -m 10 -X POST "$BEACON_URL/v1/register" -H "x-api-key: $BEACON_KEY" -H 'content-type: application/json' -d "$body" >/dev/null 2>&1 || true
-}
-
-beacon running "incremental archive started"
 echo "$(date -u +%FT%TZ) === run start ===" >>"$LOG"
 
-# ── run ──────────────────────────────────────────────────────────────────────
+# ── run ── the archiver beacons itself (register/heartbeat/finish) via BEACON_URL/BEACON_KEY ──
 set +e
-SUMMARY="$(node "$REPO/archive/archiver.js" 2>>"$LOG" | tail -1)"
+SUMMARY="$(BEACON_URL="${BEACON_URL:-}" BEACON_KEY="${BEACON_KEY:-}" node "$REPO/archive/archiver.js" 2>>"$LOG" | tail -1)"
 RC=$?
 set -e
 echo "$(date -u +%FT%TZ) rc=$RC summary=$SUMMARY" >>"$LOG"
 
 # rotate: keep the log bounded (last ~5000 lines)
 if [ "$(wc -l <"$LOG" 2>/dev/null || echo 0)" -gt 6000 ]; then tail -5000 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"; fi
-
-if [ "$RC" -eq 0 ]; then beacon completed "${SUMMARY:-ok}"; else beacon failed "rc=$RC"; fi
 exit "$RC"

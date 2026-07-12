@@ -120,7 +120,7 @@ async function putVerified(s3, key, buf) {
   throw new Error(`failed to write+verify ${key} after 4 attempts`);
 }
 
-async function run() {
+async function run(brun) {
   if (!CFG.accessKey || !CFG.secretKey) { console.error("S3_ACCESS_KEY / S3_SECRET_KEY required"); process.exit(2); }
   const s3 = new S3({ endpoint: CFG.endpoint, accessKey: CFG.accessKey, secretKey: CFG.secretKey });
   await login();
@@ -157,14 +157,35 @@ async function run() {
     // Commit the cursor after every verified batch, so a crash resumes at the last durable point.
     await writeState(s3, { lastId: cursor, updatedAt: new Date().toISOString(), rows: (st.rows || 0) + totalRows });
     log(`  batch ${batch}: +${rows.length} rows → id ${cursor} (${totalObjs} objs, ${(totalBytes / 1048576).toFixed(1)}MB so far)`);
+    if (brun) brun.heartbeat({ cursor, rows: totalRows, objects: totalObjs, mb: +(totalBytes / 1048576).toFixed(1) });
     if (rows.length < CFG.pageSize) break;   // last page
     if (batch >= CFG.maxBatches) { log(`  stopping at MAX_BATCHES=${CFG.maxBatches} (cursor persisted; re-run resumes)`); break; }
   }
 
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   log(`done: ${totalRows} rows in ${totalObjs} objects (${(totalBytes / 1048576).toFixed(1)}MB) in ${secs}s. cursor=${cursor}`);
+  const summary = { archived_rows: totalRows, objects: totalObjs, bytes: totalBytes, cursor, mode: BACKFILL ? "backfill" : "incremental" };
   // Emit a machine-readable summary line for the scheduler/beacon to parse.
-  console.log(JSON.stringify({ archived_rows: totalRows, objects: totalObjs, bytes: totalBytes, cursor, mode: BACKFILL ? "backfill" : "incremental" }));
+  console.log(JSON.stringify(summary));
+  if (brun) { brun.rows(totalRows); brun.log("info", `archived ${totalRows} rows → ${totalObjs} objs, cursor=${cursor}`); }
+  return summary;
 }
 
-run().catch((e) => { console.error("archive failed:", e.stack || e.message); process.exit(1); });
+// Wrapped in the beacon client so the run shows up in the scriptbox control plane with live
+// heartbeats + finish/fail alerts. beacon is a NO-OP when BEACON_URL is unset, so standalone /
+// --dry / --backfill runs from a shell are unaffected. run() itself returns the summary.
+const beacon = require("./beacon");
+beacon.wrap({
+  slug: "llm-hostbun-archive",
+  name: "llm-hostbun-archive",
+  path: __filename,
+  description: "Archive the llm-hostbun-router call log (conversations, tool runs, tokens) to NAS object storage.",
+  data_store_kind: "nas_s3",
+  data_location: `${CFG.bucket}/${CFG.prefix}/calls`,
+  data_host: "nas-s3.blpk.cc",
+  recurring: true,
+  schedule_cron: "17 * * * *",
+  expected_every_s: 3600,
+  heartbeat_timeout_s: 7200,
+  notify_events: ["fail", "overdue"],
+}, (brun) => run(brun)).catch((e) => { console.error("archive failed:", e.stack || e.message); process.exit(1); });

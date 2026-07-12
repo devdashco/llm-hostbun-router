@@ -45,18 +45,24 @@ function AllowCell({cur,catalog,onChange}){
   const provs=['claudecode','crazyrouter','local'];
   const known=new Set(provs.flatMap(p=>(catalog[p]||[])));
   const extras=am.filter(m=>!known.has(m)); // allowed but not in the live catalog
+  const setMany=(add,rm)=>emit({allowModels:[...am.filter(m=>!rm.includes(m)),...add.filter(m=>!am.includes(m))]});
   return html`<div>
     <button class="ghost sm" onClick=${()=>setOpen(!open)}>${open?'▾':'▸'} ${summary}</button>
-    ${open&&html`<div style="margin-top:8px;padding:12px;border:1px solid var(--border);border-radius:var(--r);min-width:260px;background:var(--sunken)">
-      <div class="lbl" style="font:11px var(--mono);color:var(--fg-mut);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em">Providers</div>
-      <div class="pick-wrap">${provs.map(p=>html`<span class="pick ${ap.includes(p)?'on':''} ${providerCls[p]||''}" onClick=${()=>toggleP(p)}>${p}</span>`)}</div>
-      ${provs.map(prov=>{ const ms=(catalog[prov]||[]); if(!ms.length)return null; return html`<div class="pick-grp">
-        <div class="lbl">${prov} models</div>
-        <div class="pick-wrap">${ms.map(m=>html`<span class="pick ${am.includes(m)?'on':''}" onClick=${()=>toggleM(m)}>${m}</span>`)}</div>
-      </div>`; })}
-      ${extras.length&&html`<div class="pick-grp"><div class="lbl">other (not in catalog)</div>
-        <div class="pick-wrap">${extras.map(m=>html`<span class="pick on" title="click to remove" onClick=${()=>toggleM(m)}>${m}</span>`)}</div></div>`}
-      <small class="hint" style="display:block;margin-top:10px">Nothing selected = no restriction. A call that resolves outside the picked set is rejected, never rewritten.</small>
+    ${open&&html`<div class="picker">
+      <div class="picker-grp">
+        <div class="lbl">Providers<span class="sp"/></div>
+        <div class="pick-wrap">${provs.map(p=>html`<button type="button" class="pick ${providerCls[p]||''} ${ap.includes(p)?'on':''}" onClick=${()=>toggleP(p)}>${p}</button>`)}</div>
+      </div>
+      ${provs.map(prov=>{ const ms=(catalog[prov]||[]); if(!ms.length)return null; const on=ms.filter(m=>am.includes(m)).length;
+        return html`<div class="picker-grp">
+          <div class="lbl"><span class="${providerCls[prov]||''}">${prov}</span> models<span class="sp"/>
+            <button type="button" onClick=${()=>setMany(ms,[])}>all</button>
+            <button type="button" onClick=${()=>setMany([],ms)} disabled=${!on}>clear</button></div>
+          <div class="pick-wrap">${ms.map(m=>html`<button type="button" class="pick ${am.includes(m)?'on':''}" onClick=${()=>toggleM(m)}>${m}</button>`)}</div>
+        </div>`; })}
+      ${extras.length&&html`<div class="picker-grp"><div class="lbl">other (not in catalog)<span class="sp"/></div>
+        <div class="pick-wrap">${extras.map(m=>html`<button type="button" class="pick on" title="click to remove" onClick=${()=>toggleM(m)}>${m}</button>`)}</div></div>`}
+      <small class="hint" style="display:block;margin-top:12px">Nothing selected = no restriction. A call that resolves outside the picked set is rejected, never rewritten.</small>
     </div>`}
   </div>`;
 }

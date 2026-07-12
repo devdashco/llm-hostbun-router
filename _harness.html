@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="/admin/ui/app.css"/>
+<script src="/admin/ui/vendor.js"></script>
+<style>body{padding:24px;max-width:1100px;margin:0 auto}</style>
+</head><body>
+<div id="root"></div>
+<div id="toast"></div>
+<script type="module">
+import { html, Ctx, render, h } from '/admin/ui/core.js';
+import { Routing } from '/admin/ui/pages/routing.js';
+const state = {
+  bases:{local:'https://pbox.llm.hostbun.cc',crazyrouter:'https://crazyrouter.com',claudecode:'https://api.anthropic.com'},
+  claudePrefix:'claude', jsonEnforce:true, jsonMaxRetries:2, gatedModels:[],
+  localMap:{'local':'qwen3.5-9b','gemma':'google/gemma-4-26b-a4b'},
+  modelRoutes:{}, projectGroups:[{name:'seoul',prefixes:['seoul:'],block:true}],
+  projectLimits:{}, projectLimitDefault:{window:'24h',tokens:0,calls:0,warnPct:80,slowPct:95,slowMs:1500,hard:'block'},
+  forceModel:{enabled:false,provider:'claudecode',model:''}, cloudPolicy:'allowlist',
+  cloudAllowlist:['gemini-2.5-flash','gemini-2.5-pro','gemini-2.5-flash-lite'],
+  defaultRoute:{provider:'none',model:''}, knownLocalIds:{e4b:'x',gemma:'y',obliterated:'z'},
+  claudecodeModels:['claude-opus-4-8','claude-sonnet-4-6','claude-haiku-4-5','claude-haiku-4-5-20251001','claude-opus-4-1'],
+  consumers:{promopilot:{},redbut:{},'fb-bot':{}},
+  projectRoutes:{ promopilot:{provider:'claudecode',model:'claude-haiku-4-5'},
+    redbut:{allowProviders:['claudecode'],allowModels:['claude-opus-4-8','claude-sonnet-4-6']} },
+};
+render(html`<${Ctx.Provider} value=${{state, reload(){}}}><${Routing}/><//>`, document.getElementById('root'));
+window.__ready=true;
+</script>
+</body></html>

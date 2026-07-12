@@ -206,12 +206,6 @@ function envDefaults() {
     //   "soonest-weekly-reset" — apps are served by the usable account whose 7d window resets
     //                            soonest (see autoAccount in routing.js). Opt-in, deliberate.
     accountStrategy: process.env.ACCOUNT_STRATEGY === "soonest-weekly-reset" ? "soonest-weekly-reset" : "pinned",
-    // projectGroups: bundle many projects (e.g. all seoul:* providers) under one rule. Each entry is
-    // { name, prefixes:[...], provider?, model?, block? }. A project matches when its slug equals or
-    // starts with any prefix (so "seoul:" catches seoul:probe, seoul:l1_metadata, …). block:true
-    // rejects all matching calls (zero tokens); otherwise provider/model reroute them. An exact
-    // projectRoutes entry always wins over a group (lets you exempt one project from a group block).
-    projectGroups: [],
     // ── per-project usage limits (rolling-window quotas) ──
     // projectLimits[<project>] = { window, tokens, calls, warnPct, slowPct, slowMs, hard }
     //   window  rolling count window: 1h|6h|24h|7d|30d (default 24h)
@@ -220,8 +214,8 @@ function envDefaults() {
     //   slowPct ≥this% → throttle: sleep slowMs before forwarding      default 95
     //   slowMs  delay added per request while throttling (ms)          default 1500
     //   hard    at ≥100%: "block" (429) | "slow" (keep throttling) | "warn" (never block)
-    // An exact projectLimits entry is authoritative (even all-zero = exempt). Else a matching
-    // group's .limit, else projectLimitDefault (applied to every attributed project when its
+    // An exact projectLimits entry is authoritative (even all-zero = exempt). Else
+    // projectLimitDefault (applied to every attributed project when its
     // tokens/calls > 0). Usage is summed from the call log over the window; nothing persisted.
     projectLimits: {},
     projectLimitDefault: { window: "24h", tokens: 0, calls: 0, warnPct: 80, slowPct: 95, slowMs: 1500, hard: "block" },
@@ -415,25 +409,6 @@ function mergeConfig(base, saved) {
   }
   if (typeof saved.defaultAccount === "string") c.defaultAccount = saved.defaultAccount.trim();
   if (["pinned", "soonest-weekly-reset"].includes(saved.accountStrategy)) c.accountStrategy = saved.accountStrategy;
-  if (Array.isArray(saved.projectGroups)) {
-    const pg = [];
-    const seen = new Set();
-    for (const g of saved.projectGroups) {
-      if (!g || typeof g !== "object") continue;
-      const name = typeof g.name === "string" ? g.name.trim() : "";
-      const prefixes = Array.isArray(g.prefixes)
-        ? [...new Set(g.prefixes.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().toLowerCase()))]
-        : [];
-      const nkey = name.toLowerCase();
-      if (!name || !prefixes.length || seen.has(nkey)) continue;
-      seen.add(nkey);
-      const limit = sanitizeLimit(g.limit);
-      if (g.block) { pg.push({ name, prefixes, block: true, ...(limit ? { limit } : {}) }); continue; }
-      const rule = sanitizeRule(g);
-      if (rule || limit) pg.push({ name, prefixes, ...(rule || {}), ...(limit ? { limit } : {}) });
-    }
-    c.projectGroups = pg;
-  }
   if (saved.projectLimits && typeof saved.projectLimits === "object" && !Array.isArray(saved.projectLimits)) {
     const pl = {};
     for (const [k, v] of Object.entries(saved.projectLimits)) {
