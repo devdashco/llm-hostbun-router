@@ -49,6 +49,18 @@ const BACKFILL = ARGS.has("--backfill");
 const DRY = ARGS.has("--dry");
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Retry a flaky async op with exponential backoff. The router export crosses the public internet and
+// reads a network-hop-away Postgres; a transient `fetch failed` must pause the run, not kill it (the
+// cursor is only committed per verified batch, so a crash is safe but wasteful). 5 tries → ~30s max.
+async function retry(fn, label) {
+  let err;
+  for (let i = 0; i < 5; i++) {
+    try { return await fn(); }
+    catch (e) { err = e; const wait = Math.min(2000 * 2 ** i, 15000); log(`  ${label} failed (try ${i + 1}/5: ${e.message}); retry in ${wait}ms`); await sleep(wait); }
+  }
+  throw err;
+}
 
 // One cookie jar, one login. The whole auth model server-side is a single HttpOnly session cookie.
 let COOKIE = "";
@@ -62,10 +74,12 @@ async function login() {
   if (!COOKIE) throw new Error("login returned no cookie");
 }
 async function exportPage(after) {
-  const r = await fetch(`${CFG.routerUrl}/api/export?after=${after}&limit=${CFG.pageSize}`, { headers: { cookie: COOKIE } });
-  if (r.status === 401) { await login(); return exportPage(after); }
-  if (!r.ok) throw new Error(`export after=${after} → ${r.status}`);
-  return r.json();   // {rows, count, after, maxId, limit}
+  return retry(async () => {
+    const r = await fetch(`${CFG.routerUrl}/api/export?after=${after}&limit=${CFG.pageSize}`, { headers: { cookie: COOKIE } });
+    if (r.status === 401) { await login(); throw new Error("re-auth"); }   // retry with the fresh cookie
+    if (!r.ok) throw new Error(`export after=${after} → ${r.status}`);
+    return r.json();   // {rows, count, after, maxId, limit}
+  }, `export after=${after}`);
 }
 
 // A row's partition axes. `ts` is epoch-ms; consumer is the first colon-segment of project.
@@ -92,13 +106,18 @@ async function writeState(s3, st) {
 // PUT a partition object, then HEAD-verify it landed (the CF-fronted endpoint has dropped objects in
 // bulk transfers; a single verified PUT is the safe unit). One retry on a size mismatch / miss.
 async function putVerified(s3, key, buf) {
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    await s3.putObject(CFG.bucket, key, buf, "application/gzip");
-    const v = await s3.verifyObject(CFG.bucket, key);
-    if (v && v.bytes === buf.length) return;
-    log(`  verify miss on ${key} (attempt ${attempt}, got ${v ? v.bytes : "404"} want ${buf.length})`);
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      await s3.putObject(CFG.bucket, key, buf, "application/gzip");
+      const v = await s3.verifyObject(CFG.bucket, key);
+      if (v && v.bytes === buf.length) return;
+      log(`  verify miss on ${key} (attempt ${attempt}, got ${v ? v.bytes : "404"} want ${buf.length})`);
+    } catch (e) {
+      log(`  put/verify error on ${key} (attempt ${attempt}: ${e.message})`);
+    }
+    await sleep(Math.min(1500 * attempt, 6000));
   }
-  throw new Error(`failed to verify ${key} after 3 attempts`);
+  throw new Error(`failed to write+verify ${key} after 4 attempts`);
 }
 
 async function run() {
