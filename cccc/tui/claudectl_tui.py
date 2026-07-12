@@ -492,6 +492,47 @@ _PANES_SCRIPT = os.path.join(_HERE, "panes_tui.py")
 _SUBCMDS = {"sync": _SYNC_SCRIPT, "refresh": _REFRESH_SCRIPT, "doctor": _DOCTOR_SCRIPT,
             "dock": _DOCK_SCRIPT, "links": _DOCK_SCRIPT, "panes": _PANES_SCRIPT}
 
+# ---------------------------------------------------------------- version check
+# Every launch checks this checkout against origin/master in the background and
+# AUTO-updates via cccc_sync.py (which is dev-clone-safe: it skips the pull when
+# the tree is dirty and never resets a dev clone). The running process keeps the
+# old code — the header says "restart" when new code landed on disk.
+_REPO = os.path.dirname(os.path.dirname(_HERE))        # cccc/tui → repo root
+_VER: dict = {}   # {"sha","behind","state":checking|latest|behind|updated|err}
+
+
+def _git(*args: str, timeout: int = 20) -> str:
+    r = subprocess.run(["git", "-C", _REPO, *args],
+                       capture_output=True, text=True, timeout=timeout)
+    return (r.stdout or "").strip()
+
+
+def _version_check(autosync: bool = True) -> dict:
+    """fetch origin → behind-count vs origin/master; when behind, run cccc sync
+    (quiet) and re-measure. Writes the shared _VER dict the header renders."""
+    global _VER
+    sha = "?"
+    try:
+        sha = _git("rev-parse", "--short", "HEAD") or "?"
+        _VER = {"sha": sha, "state": "checking"}
+        _git("fetch", "-q", "origin", timeout=25)
+        behind = int(_git("rev-list", "--count", "HEAD..origin/master") or 0)
+        if behind and autosync:
+            subprocess.run([sys.executable, _SYNC_SCRIPT, "--quiet"],
+                           capture_output=True, timeout=180)
+            new_sha = _git("rev-parse", "--short", "HEAD") or sha
+            behind = int(_git("rev-list", "--count", "HEAD..origin/master") or 0)
+            if new_sha != sha:
+                # new code is on disk; THIS process still runs the old code
+                _VER = {"sha": new_sha, "behind": behind,
+                        "state": "updated" if behind == 0 else "behind"}
+                return _VER
+        _VER = {"sha": sha, "behind": behind,
+                "state": "latest" if behind == 0 else "behind"}
+    except Exception as e:  # noqa: BLE001 — a dead network must not kill the UI
+        _VER = {"sha": sha, "state": "err", "err": f"{type(e).__name__}"[:40]}
+    return _VER
+
 
 def _claude_surfaces() -> list[str]:
     import re as _re
@@ -954,6 +995,11 @@ _WINDOWS_ITEMS = [
 
 # Setup tab — maintenance of the cccc tool itself on this machine.
 _SETUP_ITEMS = [
+    ("check installation / version", "version_check",
+     "Fetch origin and compare this checkout to origin/master, then run the "
+     "install verifier (install.sh checks: wrapper on PATH, statusLine points "
+     "here, script executes). Launch already auto-checks + auto-syncs; this "
+     "forces it now and shows the result."),
     ("health check (doctor)", "doctor",
      "Check LSP / environment health on this machine (the old separate `cccd`)."),
     ("update this tool (sync)", "sync",
@@ -1057,6 +1103,7 @@ def run(stdscr):
     stdscr.timeout(REFRESH_MS)   # getch() returns -1 after this idle -> auto-refresh
     import threading
     threading.Thread(target=_live_worker, daemon=True).start()   # LIVE 7d/usable in bg
+    threading.Thread(target=_version_check, daemon=True).start()  # auto-update check
 
     # -- tabs: the ONLY top-level navigation. ←/→ switch tab, ↑/↓ move within it,
     #    ↵ selects/opens, q quits. No letter hotkeys anywhere. -----------------
@@ -1175,6 +1222,19 @@ def run(stdscr):
             busy("refreshing accounts from the router…")
             data = fetch()
             ok(f"refreshed · {len(data['rows'])} accounts")
+        elif action == "version_check":
+            busy("checking against origin/master…")
+            res = _version_check(autosync=False)
+            if res.get("state") == "behind" and _confirm(
+                    stdscr, f"{res.get('behind')} commit(s) behind origin — sync now?"):
+                busy("syncing (git pull + re-vendor)…")
+                _run_external(stdscr, ["python3", _SYNC_SCRIPT])
+                res = _version_check(autosync=False)
+            busy("verifying install (install.sh self-check)…")
+            _run_external(stdscr, ["sh", os.path.join(os.path.dirname(_HERE), "install.sh")])
+            ok(f"version {res.get('sha')} · {res.get('state')}"
+               + (" — restart cccc to load it" if res.get("state") == "updated" else ""))
+            stdscr.timeout(REFRESH_MS)
         elif action == "doctor":
             busy("running doctor…")
             _run_external(stdscr, ["python3", _DOCTOR_SCRIPT])
@@ -1276,7 +1336,17 @@ def run(stdscr):
         # full-width brand bar: name left, host middle-dim, live-dot right
         stdscr.addstr(0, 0, " " * w, C_HEADER)
         put(0, 1, "claudectl", C_HEADER)
-        put(0, 11, f"cccc · {host_str}", curses.color_pair(7))
+        x0 = put(0, 11, f"cccc · {host_str}", curses.color_pair(7))
+        # version chip from the launch-time check (background thread fills _VER)
+        _vst = _VER.get("state", "")
+        if _vst == "latest":
+            put(0, x0 + 1, f"✓{_VER['sha']}", curses.color_pair(7) | curses.A_DIM)
+        elif _vst == "updated":
+            put(0, x0 + 1, "⬆ updated — restart cccc", C_WARN | curses.A_BOLD)
+        elif _vst == "behind":
+            put(0, x0 + 1, f"⬆ {_VER.get('behind', '?')} behind — Setup→sync", C_WARN)
+        elif _vst == "err":
+            put(0, x0 + 1, "version check failed", curses.A_DIM)
         put(0, max(11, w - len(dot) - 1), dot,
             curses.color_pair(7) | (curses.A_BOLD if _LIVE else curses.A_DIM))
         tx = 1
