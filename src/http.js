@@ -12,7 +12,7 @@ const { Readable } = require("node:stream");
 const TR = require("../translate");
 const { CFG } = require("./config");
 const { clip, recordCall, recordLimits, CONTENT_CAP } = require("./db");
-const { accountFor, isGated, resolveRoute } = require("./routing");
+const { accountFor, isGated, resolveRoute, note429, note2xx } = require("./routing");
 
 // Hop-by-hop headers: meaningful to ONE connection, never forwarded. Dropped by the split; without
 // them buildHeaders() throws ReferenceError and every proxied request 502s.
@@ -212,6 +212,11 @@ async function proxy(req, res, base, opts = {}) {
   // Free rate-limit harvest: snapshot this account's live 5h/7d headroom off the response headers
   // (no probe, zero tokens). Fires for any Anthropic-native reply; a no-op for other providers.
   recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel, opts.account);
+  // App back-pressure: a real 429 arms a per-project throttle (devs are exempt inside note429); any
+  // success clears it. server.js reads throttleDelay() before dispatch to pace a project that is
+  // hammering a dry account. The 429 itself still reaches the caller — this only slows what's next.
+  if (up.status === 429) note429(base_rec.project);
+  else if (up.status < 400) note2xx(base_rec.project);
   const isStream = (up.headers.get("content-type") || "").includes("text/event-stream");
   // Only chat/responses/completions calls carry content worth recording; for those we tee the
   // body (capped) to pull tokens + reply. /v1/models etc. are skipped to keep the log signal high.

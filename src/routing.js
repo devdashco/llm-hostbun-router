@@ -118,6 +118,38 @@ async function usageVerdict(project) {
   return { lim, usage: u, pct, action };
 }
 
+// ── app back-pressure on upstream 429 ─────────────────────────────────────
+// When a PROJECT (app) draws a real 429 — its pinned account's quota window is spent — we pace that
+// project's next requests so it stops hammering a dry account. This is a *slow*, not a fallback: the
+// 429 still reaches the caller (invariant #2), we only add latency to the app's *subsequent* calls
+// until it succeeds again. DEVELOPERS are never throttled — a person waiting at a keyboard is not the
+// stampede we're damping. Keyed by consumer (before the ':'), escalates with consecutive 429s, and a
+// single success clears it. In-memory, per-process — a restart forgives everyone, which is fine.
+const APP_THROTTLE = new Map();   // consumer -> { until, level }
+const T_BASE_MS = 1000, T_MAX_MS = 15000, T_COOLDOWN_MS = 60000, T_MAX_LVL = 8;
+const _consumerOf = (project) => parseConsumer(project || "").consumer;
+const _isDev = (consumer) => { const c = (CFG.consumers || {})[consumer]; return !!c && c.kind === "dev"; };
+// Record a real upstream 429 for a project. No-op for devs and for an empty/unknown consumer.
+function note429(project) {
+  const consumer = _consumerOf(project);
+  if (!consumer || _isDev(consumer)) return;
+  const cur = APP_THROTTLE.get(consumer) || { level: 0 };
+  APP_THROTTLE.set(consumer, { until: Date.now() + T_COOLDOWN_MS, level: Math.min(cur.level + 1, T_MAX_LVL) });
+}
+// A success clears the back-pressure — the account window has room again.
+function note2xx(project) {
+  const consumer = _consumerOf(project);
+  if (consumer && APP_THROTTLE.has(consumer)) APP_THROTTLE.delete(consumer);
+}
+// ms to sleep before forwarding this project's request (0 = don't throttle). Devs: always 0.
+function throttleDelay(project) {
+  const consumer = _consumerOf(project);
+  if (!consumer || _isDev(consumer)) return 0;
+  const rec = APP_THROTTLE.get(consumer);
+  if (!rec || Date.now() >= rec.until) { if (rec) APP_THROTTLE.delete(consumer); return 0; }
+  return Math.min(T_BASE_MS * (2 ** (rec.level - 1)), T_MAX_MS);
+}
+
 // Resolve a model name into a concrete upstream route. Priority:
 //   0a. projectRoutes (exact per-project override, then per-consumer — beats everything)
 //   1. forceModel (global override)  2. modelRoutes (per-model, any provider)  3. local alias map
@@ -275,4 +307,5 @@ module.exports = {
   resolveRoute, baseRoute, providerRoute, defaultRouteResolved, projectRule, projectRuleFor,
   enforceAllow, accountFor, autoAccount, acctHealth, limitFor, projectUsage, usageVerdict,
   localTarget, isClaudeModel, isGated, sleep,
+  note429, note2xx, throttleDelay,
 };

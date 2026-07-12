@@ -42,7 +42,7 @@ const nodePath = require("node:path");
 const { CFG, loadConfig, UI_ROUTES } = require("./src/config");
 const { initDb, primeAcctCacheSoon, recordCall } = require("./src/db");
 const { extractProject, parseConsumer, authenticate, consumerEntry, startKeyUseFlush } = require("./src/identity");
-const { resolveRoute, accountFor, usageVerdict, sleep, isGated } = require("./src/routing");
+const { resolveRoute, accountFor, usageVerdict, sleep, isGated, throttleDelay } = require("./src/routing");
 const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL, jsonEnforce, wantsJsonFormat } = require("./src/http");
 const { mergedModels, refreshClaudecodeModels, refreshAccountLimits, CLAUDECODE_MODEL_REFRESH_MS } = require("./src/claudecode");
 const { handleAdminApi } = require("./src/admin");
@@ -324,6 +324,18 @@ const server = http.createServer(async (req, res) => {
       } else if (v.action === "warn") {
         console.warn(`[usage] WARN ${project} ${pctI}% of ${v.lim.window} cap`);
       }
+    }
+  }
+
+  // App back-pressure: a project that just drew a real upstream 429 gets its next requests paced so
+  // it stops hammering a dry account. Developers are never throttled — throttleDelay() returns 0 for
+  // a dev consumer. This is a slow, not a fallback: the 429 already reached the earlier caller.
+  if (isInference && project) {
+    const tms = throttleDelay(project);
+    if (tms > 0) {
+      res.setHeader("x-app-throttled-ms", String(tms));
+      console.warn(`[throttle] ${project} +${tms}ms (recent upstream 429s)`);
+      await sleep(tms);
     }
   }
 
