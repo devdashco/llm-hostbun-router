@@ -216,6 +216,31 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   // reset7 in the past = the window rolled and the reading is stale — not a candidate.
   ACCT_CACHE.set("org-early", reading({ reset7: now - 60 }));
   check("a rolled-over reading is stale, not a candidate", accountFor("someapp").name, "late");
+  // ── "use whatever account is available": a dead/spent PIN must not break the app ──
+  // Reset to a clean slate: no readings anywhere, so Tier A (soonest weekly reset) is empty and the
+  // Tier-B availability fallback is what's under test.
+  CFG.accountStrategy = "soonest-weekly-reset";
+  ACCT_DEAD.clear();
+  for (const n of ["early", "late", "spent"]) ACCT_CACHE.delete("org-" + n);
+  // Pin usable, no readings → keep the pin (stable, never hop blind).
+  check("a usable pin is kept when nothing is orderable", accountFor("someapp").name, "late");
+  // Pin's login is DEAD → serve from the first AVAILABLE account instead of 403'ing the app.
+  ACCT_DEAD.add("late");
+  check("a dead pin falls to an available account", accountFor("someapp").name, "early");
+  // Pin's weekly window is SPENT → same: use whatever is available.
+  ACCT_DEAD.clear();
+  ACCT_CACHE.set("org-late", reading({ u7: 1, s7: "rejected" }));
+  check("a spent pin falls to an available account", accountFor("someapp").name, "early");
+  // EVERY account dead/spent → fall to the pin so the caller gets ITS own 429/403, never a guess.
+  ACCT_DEAD.add("early"); ACCT_DEAD.add("spent");
+  check("nothing available → the pin, so the truth (429/403) reaches the caller", accountFor("someapp").name, "late");
+  ACCT_DEAD.clear();
+  for (const n of ["early", "late", "spent"]) ACCT_CACHE.delete("org-" + n);
+  // A dev is still never swept into the availability fallback — a human's session stays put.
+  ACCT_DEAD.add("late");
+  check("a dev keeps its (even dead) pin — never auto-hopped", accountFor("somedev").name, "late");
+  ACCT_DEAD.clear();
+
   // Strategy off → the invariant, untouched.
   CFG.accountStrategy = "pinned";
   ACCT_CACHE.set("org-early", reading({}));

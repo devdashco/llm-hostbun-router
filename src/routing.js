@@ -157,19 +157,35 @@ function acctHealth(org) {
 //   • it is data-driven only: an account with no weekly reading is NOT a candidate, and if no
 //     account has one, selection returns null and the pin decides. Never hop blind.
 // "Usable" = login alive (not ACCT_DEAD), weekly not spent, and 5h window not currently rejected.
+// The harvested reading for an account (or null), and whether it is SPENT right now (would 429).
+const acctReading = (a) => { const org = ORG_OF_ACCOUNT.get(a.name) || a.org; return (org && ACCT_CACHE.get(org)) || null; };
+function acctSpentNow(r, now) {
+  if (!r) return false;                                           // no reading → presumed available, not spent
+  if (r.s7 === "rejected" || (r.u7 || 0) >= 1) return true;       // weekly spent — 429s until reset7
+  if ((r.s5 === "rejected" || (r.u5 || 0) >= 1) && (!r.reset5 || r.reset5 * 1000 > now)) return true; // 5h spent right now
+  return false;
+}
+// "Usable" = the login is alive (not OAuth-disabled) AND no window is currently spent. A no-reading
+// account counts as usable (presumed available) — we only exclude what we KNOW is spent or dead.
+const acctUsable = (a, now) => !ACCT_DEAD.has(a.name) && !acctSpentNow(acctReading(a), now);
+// The first usable account, deterministic by name — a STABLE pick (same account until its state
+// changes), so serving from it does NOT rotate per request and preserves the per-org prompt cache.
+function firstUsableAccount(now) {
+  return (CFG.claudecodeAccountPool || [])
+    .filter((a) => acctUsable(a, now))
+    .sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))[0] || null;
+}
+
 let _autoName = null;   // last pick, for change-logging only
 function autoAccount() {
   const now = Date.now();
   let best = null, bestReset = Infinity;
   for (const a of CFG.claudecodeAccountPool || []) {
-    if (ACCT_DEAD.has(a.name)) continue;                          // dead login — no reset revives it
-    const org = ORG_OF_ACCOUNT.get(a.name) || a.org;
-    const r = org ? ACCT_CACHE.get(org) : null;
-    if (!r || !r.reset7) continue;                                // no weekly reading → not a candidate
+    if (!acctUsable(a, now)) continue;                            // dead login or a spent window
+    const r = acctReading(a);
+    if (!r || !r.reset7) continue;                                // no weekly reading → not orderable here (Tier B handles it)
     const reset7ms = r.reset7 * 1000;                             // anthropic resets are epoch SECONDS
     if (reset7ms <= now) continue;                                // window already rolled; reading is stale
-    if (r.s7 === "rejected" || (r.u7 || 0) >= 1) continue;        // weekly spent — 429s until reset7
-    if ((r.s5 === "rejected" || (r.u5 || 0) >= 1) && (!r.reset5 || r.reset5 * 1000 > now)) continue; // 5h spent right now
     if (reset7ms < bestReset || (reset7ms === bestReset && best && a.name < best.name)) { best = a; bestReset = reset7ms; }
   }
   if (best && best.name !== _autoName) {
@@ -189,14 +205,6 @@ function accountFor(project) {
   const pool = CFG.claudecodeAccountPool || [];
   if (!pool.length) return null;
   const p = String(project == null ? "" : project).trim().toLowerCase();
-  if (CFG.accountStrategy === "soonest-weekly-reset") {
-    const { consumer: c0 } = parseConsumer(p);
-    const reg = (CFG.consumers || {})[c0];
-    if (reg && reg.kind === "app") {
-      const auto = autoAccount();
-      if (auto) return auto;    // no usable weekly reading anywhere → fall through to the pin
-    }
-  }
   const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
   // Try the exact path first, then fall back to the consumer. A pin is a property of WHO is calling,
   // not of which workload they are running: pinning `promopilot` must cover `promopilot:l2_metadata`
@@ -204,8 +212,27 @@ function accountFor(project) {
   // to its own account without moving the rest.
   const { consumer } = parseConsumer(p);
   const want = String((p && pins[p]) || (consumer && pins[consumer]) || CFG.defaultAccount || "").trim().toLowerCase();
-  if (!want) return null;
-  return pool.find((a) => String(a.name).toLowerCase() === want) || null;
+  const pinned = want ? (pool.find((a) => String(a.name).toLowerCase() === want) || null) : null;
+
+  if (CFG.accountStrategy === "soonest-weekly-reset") {
+    const reg = (CFG.consumers || {})[consumer];
+    if (reg && reg.kind === "app") {
+      const now = Date.now();
+      // Tier A — the soonest-to-reset USABLE account (burn the about-to-forfeit weekly window first).
+      const auto = autoAccount();
+      if (auto) return auto;
+      // Tier A empty (no orderable weekly reading). "Use whatever account is available": don't break
+      // the app on a dead/spent pin. Keep the pin while IT can still serve (stable, cache-preserving);
+      // otherwise serve from any available account, deterministic by name so the pick can't rotate per
+      // request. Only when EVERY account is dead/spent do we fall to the pin, so the caller gets ITS
+      // own 429/403 — a truthful "out of quota", never a silent guess.
+      if (pinned && acctUsable(pinned, now)) return pinned;
+      const any = firstUsableAccount(now);
+      if (any) return any;
+      return pinned;
+    }
+  }
+  return pinned;
 }
 
 function resolveRoute(model, project) {
