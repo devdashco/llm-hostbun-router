@@ -126,6 +126,8 @@ check("unknown admin endpoint is 404", api("nope").error, "unknown admin endpoin
 console.log("shell routes:");
 check("root serves the panel", status("/"), "200");
 check("a UI slug serves the panel", status("/routing"), "200");
+check("a consolidated slug serves the panel", status("/identity"), "200");
+check("a legacy slug still serves the panel (client-side redirect)", status("/accounts"), "200");
 // The /admin prefix is gone, not redirected. A tombstone 404 rather than a fall-through into the
 // model router, which would answer a stale POST /admin/api/login with "model_not_routable".
 check("/admin is gone", status("/admin"), "404");

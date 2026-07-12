@@ -33,8 +33,10 @@ const CLAUDECODE_MODEL_ALIASES = Object.freeze([
 const CLAUDECODE_MODEL_REFRESH_MS = 6 * 3600 * 1000;
 // Client-side routes of the control panel (its NAV slugs). Kept in sync with admin/index.html by
 // hand — a missing entry only costs a hard-refresh 404 on that tab, never a mis-served API path.
-const UI_ROUTES = new Set(["/overview", "/calls", "/consumers", "/stats", "/accounts", "/routing",
-  "/models", "/crazyrouter", "/secrets"].map((s) => s));
+const UI_ROUTES = new Set(["/overview", "/calls", "/routing", "/identity", "/settings",
+  // Legacy slugs from before the 2026-07-12 five-page consolidation. The panel redirects each onto
+  // its new page + tab; the server just has to keep serving the shell on a hard refresh.
+  "/consumers", "/stats", "/accounts", "/models", "/crazyrouter", "/secrets"].map((s) => s));
 const CONFIG_FILE = process.env.CONFIG_FILE || "/data/config.json";
 
 // Default local model ids (env-overridable). "local" -> small multimodal E4B; "gemma" -> 26B MoE;
