@@ -101,10 +101,12 @@ means *no restriction*, never "nothing allowed" — the opposite makes a mistype
 The allowlist **refuses, never rewrites**: silently serving an allowed model instead is exactly the
 cross-provider substitution invariant 2 forbids.
 
-**A rule is resolved like `accountFor()`: exact path → consumer → group.** So a rule on `promopilot`
+**A rule is resolved like `accountFor()`: exact path → consumer.** So a rule on `promopilot`
 covers `promopilot:generatetext`. Before 2026-07-09 `projectRoutes` matched the literal string only,
-so every job path silently ignored its own project's pin and fell through to the group (or to
-crazyrouter, per token). Pinned model ids are **not** validated against the catalog — Anthropic ships
+so every job path silently ignored its own project's pin and fell through to crazyrouter, per token.
+There is **no cross-consumer group layer** — bundling many consumers under one rule was `projectGroups`,
+removed 2026-07-12; grouping is the consumer's job (name them alike, pin each), not the router's.
+Pinned model ids are **not** validated against the catalog — Anthropic ships
 ids without asking; that is `claudecodeModels`' job, not this one.
 
 Edit **one** rule with `POST /admin/api/routes {project, …}` — it merges. `POST config` assigns
@@ -272,6 +274,16 @@ unused.) It used to be a SQLite file on the app's volume; that file is gone. `pg
 dependency, the lockfile must be committed or the build fails.
 
 **The config still lives on the volume** — `/data/config.json`. That is where the account tokens are.
+
+**The permanent archive is on the NAS, not in Postgres** — `archive/` copies the whole `calls` log
+(every conversation, tool run and token count, full `req_content`/`resp_content` verbatim) to the
+MinIO `archive` bucket, gzipped and partitioned `llmrouter/calls/dt=<day>/consumer=<name>/part-<min>-<max>.jsonl.gz`,
+with a resume cursor at `llmrouter/_state.json`. Postgres is the *operational* log — it prunes
+non-claudecode rows to `retain` and sits on one un-backed-up volume; the NAS is where the knowledge
+actually persists. Zero-dep (stdlib SigV4 in `archive/s3.js`), reads the router's own `/api/export`,
+so no DB access. Runs hourly as a **Coolify scheduled task** on `scriptbox-pbox` (not a crontab —
+control-plane policy), against the LAN MinIO endpoint, beacon-monitored as `llm-hostbun-archive`.
+Backfilled all ~120k rows 2026-07-12. See `archive/README.md`.
 
 ## Gotchas that will cost you a day
 
