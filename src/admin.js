@@ -23,7 +23,7 @@ const DB = require("./db");
 const { dbUp, dbRow, dbRows, ACCT_CACHE, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
 const { priceMap, costUsd } = require("./pricing");
 const { mintKey, sha256, parseConsumer } = require("./identity");
-const { resolveRoute, accountFor, autoAccount, acctHealth, isGated, localTarget, limitFor, projectUsage } = require("./routing");
+const { resolveRoute, accountFor, autoAccount, acctHealth, isGated, localTarget, limitFor, projectUsage, throttleSnapshot } = require("./routing");
 const { readBody, sendJson, mask, buildHeaders } = require("./http");
 const CC = require("./claudecode");
 const { refreshClaudecodeModels, refreshAccountLimits, upstreamCatalogs, localModelEntries } = CC;
@@ -106,6 +106,9 @@ function adminState() {
     // no business in a dashboard payload. `activeKeys` is all the UI needs from here.
     consumers: Object.fromEntries(Object.entries(CFG.consumers || {}).map(([n, e]) =>
       [n, { kind: e.kind, owner: e.owner, note: e.note, activeKeys: (e.keys || []).filter((k) => !k.revoked).length }])),
+    // Apps currently back-pressured for drawing real upstream 429s (invariant: devs never appear here).
+    // In-memory, per-process; empty when nothing is throttled. Read by the throttle watcher.
+    throttles: throttleSnapshot(),
     authMode: (CFG.auth && CFG.auth.mode) || "optional",
     logging: CFG.logging,
     loggingDbReady: dbUp(),

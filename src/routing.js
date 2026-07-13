@@ -152,6 +152,16 @@ function throttleDelay(project) {
   if (!rec || Date.now() >= rec.until) { if (rec) APP_THROTTLE.delete(consumer); return 0; }
   return Math.min(T_BASE_MS * (2 ** (rec.level - 1)), T_MAX_MS);
 }
+// Read-only snapshot of who is currently back-pressured (for adminState / the throttle watcher).
+// Prunes expired records as it walks, so it never reports a throttle that has already cooled.
+function throttleSnapshot() {
+  const now = Date.now(), out = [];
+  for (const [consumer, rec] of APP_THROTTLE) {
+    if (!rec || now >= rec.until) { APP_THROTTLE.delete(consumer); continue; }
+    out.push({ consumer, level: rec.level, ms: Math.min(T_BASE_MS * (2 ** (rec.level - 1)), T_MAX_MS), until: rec.until });
+  }
+  return out;
+}
 
 // Resolve a model name into a concrete upstream route. Priority:
 //   0a. projectRoutes (exact per-project override, then per-consumer — beats everything)
@@ -310,5 +320,5 @@ module.exports = {
   resolveRoute, baseRoute, providerRoute, defaultRouteResolved, projectRule, projectRuleFor,
   enforceAllow, accountFor, autoAccount, acctHealth, limitFor, projectUsage, usageVerdict,
   localTarget, isClaudeModel, isGated, sleep,
-  note429, note2xx, throttleDelay,
+  note429, note2xx, throttleDelay, throttleSnapshot,
 };
