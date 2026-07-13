@@ -7,3 +7,7 @@ headroom-svc/.venv/
 
 # local dev: throwaway config + prices for `npm run dev`
 .local/
+
+# throttle-watch runtime secrets/state (real env lives only on pbox)
+monitor/throttle-watch.env
+monitor/*.state.json
