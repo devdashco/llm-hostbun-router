@@ -1012,6 +1012,30 @@ _WINDOWS_ITEMS = [
      "to a shell, no resume. Your own window is never touched. Interrupts all work."),
 ]
 
+# Live Anthropic routing for THIS box — drives the header chip + the toggle label.
+# Reads the DELIBERATE force-direct flag and gateway-route.sh's marker (~/.claude/.cctl-route,
+# "ts<TAB>state"). Returns (mode, chip, kind): mode ∈ direct|gateway|down; kind picks the colour.
+_FORCE_DIRECT_FLAG = os.path.expanduser("~/.claude-accounts/.cccc-force-direct")
+_ROUTE_MARKER = os.path.expanduser("~/.claude/.cctl-route")
+
+
+def _route_state():
+    if os.path.exists(_FORCE_DIRECT_FLAG):
+        return ("direct", "⚡ DIRECT", "warn")     # deliberate bypass — wins even when router is up
+    st = ""
+    try:
+        with open(_ROUTE_MARKER) as f:
+            parts = f.read().strip().split("\t")
+            st = parts[1] if len(parts) > 1 else ""
+    except Exception:
+        pass
+    if st == "down":
+        return ("down", "⚠ ROUTER-DOWN·direct", "err")   # fell back, NOT deliberate — loud
+    if st == "up":
+        return ("gateway", "▸ ROUTER", "ok")
+    return ("gateway", "▸ ROUTER", "dim")            # no marker yet → gateway is the default
+
+
 # Setup tab — maintenance of the cccc tool itself on this machine.
 _SETUP_ITEMS = [
     ("check installation / version", "version_check",
@@ -1412,9 +1436,14 @@ def run(stdscr):
             x0 = put(0, x0 + 1, "ver?", curses.A_DIM)
         if _DOC:
             if _DOC.get("ok"):
-                put(0, x0 + 1, "· doctor✓", curses.color_pair(7) | curses.A_DIM)
+                x0 = put(0, x0 + 1, "· doctor✓", curses.color_pair(7) | curses.A_DIM)
             else:
-                put(0, x0 + 1, f"· doctor {_DOC.get('n') or '?'}✗ → Setup", C_WARN)
+                x0 = put(0, x0 + 1, f"· doctor {_DOC.get('n') or '?'}✗ → Setup", C_WARN)
+        # always-visible ROUTE chip: is THIS box hitting the router or bypassing it?
+        _rs = _route_state()
+        _rattr = {"ok": curses.color_pair(7) | curses.A_BOLD, "warn": C_WARN | curses.A_BOLD,
+                  "err": C_HOT | curses.A_BOLD, "dim": curses.color_pair(7) | curses.A_DIM}[_rs[2]]
+        put(0, x0 + 1, f"· {_rs[1]}", _rattr)
         put(0, max(11, w - len(dot) - 1), dot,
             curses.color_pair(7) | (curses.A_BOLD if _LIVE else curses.A_DIM))
         tx = 1
@@ -1566,6 +1595,12 @@ def run(stdscr):
 
         else:  # windows / setup
             items = _TAB_ITEMS[tab_key]
+            if tab_key == "setup":
+                # make the route toggle SELF-DESCRIBING: label states current mode + what ↵ does.
+                _rs = _route_state()
+                _tlabel = ("route: ⚡ DIRECT (bypassing router) — ↵ to route via gateway" if _rs[0] == "direct"
+                           else "route: ▸ ROUTER (llm.hostbun.cc) — ↵ to force DIRECT bypass")
+                items = [((_tlabel, v, d) if v == "toggle_direct" else (l, v, d)) for (l, v, d) in items]
             put(2, 0, {"windows": "  Windows — every action hits ALL your running claude/ccc windows",
                        "setup": "  Setup — maintain the cccc tool on this machine"}[tab_key][:w], C_DIM)
             if tab_key == "setup":
