@@ -155,20 +155,51 @@ def check_gpu(conds):
             conds[f"gpu:{i}"] = f"pbox GPU{i} memory {pct:.0f}% ({used:.0f}/{total:.0f} MiB) >= {GPU_PCT:.0f}%"
 
 
+RC_FILE = os.environ.get("RESTART_COUNT_FILE", os.path.expanduser("~/monitor/.restartcounts.json"))
+IGNORE_RE = re.compile(os.environ.get("CONTAINER_IGNORE_RE", ""), re.I) if os.environ.get("CONTAINER_IGNORE_RE") else None
+
+
 def check_containers(conds):
-    # restart-looping or OOM-killed containers
+    # Restart-loop detection by RestartCount GROWTH between samples — NOT the instantaneous
+    # "Restarting" status, which flickers (Restarting->Up->Exited->Restarting) and made a single
+    # crash-looping container page as a "new" condition every few minutes. A container is looping
+    # iff its RestartCount rose since the last run; that is stable (re-reminds on REMIND_MIN, never
+    # flaps) and self-clears the moment the container stops restarting. First sight = no alert
+    # (we only page on fresh growth, so a chronic 2000-restart orphan doesn't spam on install).
+    # RestartCount lives on `docker inspect`, NOT `docker ps --format` (that placeholder errors out).
+    # Delimiter is '|' — Go templates emit a literal '\t', not a tab, so tab-splitting silently fails.
     try:
-        rows = _sh(r"docker ps -a --format '{{.Names}}\t{{.Status}}'")
+        rows = _sh(r"docker ps -aq | xargs -r docker inspect "
+                   r"--format '{{.Name}}|{{.RestartCount}}|{{.State.Status}}'")
     except Exception:
         return
+    try:
+        with open(RC_FILE) as f:
+            prev = json.load(f)
+    except Exception:
+        prev = {}
+    cur = {}
     for line in rows.splitlines():
-        if "\t" not in line:
+        parts = line.split("|")
+        if len(parts) < 3:
             continue
-        name, status = line.split("\t", 1)
-        if "Restarting" in status:
-            conds[f"restart:{name}"] = f"container '{name}' is restart-looping ({status})"
+        name, rc_s, status = parts[0].lstrip("/"), parts[1], parts[2]
+        if IGNORE_RE and IGNORE_RE.search(name):
+            continue
+        try:
+            rc = int(rc_s)
+        except ValueError:
+            rc = 0
+        cur[name] = rc
+        if name in prev and rc > prev[name]:
+            conds[f"restart:{name}"] = f"container '{name}' is crash-looping: +{rc - prev[name]} restarts since last check (total {rc})"
         if IMAGE_RE.search(name) and status.startswith("Up"):
             conds[f"image-running:{name}"] = f"image model container '{name}' is RUNNING ({status}) — expected stopped"
+    try:
+        with open(RC_FILE, "w") as f:
+            json.dump(cur, f)
+    except Exception:
+        pass
     # OOM kills in the LAST OOM_WINDOW_MIN minutes only — journald is timestamp-authoritative, so this
     # never re-fires on an ancient kill (dmesg|tail did, paging a stale event on every state reset).
     try:
