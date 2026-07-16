@@ -826,9 +826,10 @@ def _mcp_spawn_if_stale() -> None:
 
 
 def _mcp_seg() -> str:
-    """`⚠mcp✗app-db-nas/foo` — the MCP servers currently failing to connect, or '' when
-    all healthy. Always rendered (loud red) so a dead MCP can't sit unnoticed. Reads the
-    cache; a stale cache also kicks a throttled background re-check."""
+    """`⚠2 mcp✗ cloak-cdp/telegram-bot` — COUNT first (never truncated away) then the
+    failing MCP servers, or '' when all healthy. Names shown in full up to 3, else the
+    first two + `+N`. Always loud red so a dead MCP can't sit unnoticed. Reads the cache;
+    a stale cache also kicks a throttled background re-check."""
     _mcp_spawn_if_stale()
     try:
         with open(_MCP_CACHE) as f:
@@ -838,7 +839,9 @@ def _mcp_seg() -> str:
     failed = [n for n in names.strip().split(",") if n]
     if not failed:
         return ""
-    return f"{_RED}⚠mcp✗{'/'.join(failed)}{_RST}"
+    n = len(failed)
+    shown = "/".join(failed) if n <= 3 else f"{'/'.join(failed[:2])}+{n - 2}"
+    return f"{_RED}⚠{n} mcp✗ {shown}{_RST}"
 
 
 def main() -> int:
