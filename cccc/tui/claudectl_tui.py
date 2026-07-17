@@ -410,19 +410,26 @@ def switch_direct_local(name: str) -> dict:
     if not tok:
         return {"ok": False, "error": f"no local token — drop a setup-token in "
                                       f"~/.claude-accounts/{name}.token (router tokens are server-side)"}
-    # cheap liveness probe before installing the login: 401 = revoked token
-    # (a stale .token file), anything else (403 scope-limited / 200) = alive.
+    # ground-truth liveness: a 1-token inference call — the scope a setup-token
+    # ACTUALLY has. /oauth/profile is the wrong check: a healthy setup-token gets
+    # 403 there (no profile scope), so it can't tell alive from dead. Only a 401
+    # "revoked" here is fatal; 429/529/network = alive-enough, install anyway.
     try:
-        req = urllib.request.Request("https://api.anthropic.com/api/oauth/profile",
+        body = json.dumps({"model": "claude-haiku-4-5-20251001", "max_tokens": 1,
+                           "messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=body,
                                      headers={"authorization": f"Bearer {tok}",
-                                              "anthropic-beta": "oauth-2025-04-20"})
-        urllib.request.urlopen(req, timeout=8).read(0)
+                                              "anthropic-beta": "oauth-2025-04-20",
+                                              "anthropic-version": "2023-06-01",
+                                              "content-type": "application/json"})
+        urllib.request.urlopen(req, timeout=12).read(0)
     except urllib.error.HTTPError as e:
         if e.code == 401:
             return {"ok": False, "error": f"{name}'s local token is REVOKED — mint a fresh "
-                                          f"setup-token into ~/.claude-accounts/{name}.token"}
+                    f"setup-token into ~/.claude-accounts/{name}.token, or turn force-direct "
+                    f"OFF (Setup tab) + use 'switch — via router' to bill {name} server-side"}
     except Exception:
-        pass                                   # network hiccup → don't block the switch
+        pass                                   # network hiccup / 429 → don't block the switch
     blob = _kc_read()
     try:
         bak = os.path.expanduser(f"~/.claude-accounts/.keychain-backup-{int(time.time())}.json")
