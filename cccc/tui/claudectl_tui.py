@@ -339,16 +339,36 @@ def _kc_write(blob: dict) -> bool:
         return False
 
 
+def _norm(s: str) -> str:
+    """Collapse a name/email to bare alphanumerics for identity matching. This is the
+    trick that binds the router's slug to a hand-named token file with no per-account
+    map: `claude@mejl.to` → `claudemejlto` (== the slug), `Philip` → `philip`."""
+    return "".join(c for c in s.lower() if c.isalnum())
+
+
 def _direct_token(name: str) -> str:
     """The account's LOCAL setup-token — the only way to go direct, since the router
-    never reveals its server-side tokens. Tries ~/.claude-accounts/<name>.token, then
-    the email-named file (<email>.token) — token files are named by short-name OR
-    email in the wild (philip.token vs claude@mejl.to.token for `claudemejlto`)."""
-    for fn in (name, acct_email(name)):
-        if not fn:
+    never reveals its server-side tokens. The .token files are HAND-DROPPED and named
+    inconsistently (short-name `philip.token` vs email `claude@mejl.to.token`), so we
+    don't guess one filename: we ENUMERATE ~/.claude-accounts/*.token and match any file
+    whose normalized basename equals the account's normalized name OR email. That makes
+    the filename irrelevant — `claude@mejl.to` normalizes to the `claudemejlto` slug."""
+    want = {_norm(name)}
+    e = acct_email(name)
+    if e:
+        want.add(_norm(e))
+    try:
+        d = os.path.expanduser("~/.claude-accounts")
+        cands = [f for f in os.listdir(d) if f.endswith(".token")]
+    except OSError:
+        return ""
+    # exact-name file first (fast + unambiguous), then any normalized-identity match
+    order = sorted(cands, key=lambda f: (f != f"{name}.token", _norm(f[:-6]) not in want))
+    for f in order:
+        if _norm(f[:-6]) not in want:
             continue
         try:
-            t = open(os.path.expanduser(f"~/.claude-accounts/{fn}.token")).read().strip()
+            t = open(os.path.join(d, f)).read().strip()
             if t.startswith("sk-ant-oat"):
                 return t
         except OSError:
