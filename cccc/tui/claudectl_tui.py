@@ -291,6 +291,14 @@ def _llm_json(sub: str, timeout: float = 8):
         return {"error": f"{type(e).__name__}: {e}"[:120]}
 
 
+def _asdict(x) -> dict:
+    """Coerce a remote-JSON value to a dict — `{}` for anything else. The router can
+    answer with a list, a bare string, or `{"error": …}`; treating any of those as a
+    dict (`.get`) would raise on the UI thread and freeze the dashboard. One guard
+    instead of an `isinstance` at every access site."""
+    return x if isinstance(x, dict) else {}
+
+
 def _epoch_iso(sec):
     """Epoch seconds (the router's reset5/reset7) → ISO-8601 UTC. The _countdown/
     _clock/_remain_frac helpers parse ISO; None passes straight through."""
@@ -835,8 +843,7 @@ def fetch() -> dict:
                 lim_by_org[it["org_id"]] = it
     local_sel = _read_local_selected()  # the ★ this box pins
     # what THIS box is actually billed on: the server-side consumer→account lock
-    pins = (state.get("projectAccounts") or state.get("consumerAccounts") or {}) \
-        if isinstance(state, dict) else {}
+    pins = _asdict(_asdict(state).get("projectAccounts") or _asdict(state).get("consumerAccounts"))
     my_pin = pins.get(_consumer_name().lower(), "")
     # cross-machine presence: which boxes are on which account (from the MCP server)
     pres = _PRES   # refreshed by _live_worker; never blocks the UI thread
@@ -844,6 +851,7 @@ def fetch() -> dict:
                    for a in (pres.get("accounts") or []) if isinstance(a, dict)}
     rows = []
     for a in pool or []:
+        a = _asdict(a)                                # router could hand back a list of junk
         name = a.get("name", "?")
         org = a.get("org") or ""
         lm = lim_by_org.get(org, {})
@@ -1379,14 +1387,14 @@ def run(stdscr):
             # returns a fresh reading — or the reason it can't (429 vs OAuth dead).
             name = cur["name"]
             busy(f"live-testing {name} via the router (1 token)…")
-            r = _llm_post("claudecode/limits", {"account": name}, timeout=45)
-            rd = r.get("reading") if isinstance(r, dict) else None
+            r = _asdict(_llm_post("claudecode/limits", {"account": name}, timeout=45))
+            rd = _asdict(r.get("reading"))
             if rd:
                 ok(f"{name}: 5h {round((rd.get('u5') or 0) * 100)}% / "
                    f"7d {round((rd.get('u7') or 0) * 100)}% used · live ✓")
                 _live_refresh()
             else:
-                why = (r.get("reason") or r.get("error") or "no reading") if isinstance(r, dict) else "no reading"
+                why = r.get("reason") or r.get("error") or "no reading"
                 err(f"{name}: {why}")
         elif action in ("reveal", "rename", "add"):
             # Tokens are server-side and never revealed; pool naming/creation is
