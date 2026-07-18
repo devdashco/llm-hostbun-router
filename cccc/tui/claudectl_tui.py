@@ -915,8 +915,12 @@ def fetch() -> dict:
             "c7": _clock(iso7),
             "d7": _date_compact(iso7),   # reset DATE for the row ('Mon 13 Jul')
             "wk_left": _remain_frac(iso7),       # 0..1 of the 7d window LEFT
+            "_reset7": lm.get("reset7"),         # raw epoch — sort key (soonest reset on top)
             "machines": machines_by.get(name, []),   # boxes currently on this account
         })
+    # order by the 7d (weekly) reset: the account whose window resets SOONEST sits on
+    # top. Accounts with no 7d reading (never hit the wall / idle) sink to the bottom.
+    rows.sort(key=lambda r: (r.get("_reset7") is None, r.get("_reset7") or 0))
     err = ""
     for r in (state, limits):
         if isinstance(r, dict) and r.get("error"):
