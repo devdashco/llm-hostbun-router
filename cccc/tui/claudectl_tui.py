@@ -384,6 +384,27 @@ def _direct_token(name: str) -> str:
     return ""
 
 
+def _token_revoked(tok: str) -> bool:
+    """Ground-truth liveness: a 1-token inference call — the scope a setup-token ACTUALLY
+    has. /oauth/profile is the wrong check (a healthy setup-token gets 403 there, no
+    profile scope), so it can't tell alive from dead. Only a 401 means revoked; a 429/529
+    or any network hiccup returns False so a transient blip never blocks the switch."""
+    try:
+        body = json.dumps({"model": "claude-haiku-4-5-20251001", "max_tokens": 1,
+                           "messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=body,
+                                     headers={"authorization": f"Bearer {tok}",
+                                              "anthropic-beta": "oauth-2025-04-20",
+                                              "anthropic-version": "2023-06-01",
+                                              "content-type": "application/json"})
+        urllib.request.urlopen(req, timeout=12).read(0)
+    except urllib.error.HTTPError as e:
+        return e.code == 401
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
 def _set_force_direct(on: bool) -> None:
     """Flip the deliberate direct-connect flag + blank the route cache so the very
     next shell re-decides. Shared by the Setup toggle and the account switches."""
@@ -406,30 +427,21 @@ def switch_direct_local(name: str) -> dict:
     creds file) and set force-direct, so new panes hit api.anthropic.com as `name`.
     Backs the old blob up to ~/.claude-accounts/.keychain-backup-<ts>.json first.
     Returns {ok, error?}."""
-    tok = _direct_token(name)
+    # local file first; on a miss, self-heal by pulling the live token off the router.
+    tok = _direct_token(name) or _sync_token_from_router(name)
     if not tok:
-        return {"ok": False, "error": f"no local token — drop a setup-token in "
-                                      f"~/.claude-accounts/{name}.token (router tokens are server-side)"}
-    # ground-truth liveness: a 1-token inference call — the scope a setup-token
-    # ACTUALLY has. /oauth/profile is the wrong check: a healthy setup-token gets
-    # 403 there (no profile scope), so it can't tell alive from dead. Only a 401
-    # "revoked" here is fatal; 429/529/network = alive-enough, install anyway.
-    try:
-        body = json.dumps({"model": "claude-haiku-4-5-20251001", "max_tokens": 1,
-                           "messages": [{"role": "user", "content": "hi"}]}).encode()
-        req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=body,
-                                     headers={"authorization": f"Bearer {tok}",
-                                              "anthropic-beta": "oauth-2025-04-20",
-                                              "anthropic-version": "2023-06-01",
-                                              "content-type": "application/json"})
-        urllib.request.urlopen(req, timeout=12).read(0)
-    except urllib.error.HTTPError as e:
-        if e.code == 401:
-            return {"ok": False, "error": f"{name}'s local token is REVOKED — mint a fresh "
-                    f"setup-token into ~/.claude-accounts/{name}.token, or turn force-direct "
-                    f"OFF (Setup tab) + use 'switch — via router' to bill {name} server-side"}
-    except Exception:
-        pass                                   # network hiccup / 429 → don't block the switch
+        return {"ok": False, "error": f"no token for {name} — the router won't reveal one "
+                f"and ~/.claude-accounts/{name}.token is missing (is the gateway up?)"}
+    # local copy was revoked → try ONE fresh pull from the router before giving up. The
+    # gateway holds the current token even when the local file rotted, so a revoked
+    # direct switch usually just needs a resync, not a hand-minted setup-token.
+    if _token_revoked(tok):
+        fresh = _sync_token_from_router(name)
+        if fresh and fresh != tok and not _token_revoked(fresh):
+            tok = fresh
+        else:
+            return {"ok": False, "error": f"{name}'s token is REVOKED and the router has no "
+                    f"fresher copy — mint a new setup-token, or use 'switch — via router'"}
     blob = _kc_read()
     try:
         bak = os.path.expanduser(f"~/.claude-accounts/.keychain-backup-{int(time.time())}.json")
@@ -531,6 +543,26 @@ def _llm_post(sub: str, body: dict | None = None, timeout: float = 30):
         return _post()
     except Exception as e:  # noqa: BLE001
         return {"error": f"{type(e).__name__}: {e}"[:120]}
+
+
+def _sync_token_from_router(name: str) -> str:
+    """Pull `name`'s LIVE setup-token from the router (/api/reveal) and cache it to
+    ~/.claude-accounts/<name>.token (0600). This is how direct mode SELF-HEALS a
+    stale/revoked local copy after a rotation: the gateway always holds the fresh token,
+    so instead of dead-ending on 'mint a new setup-token' we just sync the live one.
+    Returns the token, or '' if the router is unreachable / won't reveal it."""
+    tok = _asdict(_llm_post("reveal", {"account": name})).get("token") or ""
+    if not tok.startswith("sk-ant-oat"):
+        return ""
+    try:
+        p = os.path.expanduser(f"~/.claude-accounts/{name}.token")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f:
+            f.write(tok)
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
+    return tok
 
 
 def _live_refresh():

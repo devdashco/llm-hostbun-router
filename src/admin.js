@@ -310,6 +310,20 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     return sendJson(res, 200, await refreshAccountLimits(acct));
   }
 
+  // Reveal the FULL setup-token for one account — admin-gated (isAuthed above). Every
+  // other Accounts response masks the token (tokenMasked); this is the ONE endpoint
+  // that returns the raw sk-ant-oat, so a direct-mode box can resync its stale local
+  // ~/.claude-accounts/<name>.token to the live pool token after a rotation (else the
+  // old local copy 401s on direct while the gateway still works on the fresh one).
+  if (sub === "reveal" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {}; try { p = JSON.parse(body.toString()); } catch {}
+    const pool = CFG.claudecodeAccountPool || [];
+    const acct = pool.find((a) => a.name.toLowerCase() === String(p.account || "").trim().toLowerCase());
+    if (!acct) return sendJson(res, 400, { error: "no such account", accounts: pool.map((a) => a.name) });
+    return sendJson(res, 200, { name: acct.name, org: acct.org || "", token: acct.token || "" });
+  }
+
   // Everything the operator needs to answer "who is spending each subscription, and how much window
   // is left". The pool is the spine — an account with no traffic still gets a row, which is exactly
   // the case the old org-keyed limits table could not represent.
