@@ -25,9 +25,9 @@
   },
 
   "core": [
-    "keyvault", "claudectl", "ssh", "headroom",
+    "keyvault", "claudectl", "ssh",
     "typescript-lsp", "pyright-lsp", "gopls-lsp", "php-lsp", "ruby-lsp", "swift-lsp", "jdtls-lsp",
-    "claude-md-management", "plugin-dev", "fix-codebase", "frontend-design", "terminal",
+    "claude-md-management", "plugin-dev", "fix-codebase", "frontend-design",
     "agent-reach", "skill-creator", "mcp-server-dev", "agent-sdk-dev", "claude-code-setup"
   ],
 
