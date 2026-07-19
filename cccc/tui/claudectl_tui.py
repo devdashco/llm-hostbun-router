@@ -42,13 +42,33 @@ import plugin_profiles as pp  # noqa: E402
 # --- local login (what interactive `claude` reads) -------------------------
 # macOS: the live OAuth token lives in the login keychain, service
 #   "Claude Code-credentials", account = the OS username. We swap its
-#   claudeAiOauth block, preserving everything else (mcpOAuth etc).
-# Linux/other: Claude Code stores it in ~/.claude/.credentials.json — same shape.
+#   claudeAiOauth block, preserving everything else (mcpOAuth etc). Keychain is not
+#   file-based, so CLAUDE_CONFIG_DIR does not affect it.
+# Linux/Windows: Claude Code stores it in <config-dir>/.credentials.json (same shape),
+#   where <config-dir> honors CLAUDE_CONFIG_DIR, else ~/.claude — see _cc_config_dir().
 import getpass
 KC_SVC = "Claude Code-credentials"
 KC_ACCT = os.environ.get("CLAUDECTL_KC_ACCT") or (os.environ.get("USER") or getpass.getuser())
 _IS_MAC = sys.platform == "darwin"
-CRED_FILE = os.path.expanduser("~/.claude/.credentials.json")
+
+
+def _cc_config_dir() -> str:
+    """Claude Code's config directory. Honors CLAUDE_CONFIG_DIR — which relocates
+    `.credentials.json` (documented for Linux/Windows) — so cccc reads and writes the
+    SAME login file `claude` actually uses, not a stale `~/.claude` default. Unset →
+    `~/.claude`, so behaviour is unchanged on a standard box."""
+    d = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return os.path.expanduser(d) if d else os.path.expanduser("~/.claude")
+
+
+def _cred_file() -> str:
+    return os.path.join(_cc_config_dir(), ".credentials.json")
+
+
+def _settings_file() -> str:
+    """This box's USER-scope settings.json — inside CLAUDE_CONFIG_DIR when relocated,
+    so header/plugin writes land where `claude` actually reads them."""
+    return os.path.join(_cc_config_dir(), "settings.json")
 # which account cccc last applied to the LOCAL login — the one every new `claude`
 # launches with. This is the authoritative "ON" account (the gateway's own active
 # drifts server-side and doesn't affect interactive claude).
@@ -126,7 +146,7 @@ def set_consumer_headers(account: str = "") -> bool:
     accepted for call-site symmetry but unused. New claude launches pick the
     headers up; a running pane keeps its launch env until restart. Returns ok."""
     consumer = _consumer_name()
-    p = os.path.expanduser("~/.claude/settings.json")
+    p = _settings_file()
     try:
         d = json.load(open(p))
     except (OSError, json.JSONDecodeError):
@@ -320,7 +340,7 @@ def _kc_read() -> dict:
             pass
         return {}
     try:
-        return json.load(open(CRED_FILE))
+        return json.load(open(_cred_file()))
     except Exception:
         return {}
 
@@ -336,12 +356,13 @@ def _kc_write(blob: dict) -> bool:
         except Exception:
             return False
     try:
-        os.makedirs(os.path.dirname(CRED_FILE), exist_ok=True)
-        tmp = CRED_FILE + ".tmp"
+        cred = _cred_file()
+        os.makedirs(os.path.dirname(cred), exist_ok=True)
+        tmp = cred + ".tmp"
         with open(tmp, "w") as f:
             f.write(raw)
         os.chmod(tmp, 0o600)
-        os.replace(tmp, CRED_FILE)
+        os.replace(tmp, cred)
         return True
     except Exception:
         return False
@@ -584,8 +605,13 @@ def _live_refresh():
         prev = new.get(name)
         if prev and (it.get("ts") or 0) < prev.get("_ts", 0):
             continue                     # keep the freshest row per account
+        # A null u5/u7 means "no reading" (idle/never-harvested account) — it must
+        # stay None, NOT collapse to 0. A 0 renders as a full-green "ready" bar and
+        # would make an unknown-usage account look freshly available; keep None so the
+        # bar shows "—" and the consumer falls back to the cached reading.
         new[name] = {
-            "u5": (it.get("u5") or 0) * 100, "u7": (it.get("u7") or 0) * 100,
+            "u5": (it["u5"] * 100 if it.get("u5") is not None else None),
+            "u7": (it["u7"] * 100 if it.get("u7") is not None else None),
             "s5": it.get("s5"), "s7": it.get("s7"),
             "usable": it.get("status") != "rejected", "_ts": it.get("ts") or 0,
         }
@@ -743,14 +769,22 @@ def _broadcast(text: str, confirm: bool = False) -> int:
     """Type `text` + Enter into every running claude pane (except this one).
     confirm=True sends a second Enter after a beat to accept a follow-up dialog
     default (e.g. `/model X` pops a 'Switch model? ❯ Yes' confirm)."""
+    # This runs on the UI thread (via dispatch). cmux may not be on PATH (→
+    # FileNotFoundError) or may hang; either would crash/freeze the dashboard, so
+    # every call is bounded and swallowed.
+    def _cmux(*args):
+        try:
+            subprocess.run([_CMUX, *args], capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
     surfaces = _claude_surfaces()
     for s in surfaces:
-        subprocess.run([_CMUX, "send", "--surface", s, text], capture_output=True)
-        subprocess.run([_CMUX, "send-key", "--surface", s, "enter"], capture_output=True)
+        _cmux("send", "--surface", s, text)
+        _cmux("send-key", "--surface", s, "enter")
     if confirm and surfaces:
         time.sleep(1.0)
         for s in surfaces:
-            subprocess.run([_CMUX, "send-key", "--surface", s, "enter"], capture_output=True)
+            _cmux("send-key", "--surface", s, "enter")
     return len(surfaces)
 
 
@@ -979,6 +1013,10 @@ def _popup(stdscr, title: str, text: str):
         lines.append(raw)
     ph = min(len(lines) + 2, h - 2)
     pw = w - 2
+    if ph < 3 or pw < 3:
+        # terminal too small to draw a boxed window — newwin/box would raise and
+        # tear the whole dashboard down. Skip the popup rather than crash.
+        return
     win = curses.newwin(ph, pw, 1, 1)
     win.box()
     win.addstr(0, 2, f" {title} "[: pw - 4], curses.A_BOLD)
@@ -1433,8 +1471,11 @@ def run(stdscr):
             r = _asdict(_llm_post("claudecode/limits", {"account": name}, timeout=45))
             rd = _asdict(r.get("reading"))
             if rd:
-                ok(f"{name}: 5h {round((rd.get('u5') or 0) * 100)}% / "
-                   f"7d {round((rd.get('u7') or 0) * 100)}% used · live ✓")
+                # null u5/u7 = "no reading" → show "?", never a falsely-confident 0%.
+                def _used(v):
+                    return f"{round(v * 100)}%" if isinstance(v, (int, float)) else "?"
+                ok(f"{name}: 5h {_used(rd.get('u5'))} / "
+                   f"7d {_used(rd.get('u7'))} used · live ✓")
                 _live_refresh()
             else:
                 why = r.get("reason") or r.get("error") or "no reading"
@@ -1665,8 +1706,10 @@ def run(stdscr):
                 rev = curses.A_REVERSE if idx == sel else 0
                 lv = _LIVE.get(r["name"], {})            # live ground truth (may be empty)
                 usable = lv.get("usable", None)
-                u7 = lv.get("u7", r["u7"])               # prefer LIVE 7d over the cached value
-                u5 = lv.get("u5", r["u5"])
+                # prefer the LIVE reading, but fall back to the cached one when LIVE is
+                # None ("no reading" — not 0%): a null must not override a real cached %.
+                u7 = lv["u7"] if lv.get("u7") is not None else r["u7"]
+                u5 = lv["u5"] if lv.get("u5") is not None else r["u5"]
                 dead = usable is False
                 mark = "★" if r.get("local") else ("●" if r["active"] else " ")
                 nameattr = ((C_HOT if dead else C_ACTIVE if r.get("local") else curses.A_NORMAL)) | rev
@@ -1900,7 +1943,7 @@ def _guard(quiet=False, fix=False) -> int:
     if os.environ.get("ANTHROPIC_BASE_URL"):
         warn.append(f"env ANTHROPIC_BASE_URL={os.environ['ANTHROPIC_BASE_URL']} → routes through a proxy (not direct subscription).")
     # 2. settings.json: apiKeyHelper / env keys
-    sp = os.path.expanduser("~/.claude/settings.json")
+    sp = _settings_file()
     try:
         cfg = json.load(open(sp))
     except Exception:

@@ -45,6 +45,26 @@ import sys
 import time
 
 HOME = os.path.expanduser("~")
+
+
+def _cc_config_dir() -> str:
+    """Claude Code's config dir — honors CLAUDE_CONFIG_DIR (which relocates
+    `.credentials.json`, documented for Linux/Windows), else ~/.claude. Reading the
+    default path after `claude`'s config was relocated is how the line shows a STALE
+    account/limit; this keeps the statusline pointed at the live config."""
+    d = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return os.path.expanduser(d) if d else f"{HOME}/.claude"
+
+
+def _cc_file(name: str, legacy: str) -> str:
+    """Resolve a Claude config file: prefer <config-dir>/<name>, fall back to the legacy
+    ~/ path when that file isn't in the config dir. Only `.credentials.json` is
+    documented to relocate, so for `settings.json` / `.claude.json` we read whichever
+    actually exists rather than guess — never a stale copy when a fresh one is present."""
+    p = os.path.join(_cc_config_dir(), name)
+    return p if os.path.exists(p) else os.path.expanduser(legacy)
+
+
 _VER_CACHE = f"{HOME}/.claude/.cctl-version"   # epoch\tvalue — refreshed lazily
 _VER_TTL = 60                                  # sha only moves on a git pull
 _SYNC_STAMP = f"{HOME}/.claude/.cctl-autosync" # last background-sync epoch
@@ -188,7 +208,7 @@ def _ctx_free(d: dict):
 
 def _lsp_enabled() -> dict:
     try:
-        with open(f"{HOME}/.claude/settings.json") as f:
+        with open(_cc_file("settings.json", f"{HOME}/.claude/settings.json")) as f:
             return json.load(f).get("enabledPlugins", {})
     except (OSError, json.JSONDecodeError):
         return {}
@@ -307,14 +327,21 @@ def _short_cwd(cwd: str) -> str:
 
 
 def _git(cwd: str):
-    """(branch, dirty_count) for cwd, or ('', 0) if not a repo."""
+    """(branch, dirty_count) for cwd, or ('', 0) if not a repo.
+
+    This runs SYNCHRONOUSLY on the render path (every prompt), so both git calls are
+    bounded + fail-safe: a repo on a hung NFS mount, a huge tree, or a stale
+    index.lock would otherwise freeze the whole line — the one thing this file forbids."""
     d = cwd or "."
-    branch = subprocess.run(["git", "-C", d, "symbolic-ref", "--short", "HEAD"],
-                            capture_output=True, text=True).stdout.strip()
-    if not branch:
+    try:
+        branch = subprocess.run(["git", "-C", d, "symbolic-ref", "--short", "HEAD"],
+                                capture_output=True, text=True, timeout=3).stdout.strip()
+        if not branch:
+            return "", 0
+        porc = subprocess.run(["git", "-C", d, "status", "--porcelain"],
+                              capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
         return "", 0
-    porc = subprocess.run(["git", "-C", d, "status", "--porcelain"],
-                          capture_output=True, text=True).stdout
     dirty = sum(1 for ln in porc.splitlines() if ln.strip())
     return branch, dirty
 
@@ -341,7 +368,7 @@ def _read_token() -> str:
     except Exception:  # noqa: BLE001  (not macOS / no keychain entry)
         pass
     try:
-        with open(f"{HOME}/.claude/.credentials.json") as f:
+        with open(_cc_file(".credentials.json", f"{HOME}/.claude/.credentials.json")) as f:
             return json.load(f)["claudeAiOauth"]["accessToken"]
     except Exception:  # noqa: BLE001
         return ""
@@ -530,7 +557,7 @@ def _account():
         star = ""
     email = ""
     try:
-        with open(f"{HOME}/.claude.json") as f:
+        with open(_cc_file(".claude.json", f"{HOME}/.claude.json")) as f:
             email = (json.load(f).get("oauthAccount", {}) or {}).get("emailAddress", "")
     except (OSError, json.JSONDecodeError):
         pass
@@ -567,13 +594,16 @@ def _version() -> str:
     except (OSError, ValueError):
         pass
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sha = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"],
-                         capture_output=True, text=True).stdout.strip()
-    val = ""
-    if sha:
-        dirty = subprocess.run(["git", "-C", repo, "status", "--porcelain", "-uno"],
-                               capture_output=True, text=True).stdout.strip()
-        val = f"cctl:{sha}{'*' if dirty else ''}"
+    try:
+        sha = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=3).stdout.strip()
+        val = ""
+        if sha:
+            dirty = subprocess.run(["git", "-C", repo, "status", "--porcelain", "-uno"],
+                                   capture_output=True, text=True, timeout=3).stdout.strip()
+            val = f"cctl:{sha}{'*' if dirty else ''}"
+    except (OSError, subprocess.SubprocessError):
+        return ""
     try:
         with open(_VER_CACHE, "w") as f:
             f.write(f"{time.time()}\t{val}")
@@ -625,9 +655,12 @@ def _side_effects(raw: str):
     feed = f"{HOME}/.claude/claudewatch-feed.sh"
     if os.path.exists(feed):
         try:
-            subprocess.Popen(["bash", feed], stdin=subprocess.PIPE,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                             ).stdin.write(raw.encode())
+            # feed the JSON on stdin and CLOSE it — without communicate()/close the
+            # child blocks on read() forever, orphaning a hung bash every render.
+            p = subprocess.Popen(["bash", feed], stdin=subprocess.PIPE,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            p.stdin.write(raw.encode())
+            p.stdin.close()
         except Exception:  # noqa: BLE001
             pass
 

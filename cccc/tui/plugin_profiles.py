@@ -22,9 +22,25 @@ import os
 
 HOME = os.path.expanduser("~")
 _HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _cc_config_dir() -> str:
+    """Claude Code's config dir — honors CLAUDE_CONFIG_DIR (else ~/.claude), so the
+    Plugins tab reads the SAME settings `claude` uses, not a stale default."""
+    d = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return os.path.expanduser(d) if d else os.path.join(HOME, ".claude")
+
+
+def _claude_json() -> str:
+    """`.claude.json` — inside CLAUDE_CONFIG_DIR when relocated (undocumented but that's
+    where the whole config moves), else the legacy ~/.claude.json."""
+    cand = os.path.join(_cc_config_dir(), ".claude.json")
+    return cand if os.path.exists(cand) else os.path.join(HOME, ".claude.json")
+
+
 # plugin-profiles.json lives at the repo root, one level up from tui/
 CONFIG_PATH = os.path.abspath(os.path.join(_HERE, os.pardir, "plugin-profiles.json"))
-GLOBAL_SETTINGS = os.path.join(HOME, ".claude", "settings.json")
+GLOBAL_SETTINGS = os.path.join(_cc_config_dir(), "settings.json")
 GITHUB_ROOT = os.path.join(HOME, "Documents", "GitHub")
 
 
@@ -90,7 +106,7 @@ def _index() -> dict[str, str]:
         pass
     # 2) anything Claude Code has opened (covers nested/odd locations)
     try:
-        with open(os.path.join(HOME, ".claude.json")) as f:
+        with open(_claude_json()) as f:
             projs = (json.load(f).get("projects") or {})
         for path in projs:
             if os.path.isdir(path):
