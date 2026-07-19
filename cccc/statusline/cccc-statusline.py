@@ -805,6 +805,13 @@ def _mcp_resolve() -> None:
 def _mcp_spawn_if_stale() -> None:
     """Kick the health-check when the cache is older than the TTL — throttled to at
     most once / 90s even when it keeps failing. Fire-and-forget; never delays render."""
+    # DISABLED by default: `claude mcp list` connects to + tears down EVERY MCP server
+    # to health-check it, which kills the live session's shared-socket stdio servers
+    # (ssh/db ControlMaster) and storms the remote HTTP boxes — the "reload every new
+    # terminal" bug. Opt back in with CCCC_MCP_PROBE=1. ponytail: probe is nice-to-have,
+    # working MCP is not — kill the disruptive default, keep the knob.
+    if os.environ.get("CCCC_MCP_PROBE") != "1":
+        return
     try:
         if time.time() - os.stat(_MCP_CACHE).st_mtime < _MCP_TTL:
             return
