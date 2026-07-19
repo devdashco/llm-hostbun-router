@@ -76,16 +76,6 @@ _LLM_ADMIN = os.environ.get("CCTL_LLM_ADMIN", "https://llm.hostbun.cc").rstrip("
 _LLM_PW = os.environ.get("CCTL_LLM_PW", "ddash")
 _POOL_CACHE = f"{HOME}/.claude/.cctl-anthropic"    # epoch\tname\tu5\tu7\tstatus\torg\tsource\treading_ts(ms)
 _POOL_TTL = 40                                     # cache freshness before a background refresh
-# --- failed-MCP segment ----------------------------------------------------
-# `claude mcp list` health-checks every configured server (~10s — WAY too slow for
-# the render path), printing `✘ Failed to connect` for the dead ones. So a throttled
-# background pass runs it, caches the failed server names, and every render just reads
-# the cache: the line loudly shows `⚠mcp✗app-db-nas` whenever a server is down, empty
-# once all reconnect. Always-on so a silently-dead MCP can't hide.
-_MCP_CACHE = f"{HOME}/.claude/.cctl-mcp"           # epoch\tfailed,comma,names
-_MCP_STAMP = f"{HOME}/.claude/.cctl-mcp-stamp"     # last spawn (throttle, even on fail)
-_MCP_TTL = 300                                     # re-check health at most every 5 min
-_MCP_MINGAP = 90                                   # never spawn more than 1× / 90s
 
 
 def _machine() -> str:
@@ -777,79 +767,6 @@ def _anthropic_seg() -> str:
     return " ".join(segs)
 
 
-def _mcp_resolve() -> None:
-    """Background pass (`--mcp-refresh`): run `claude mcp list`, parse the servers
-    that `✘ Failed to connect`, cache their short names. Best-effort — any failure
-    leaves the previous cache untouched."""
-    try:
-        out = subprocess.run(["claude", "mcp", "list"], capture_output=True,
-                             text=True, timeout=45).stdout
-    except Exception:  # noqa: BLE001  (claude not on PATH / hang)
-        return
-    failed = []
-    for ln in out.splitlines():
-        if "Failed to connect" not in ln:
-            continue
-        # `<id>: <cmd> - ✘ Failed to connect` → id → last colon-segment is the short name
-        ident = ln.split(" - ", 1)[0].rsplit(": ", 1)[0].strip()
-        short = ident.split(":")[-1].strip()
-        if short and short not in failed:
-            failed.append(short)
-    try:
-        with open(_MCP_CACHE, "w") as f:
-            f.write(f"{time.time()}\t{','.join(failed)}")
-    except OSError:
-        pass
-
-
-def _mcp_spawn_if_stale() -> None:
-    """Kick the health-check when the cache is older than the TTL — throttled to at
-    most once / 90s even when it keeps failing. Fire-and-forget; never delays render."""
-    # DISABLED by default: `claude mcp list` connects to + tears down EVERY MCP server
-    # to health-check it, which kills the live session's shared-socket stdio servers
-    # (ssh/db ControlMaster) and storms the remote HTTP boxes — the "reload every new
-    # terminal" bug. Opt back in with CCCC_MCP_PROBE=1. ponytail: probe is nice-to-have,
-    # working MCP is not — kill the disruptive default, keep the knob.
-    if os.environ.get("CCCC_MCP_PROBE") != "1":
-        return
-    try:
-        if time.time() - os.stat(_MCP_CACHE).st_mtime < _MCP_TTL:
-            return
-    except OSError:
-        pass
-    try:
-        if time.time() - os.stat(_MCP_STAMP).st_mtime < _MCP_MINGAP:
-            return
-    except OSError:
-        pass
-    try:
-        with open(_MCP_STAMP, "w") as f:         # stamp BEFORE spawn → throttle failures too
-            f.write(str(time.time()))
-        subprocess.Popen([sys.executable, os.path.abspath(__file__), "--mcp-refresh"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         stdin=subprocess.DEVNULL, start_new_session=True)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _mcp_seg() -> str:
-    """`⚠2 mcp✗ cloak-cdp/telegram-bot` — COUNT first (never truncated away) then the
-    failing MCP servers, or '' when all healthy. Names shown in full up to 3, else the
-    first two + `+N`. Always loud red so a dead MCP can't sit unnoticed. Reads the cache;
-    a stale cache also kicks a throttled background re-check."""
-    _mcp_spawn_if_stale()
-    try:
-        with open(_MCP_CACHE) as f:
-            _, names = f.read().split("\t", 1)
-    except (OSError, ValueError):
-        return ""                                # never checked yet → nothing to claim
-    failed = [n for n in names.strip().split(",") if n]
-    if not failed:
-        return ""
-    n = len(failed)
-    shown = "/".join(failed) if n <= 3 else f"{'/'.join(failed[:2])}+{n - 2}"
-    return f"{_RED}⚠{n} mcp✗ {shown}{_RST}"
-
 
 def main() -> int:
     if "--whoami" in sys.argv:      # background self-invocation: resolve + cache, no stdin
@@ -857,9 +774,6 @@ def main() -> int:
         return 0
     if "--anthropic-refresh" in sys.argv:   # background: cache the proxy's sticky account + headroom
         _anthropic_refresh()
-        return 0
-    if "--mcp-refresh" in sys.argv:         # background: health-check MCPs, cache the failed ones
-        _mcp_resolve()
         return 0
     raw = sys.stdin.read()
     try:
@@ -899,9 +813,6 @@ def main() -> int:
     lsp = _lsp_seg(cwd)
     if lsp:
         line1.append(lsp)
-    mcp = _mcp_seg()                    # loud ⚠ whenever an MCP server is failing to connect
-    if mcp:
-        line1.append(mcp)
 
     # Account cluster: WHO + HOW-HOT as one unit. The account NAME is coloured by its
     # hottest window (green healthy → red nearly dead), so the name itself is the alarm,
