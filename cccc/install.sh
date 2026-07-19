@@ -242,6 +242,26 @@ if command -v crontab >/dev/null 2>&1; then
   fi
 fi
 
+# --- 2d. share plugins into alternate account config dirs ------------------
+# `claude-philip` / `-william` / `-emphyx` (zsh aliases) launch with a per-account
+# CLAUDE_CONFIG_DIR=$HOME/.claude-<name>. Those dirs hold only .credentials.json —
+# NO plugin store, NO enabledPlugins — so a switched-account launch loads ZERO
+# plugins. cccc's own token-swap stays on ~/.claude and is unaffected; this heals
+# the alias dirs by symlinking the machine-global plugin store + settings into
+# each (their own .credentials.json keeps the account identity separate).
+# Idempotent — reconverges on every install/sync.
+for acct in "$HOME"/.claude-*; do
+  [ -d "$acct" ] || continue
+  case "$acct" in "$HOME/.claude-accounts") continue ;; esac   # token store, not a config dir
+  for item in plugins settings.json; do
+    src="$HOME/.claude/$item"; dst="$acct/$item"
+    [ -e "$src" ] || continue
+    [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ] && continue   # already linked
+    rm -rf "$dst"; ln -s "$src" "$dst" \
+      && say "linked $(basename "$acct")/$item -> ~/.claude/$item"
+  done
+done
+
 # --- 3. make sure PREFIX is on PATH ----------------------------------------
 case ":$PATH:" in
   *":$PREFIX:"*) : ;;
