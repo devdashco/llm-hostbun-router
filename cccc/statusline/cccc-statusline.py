@@ -40,6 +40,7 @@ menu-bar app keeps working): mirrors stdin to ~/.claude/headroom-usage.json and 
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -67,6 +68,8 @@ def _cc_file(name: str, legacy: str) -> str:
 
 _VER_CACHE = f"{HOME}/.claude/.cctl-version"   # epoch\tvalue — refreshed lazily
 _VER_TTL = 60                                  # sha only moves on a git pull
+_HOST_CACHE = f"{HOME}/.claude/.cctl-githost"  # cwd\tepoch\thost — per-dir, TTL'd
+_HOST_TTL = 300                                # origin remote almost never changes
 _SYNC_STAMP = f"{HOME}/.claude/.cctl-autosync" # last background-sync epoch
 _SYNC_EVERY = 1800                             # self-sync at most every 30 min
 
@@ -96,6 +99,16 @@ _LLM_ADMIN = os.environ.get("CCTL_LLM_ADMIN", "https://llm.hostbun.cc").rstrip("
 _LLM_PW = os.environ.get("CCTL_LLM_PW", "ddash")
 _POOL_CACHE = f"{HOME}/.claude/.cctl-anthropic"    # epoch\tname\tu5\tu7\tstatus\torg\tsource\treading_ts(ms)
 _POOL_TTL = 40                                     # cache freshness before a background refresh
+
+# linked-issue open/closed: the branch name only NAMES an issue (regex guess, no
+# network) — whether that issue is actually still open needs one `gh issue view`
+# call, which is too slow for the render path. Same cache+throttled-background-spawn
+# shape as whoami/pool above: render reads a cache, kicks a bounded background `gh`
+# call when stale, never blocks on the network itself.
+_ISSUE_CACHE = f"{HOME}/.claude/.cctl-issuestate"        # cwd\tnum\tepoch\tstate
+_ISSUE_TTL = 120
+_ISSUE_STAMP = f"{HOME}/.claude/.cctl-issuestate-stamp"  # last spawn (throttle)
+_ISSUE_MINGAP = 30
 
 
 def _machine() -> str:
@@ -136,6 +149,11 @@ _RED, _DIM, _RST = "\033[31m", "\033[2m", "\033[0m"
 _GRN, _YEL = "\033[32m", "\033[33m"
 _BLD = "\033[1m"
 _GAUGE = "▁▂▃▄▅▆▇█"
+_ORANGE = "\033[38;5;208m"   # feature-branch flag — distinct from the yellow ±dirty count
+_CYN = "\033[36m"            # linked GitHub issue number
+_MAG = "\033[38;5;170m"      # GitLab host badge — the fleet migrated GH→GitLab, make it visible
+_MAIN_BRANCHES = {"main", "master", "trunk", "develop", "dev", "staging", "production"}
+_ISSUE_RE = re.compile(r"(?:^|[-/_])#?(\d{2,6})(?:[-_]|$)")
 
 
 def _health(rem: float) -> str:
@@ -344,6 +362,167 @@ def _git(cwd: str):
         return "", 0
     dirty = sum(1 for ln in porc.splitlines() if ln.strip())
     return branch, dirty
+
+
+def _git_host(cwd: str) -> str:
+    """Which forge the `origin` remote points at — 'gitlab', 'github', or a bare
+    hostname for anything else ('' if no remote / not a repo). The fleet migrated
+    GitHub→GitLab (gitlab.hostbun.cc), so at a glance you want to know whether the
+    branch you're on actually lives on GitLab or is still a GitHub checkout.
+
+    Cached per-cwd (300 s) — the origin URL only moves on a `remote set-url`, so we
+    don't want a git spawn on every render."""
+    d = cwd or "."
+    try:
+        with open(_HOST_CACHE) as f:
+            for ln in f:
+                cdir, ts, host = (ln.rstrip("\n").split("\t", 2) + ["", "", ""])[:3]
+                if cdir == d and time.time() - float(ts or 0) < _HOST_TTL:
+                    return host
+    except (OSError, ValueError):
+        pass
+    try:
+        url = subprocess.run(["git", "-C", d, "remote", "get-url", "origin"],
+                             capture_output=True, text=True, timeout=3).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    low = url.lower()
+    if "gitlab" in low:
+        host = "gitlab"
+    elif "github" in low:
+        host = "github"
+    elif url:
+        # anything else: pull the bare hostname out of scp-style or URL-style remotes
+        m = re.search(r"@([^:/]+)|https?://([^/]+)", url)
+        host = (m.group(1) or m.group(2)) if m else "git"
+    else:
+        host = ""
+    try:
+        with open(_HOST_CACHE, "w") as f:
+            f.write(f"{d}\t{time.time()}\t{host}")
+    except OSError:
+        pass
+    return host
+
+
+def _host_badge(host: str) -> str:
+    """Small forge badge for the branch segment. GitLab is loud (magenta 🦊) because
+    that's the fleet's current home; GitHub and others stay dim so they don't shout."""
+    if host == "gitlab":
+        return f"{_MAG}🦊gl{_RST}"
+    if host == "github":
+        return f"{_DIM}gh{_RST}"
+    if host:
+        return f"{_DIM}{host}{_RST}"
+    return ""
+
+
+def _issue_from_branch(branch: str) -> str:
+    """Pull a GitHub issue number out of a conventional branch name — `123-fix-thing`,
+    `feature/123-desc`, `fix-123`, `gh-123` — or '' if the branch names nothing. Purely
+    a naming-convention guess (no gh/API call on the render path), but it's the common
+    case and costs nothing."""
+    m = _ISSUE_RE.search(branch or "")
+    return m.group(1) if m else ""
+
+
+def _issue_state_resolve(cwd: str, num: str) -> None:
+    """Background pass (invoked as `--issue-refresh <cwd> <num>`): ask `gh` whether the
+    issue the branch names is OPEN or CLOSED, cache the verdict. Runs in `cwd` so `gh`
+    resolves the right repo with no extra flags. Best-effort — any failure just leaves
+    the previous cache untouched (render falls back to whatever's cached, or no badge)."""
+    if not cwd or not num:
+        return
+    try:
+        out = subprocess.run(["gh", "issue", "view", num, "--json", "state"],
+                             cwd=cwd, capture_output=True, text=True, timeout=15)
+        if out.returncode != 0:
+            return
+        state = (json.loads(out.stdout).get("state") or "").upper()
+    except Exception:  # noqa: BLE001
+        return
+    if state not in ("OPEN", "CLOSED"):
+        return
+    try:
+        with open(_ISSUE_CACHE, "w") as f:
+            f.write(f"{cwd}\t{num}\t{time.time()}\t{state}")
+    except OSError:
+        pass
+
+
+def _issue_state_spawn(cwd: str, num: str) -> None:
+    """Fire the background `gh` lookup, throttled to at most once every
+    `_ISSUE_MINGAP` seconds (even on failure) — never more than one `gh` spawn in
+    flight for the render path."""
+    try:
+        if time.time() - os.stat(_ISSUE_STAMP).st_mtime < _ISSUE_MINGAP:
+            return
+    except OSError:
+        pass
+    try:
+        with open(_ISSUE_STAMP, "w") as f:      # stamp BEFORE spawn → throttle failures too
+            f.write(str(time.time()))
+        subprocess.Popen([sys.executable, os.path.abspath(__file__),
+                          "--issue-refresh", cwd, num],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _issue_state_cached(cwd: str, num: str) -> str:
+    """'OPEN'/'CLOSED' for issue #num (from cwd's repo), read from the cache — NEVER
+    spawns `gh` synchronously. Kicks a throttled background refresh whenever the cached
+    reading is missing, stale, or for a different cwd/issue than asked for; still
+    returns the (possibly stale) cached value so the badge shows something between
+    refreshes rather than flickering blank."""
+    state = ""
+    try:
+        with open(_ISSUE_CACHE) as f:
+            c_cwd, c_num, ts, st = f.read().split("\t", 3)
+        if c_cwd == cwd and c_num == num:
+            state = st.strip()
+            if time.time() - float(ts) < _ISSUE_TTL:
+                return state
+    except (OSError, ValueError):
+        pass
+    _issue_state_spawn(cwd, num)
+    return state
+
+
+def _branch_seg(branch: str, dirty: int, pr: dict, host: str = "", cwd: str = "") -> str:
+    """Branch segment, styled so a FEATURE branch visually jumps out from `main`:
+      main/master/…   dim `⑂branch` — quiet, matches every other dim label
+      feature branch  bold ORANGE `🌿branch` — loud, you can't miss you're off trunk
+    A forge badge (🦊gl for GitLab, dim gh for GitHub) leads the segment so you know
+    at a glance which host the branch lives on. A linked PR (from Claude Code's own
+    `pr` field) or a branch-name issue number rides alongside, coloured by PR review
+    state when known. The linked issue's OPEN/CLOSED state (from a cached, throttled
+    `gh issue view`) rides right on the issue number — cyan `#123·open` means the branch
+    still points at an open issue, dim `#123✓closed` means the issue is done (you may be
+    on a stale branch); no state yet resolved just shows plain cyan `#123`."""
+    is_main = branch in _MAIN_BRANCHES
+    badge = _host_badge(host)
+    lead = f"{badge}{_DIM}·{_RST}" if badge else ""
+    seg = lead + (f"{_DIM}⑂{_RST}{branch}" if is_main else f"{_ORANGE}{_BLD}🌿{branch}{_RST}")
+    if dirty:
+        seg += f"{_YEL}±{dirty}{_RST}"
+    pr_num = (pr or {}).get("number")
+    if pr_num:
+        state = (pr or {}).get("review_state") or "open"
+        pcol = _GRN if state == "approved" else _RED if state == "changes_requested" else _YEL
+        seg += f"{_DIM}·{_RST}{pcol}PR#{pr_num}{_RST}"
+    else:
+        issue = _issue_from_branch(branch)
+        if issue:
+            ist = _issue_state_cached(cwd, issue) if cwd else ""
+            if ist == "CLOSED":
+                seg += f"{_DIM}·{_RST}{_DIM}#{issue}✓closed{_RST}"
+            elif ist == "OPEN":
+                seg += f"{_DIM}·{_RST}{_CYN}#{issue}{_RST}{_GRN}·open{_RST}"
+            else:                                # not yet resolved — plain, no assumption
+                seg += f"{_DIM}·{_RST}{_CYN}#{issue}{_RST}"
+    return seg
 
 
 def _model(name: str) -> str:
@@ -808,6 +987,11 @@ def main() -> int:
     if "--anthropic-refresh" in sys.argv:   # background: cache the proxy's sticky account + headroom
         _anthropic_refresh()
         return 0
+    if "--issue-refresh" in sys.argv:       # background: cache linked-issue OPEN/CLOSED via `gh`
+        i = sys.argv.index("--issue-refresh")
+        _issue_state_resolve(sys.argv[i + 1] if len(sys.argv) > i + 1 else "",
+                             sys.argv[i + 2] if len(sys.argv) > i + 2 else "")
+        return 0
     raw = sys.stdin.read()
     try:
         d = json.loads(raw)
@@ -827,7 +1011,7 @@ def main() -> int:
     if sc:
         line1.append(f"{_DIM}📁{_RST}{sc}")
     if branch:
-        line1.append(f"{_DIM}⑂{_RST}{branch}" + (f"{_YEL}±{dirty}{_RST}" if dirty else ""))
+        line1.append(_branch_seg(branch, dirty, d.get("pr") or {}, _git_host(cwd), cwd))
     m = _model((d.get("model") or {}).get("display_name", ""))
     if m:
         # model + reasoning effort + thinking, as one cluster (e.g. "opus·hi 🧠").
@@ -875,7 +1059,9 @@ def main() -> int:
             tail += f" {_DIM}⌛{_rel(now + (now - rd_ts)) or '?'} old{_RST}"
     acol = _health(min(frees)) if frees else ""      # name colour = worst window; plain if unknown
     acct = f"{icon}{acol}{_BLD}{aname}{_RST}{anote}"
-    line2 = [" ".join([acct] + limit_segs)]
+    # Compact: 5h/7d ride the account tag with "/" between them instead of a full space,
+    # e.g. `👤acct✓ 5h▆88%↻2h/7d▂27%↻4d` instead of the wider `… 5h▆88%↻2h 7d▂27%↻4d`.
+    line2 = [acct + ((" " + "/".join(limit_segs)) if limit_segs else "")]
     if tail:
         line2[0] += f" {tail}"
     v = _version()
