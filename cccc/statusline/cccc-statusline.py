@@ -147,7 +147,9 @@ _LANG_SHORT = {
 }
 _RED, _DIM, _RST = "\033[31m", "\033[2m", "\033[0m"
 _GRN, _YEL = "\033[32m", "\033[33m"
+_CYN = "\033[36m"
 _BLD = "\033[1m"
+_PROG_DIR = f"{HOME}/.config/claudectl/progress"   # cccc fixer's live per-issue JSONL
 _GAUGE = "▁▂▃▄▅▆▇█"
 _ORANGE = "\033[38;5;208m"   # feature-branch flag — distinct from the yellow ±dirty count
 _CYN = "\033[36m"            # linked GitHub issue number
@@ -342,6 +344,63 @@ def _short_cwd(cwd: str) -> str:
     if len(segs) > 2:
         return "…/" + "/".join(segs[-2:])
     return cwd
+
+
+def _host_seg() -> str:
+    """WHERE this pane's `claude` runs: dim 🖥name locally, loud cyan 🔗name when the
+    session is over SSH. One chip answers both 'is this remote?' and 'which box?' — a
+    fixer running on pbox reads 🔗pbox, the same pane on the mac reads 🖥pmac."""
+    ssh = os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY")
+    icon, col = ("🔗", _CYN) if ssh else ("🖥", _DIM)
+    return f"{col}{icon}{_machine()}{_RST}"
+
+
+def _issue_of(branch: str):
+    """(kind, number) if this is a fixer worktree branch (fix/issue-N, fix/epic-N,
+    or any …issue-N / …epic-N), else None. No regex — plain rfind, render-cheap."""
+    b = branch or ""
+    for kind in ("issue", "epic"):
+        i = b.rfind(f"{kind}-")
+        if i != -1:
+            num = b[i + len(kind) + 1:]
+            if num.isdigit():
+                return kind, num
+    return None
+
+
+def _fixer_status(num: str) -> str:
+    """Latest fixer phase from the cccc progress JSONL for issue #num — the live
+    'issue detail'. Matches `*-<num>.jsonl` (glob is exact on the trailing number, so
+    #4 never matches #14); newest-mtime wins if two repos share a number. One small
+    tail read, no network. '' when there's no fixer file (e.g. a hand-made branch)."""
+    import glob
+    try:
+        files = glob.glob(os.path.join(_PROG_DIR, f"*-{num}.jsonl"))
+        if not files:
+            return ""
+        f = max(files, key=os.path.getmtime)
+        with open(f, encoding="utf-8") as fh:
+            last = fh.readlines()[-1]
+        d = json.loads(last)
+    except (OSError, IndexError, ValueError):
+        return ""
+    phase = str(d.get("phase") or "")
+    mark = {"done": "✓", "running": "…", "blocked": "✗", "error": "✗"}.get(
+        str(d.get("status") or ""), "")
+    return (phase + mark)[:14]
+
+
+def _issue_seg(branch: str) -> str:
+    """`🔧#42·push✓` — the issue this pane is fixing + its live phase. Yellow so a
+    fixer pane is instantly distinct from a plain dev pane."""
+    m = _issue_of(branch)
+    if not m:
+        return ""
+    kind, num = m
+    tag = f"epic#{num}" if kind == "epic" else f"#{num}"
+    detail = _fixer_status(num)
+    seg = f"{_YEL}🔧{tag}{_RST}"
+    return seg + (f"{_DIM}·{detail}{_RST}" if detail else "")
 
 
 def _git(cwd: str):
@@ -1006,12 +1065,17 @@ def main() -> int:
     # Two lines — taller but each scannable:
     #   line 1  CONTEXT   where you are + what you're running
     #   line 2  ACCOUNT   who + real 5h/7d limits (the cccc stuff)
-    line1 = []
+    line1 = [_host_seg()]               # 🖥pmac / 🔗pbox — where + is-it-ssh, always first
     sc = _short_cwd(cwd)
     if sc:
         line1.append(f"{_DIM}📁{_RST}{sc}")
     if branch:
+        # rich branch segment: forge badge (🦊gl/gh) + orange feature-branch flag +
+        # linked-issue open/closed chip. See _branch_seg.
         line1.append(_branch_seg(branch, dirty, d.get("pr") or {}, _git_host(cwd), cwd))
+    iss = _issue_seg(branch)            # 🔧#N·phase when this is a fixer worktree
+    if iss:
+        line1.append(iss)
     m = _model((d.get("model") or {}).get("display_name", ""))
     if m:
         # model + reasoning effort + thinking, as one cluster (e.g. "opus·hi 🧠").
@@ -1023,10 +1087,10 @@ def main() -> int:
             seg += f" {_YEL}🧠{_RST}"
         line1.append(seg)
     if ctx_free is not None:
-        line1.append(_gauge_seg("ctxfree", ctx_free))   # % context FREE: 100 green → 0 red
+        line1.append(_gauge_seg("ctx", ctx_free))       # % context FREE: 100 green → 0 red
     box = _box_free()
-    if box is not None:
-        line1.append(_gauge_seg("box", box))            # % machine capacity FREE (loadavg vs cores)
+    if box is not None and box < 60:                    # show box only when it's LOADED —
+        line1.append(_gauge_seg("box", box))            # an idle box gauge is noise (compact)
     lsp = _lsp_seg(cwd)
     if lsp:
         line1.append(lsp)
