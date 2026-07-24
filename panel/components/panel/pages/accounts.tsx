@@ -145,6 +145,7 @@ export function Accounts() {
   const [busy, setBusy] = useState("");
   const [confirmRm, setConfirmRm] = useState("");
   const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
   const [newToken, setNewToken] = useState("");
   const load = useCallback(async () => {
     try {
@@ -191,9 +192,10 @@ export function Accounts() {
     if (!/^sk-ant-oat/.test(token)) return notify("expected a Max setup-token (sk-ant-oat…)", true);
     setBusy("__add");
     try {
-      const r: any = await api("accounts/token", { method: "POST", body: JSON.stringify({ account: name, token }) });
+      const r: any = await api("accounts/token", { method: "POST", body: JSON.stringify({ account: name, email: newEmail.trim(), token }) });
       notify(r.created ? `added ${r.account}` : `rotated token for ${r.account}`);
       setNewName("");
+      setNewEmail("");
       setNewToken("");
       load();
     } catch (e: any) {
@@ -344,6 +346,7 @@ export function Accounts() {
                     <TableRow key={a.name} className={live ? "bg-ok/[0.06]" : ""}>
                       <TableCell className="font-mono align-top">
                         <b>{a.name}</b>
+                        {a.email ? <div className="text-[10px] text-muted-foreground">{a.email}</div> : null}
                         {a.org ? (
                           <div className="text-[10px] text-muted-foreground" title={a.org}>
                             {a.org.slice(0, 12)}…
@@ -444,10 +447,17 @@ export function Accounts() {
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <Input
-                className="min-w-[150px] flex-1"
+                className="min-w-[130px] flex-1"
                 placeholder="account name, e.g. kontaktEmphyx"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
+              />
+              <Input
+                className="min-w-[150px] flex-1"
+                type="email"
+                placeholder="email (optional)"
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
               />
               <Input
                 className="min-w-[240px] flex-[2] font-mono"

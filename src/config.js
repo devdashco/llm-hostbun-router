@@ -315,7 +315,7 @@ function mergeConfig(base, saved) {
     if (raw) {
       c.claudecodeAccountPool = raw
         .filter((a) => a && typeof a.token === "string" && a.token.trim())
-        .map((a) => ({ name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), token: a.token.trim() }));
+        .map((a) => ({ name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), email: String(a.email || "").trim(), token: a.token.trim() }));
     }
   }
   // UNION, not replace. The live /data/config.json predates four of these ids, and a plain

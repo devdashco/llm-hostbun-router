@@ -119,7 +119,7 @@ function adminState() {
     // number presented as fresh. `stale:true` = no reading in 6h; show it as unknown, not cool.
     claudecodeAccountPool: (CFG.claudecodeAccountPool || []).map((a) => {
       const h = acctHealth(a.org);
-      return { name: a.name, org: a.org, tokenMasked: mask(a.token),
+      return { name: a.name, org: a.org, email: a.email || "", tokenMasked: mask(a.token),
                util: h.util, hot: h.hot, ts: h.ts, stale: h.stale };
     }),
     // No sticky account exists any more: selection is pinned per project (accountFor).
@@ -355,7 +355,7 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
       const l = org ? lim.get(org) : null;
       const s = spend.get(a.name) || {}, s24 = spend24.get(a.name) || {};
       return {
-        name: a.name, org,
+        name: a.name, org, email: a.email || "",
         projects: Object.keys(pins).filter((p) => pins[p] === a.name).sort(),
         limits: l ? { ts: Number(l.ts) || 0, u5: l.u5, u7: l.u7, reset5: l.reset5, reset7: l.reset7,
           status: l.status, s5: l.s5, s7: l.s7, lastProject: l.project, lastModel: l.model } : null,
@@ -444,7 +444,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     let p = {};
     try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
     const name = String(p.account || "").trim();
-    const token = String(p.token || "").trim();
+    const token = String(p.token || "").replace(/\s+/g, ""); // paste often line-wraps the token; it has no spaces
+    const email = String(p.email || "").trim();
     if (!name || !token) return sendJson(res, 400, { error: "account and token required" });
     if (!/^sk-ant-oat/.test(token)) return sendJson(res, 400, { error: "expected a Max setup-token (sk-ant-oat…)" });
     const pool = [...(CFG.claudecodeAccountPool || [])];
@@ -453,8 +454,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     // the MCP tool and the panel both call it "Import or rotate". A new entry is minimal {name,org,token};
     // org is learned later from the anthropic-organization-id header on the first catalog sweep.
     const created = i < 0;
-    if (created) pool.push({ name, org: "", token });
-    else pool[i] = { ...pool[i], token };
+    if (created) pool.push({ name, org: "", email, token });
+    else pool[i] = { ...pool[i], token, ...(email ? { email } : {}) };
     CFG.claudecodeAccountPool = pool;
     CFG.anthropicPool = pool;   // legacy name, kept in sync so a rollback still boots
     const persisted = persistConfig();
