@@ -372,7 +372,22 @@ Backfilled all ~120k rows 2026-07-12. See `archive/README.md`.
   currently not allowed for this organization"` means the subscription itself is disabled (cancelled
   or refunded) — no reset fixes it. The refresh surfaces it distinctly (panel: **✕ OAuth disabled**,
   red), vs a 429 which just waits for `reset`. Seen live 2026-07-11: **`claude2mejlto`** (pinned to
-  `pmac`/`pmac-claude`) went OAuth-disabled; those projects 403 until re-pinned.
+  `pmac`/`pmac-claude`) went OAuth-disabled; those projects 403 until re-pinned. **Since 2026-07-24 a
+  403 `permission_error` AUTO-DISABLES the account** (persistent `disabled:true`, not just the runtime
+  `ACCT_DEAD` set): tripped from BOTH the live-limits probe (`refreshAccountLimits`) and real
+  inference traffic (`http.js`, on the upstream ≥400 path), via `autoDisableAccount()` in `routing.js`.
+  It never auto-RE-enables — reviving a dead subscription is an operator decision. A disabled account
+  is never served: `accountFor()` returns null for a project pinned to it, so that project gets the
+  honest `403 no_account_for_project` (re-pin) — watch the log for `[account] AUTO-DISABLED … stranded=…`.
+  Flip it back with `POST /api/accounts/disable {account, disabled:false}` after rotating a fresh token.
+- **The pool has a create path + `email` label + `disabled` flag.** `POST /api/accounts/token` is
+  create-if-absent (a NEW name is added — the only add path, since `POST config` replaces the pool
+  wholesale and the panel never holds the other tokens); it strips whitespace from a line-wrapped
+  token paste, and takes an optional `email` (human label for which login it is). `disabled` is the
+  operator/auto flag above; `POST /api/accounts/disable {account, disabled?}` flips it without
+  touching the token. `GET /api/accounts` surfaces `email`, `disabled`, and runtime `dead` (ACCT_DEAD).
+  Seen live 2026-07-24: william went OAuth-disabled → auto-disabled; `pbox`/`pbox-claude` re-pinned to
+  the fresh **`claude2mejlto`** (`claude2@mejl.to`).
 - **`acct_limits` is keyed by Anthropic org-id, which says nothing about which login it is.** The
   `account` column (added 2026-07-09 by an idempotent `ALTER` in `initDb`) fixes that, but it is only
   stamped by live traffic. A cold-started router learns org→account from the
