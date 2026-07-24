@@ -21,8 +21,8 @@ const { CFG, setCFG, persistConfig, mergeConfig, envDefaults, loadConfig, reinde
         PROVIDERS, normProvider, sanitizeRule, sanitizeLimit, IMAGE_MODEL_IDS, CONFIG_FILE } = C;
 const DB = require("./db");
 const { dbUp, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
-const { priceMap, costUsd } = require("./pricing");
-const { mintKey, sha256, parseConsumer } = require("./identity");
+const { priceMap, costUsd, modelTier, isPremiumModel, listCostUsd, unpricedModels } = require("./pricing");
+const { mintKey, sha256, parseConsumer, consumerEntry } = require("./identity");
 const { resolveRoute, accountFor, autoAccount, acctHealth, isGated, localTarget, limitFor, projectUsage, throttleSnapshot } = require("./routing");
 const { readBody, sendJson, mask, buildHeaders } = require("./http");
 const CC = require("./claudecode");
@@ -82,6 +82,9 @@ function adminState() {
     gatedModels: CFG.gatedModels,
     claudePrefix: CFG.claudePrefix,
     claudecodeModels: CFG.claudecodeModels,
+    // Advertised claudecode ids with no token cost defined in the pricing catalog — a coverage warning
+    // so a newly-shipped Anthropic id shows up here instead of silently reading as $0 / no tier.
+    unpricedModels: unpricedModels(CFG.claudecodeModels),
     forceModel: CFG.forceModel,
     modelRoutes: CFG.modelRoutes,
     projectRoutes: CFG.projectRoutes,
@@ -967,7 +970,7 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
         costByProject[r.project] = (costByProject[r.project] || 0) + c;
         // Key cost by (req_model, provider) — byModel is now split on provider, so folding on
         // req_model alone would smear a rewrite's (zero) subscription cost across the paid row.
-        const mk = r.req_model + " " + r.provider;
+        const mk = r.req_model + " " + r.provider;
         costByModel[mk] = (costByModel[mk] || 0) + c;
       }
       for (const r of byProject) {
@@ -982,14 +985,40 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
           r.limitPct = +(Math.max(pt, pc) * 100).toFixed(1);
         }
       }
-      byModel.forEach((r) => { r.usd = +(costByModel[r.req_model + " " + r.provider] || 0).toFixed(4); });
+      byModel.forEach((r) => {
+        r.usd = +(costByModel[r.req_model + " " + r.provider] || 0).toFixed(4);
+        // Classify by what was ACTUALLY served (sent_model), not the requested id — a rewrite
+        // (redbut asks gemini, gets haiku) must read as its real tier. `list_usd` is the notional
+        // Anthropic list cost of this claudecode traffic (never billed — the sub is flat — but it
+        // makes premium spend visible where `usd` is 0).
+        const served = String(r.sent_models || "").split(",")[0] || r.req_model;
+        r.tier = modelTier(served);
+        r.premium = isPremiumModel(served);
+        r.list_usd = r.provider === "claudecode" ? +listCostUsd(served, r.ptok, r.ctok).toFixed(4) : 0;
+      });
+      // Premium-usage warning: which PROJECTS (esp. apps) ran an opus/fable model in this window, and
+      // how much. Devs choosing opus is expected; an app on premium is the cost signal worth surfacing.
+      // Built from the served model so a rewrite is judged by what actually ran.
+      const premRows = await dbRows(`SELECT COALESCE(NULLIF(project,''),'(none)') AS project, sent_model,
+        COUNT(*)::int AS n, COALESCE(SUM(total_tokens),0) AS tok, COALESCE(SUM(prompt_tokens),0) AS ptok,
+        COALESCE(SUM(completion_tokens),0) AS ctok, MAX(ts) AS last
+        FROM calls WHERE ${W} AND provider='claudecode' AND sent_model IS NOT NULL
+        GROUP BY 1, sent_model ORDER BY tok DESC`, P);
+      const premiumUsage = [];
+      for (const r of premRows) {
+        if (!isPremiumModel(r.sent_model)) continue;
+        const reg = r.project && r.project !== "(none)" ? consumerEntry(r.project) : null;
+        premiumUsage.push({ project: r.project, kind: reg ? reg.kind : null, model: r.sent_model,
+          tier: modelTier(r.sent_model), calls: r.n, tokens: r.tok,
+          list_usd: +listCostUsd(r.sent_model, r.ptok, r.ctok).toFixed(4), last: r.last });
+      }
       const oldestRow = await dbRow("SELECT MIN(ts) AS t FROM calls");
       return sendJson(res, 200, { dbReady: true, window: winKey, total: totalRow ? totalRow.n : 0,
         windowCalls: agg.calls || 0, windowErrors: agg.errors || 0, windowTokens: agg.tokens || 0,
         windowPromptTokens: agg.ptok || 0, windowCompletionTokens: agg.ctok || 0, windowJsonFails: agg.json_fails || 0,
         windowCacheRead: agg.cache_read || 0, windowCacheWrite: agg.cache_write || 0,
         windowCost: +windowCost.toFixed(4),
-        pricedProviders: ["crazyrouter"], byProvider, byKey, byClient, byModel, byProject,
+        pricedProviders: ["crazyrouter"], byProvider, byKey, byClient, byModel, byProject, premiumUsage,
         oldest: oldestRow ? oldestRow.t : null, retain: CFG.logging.retain });
     } catch (e) { return sendJson(res, 500, { error: e.message }); }
   }

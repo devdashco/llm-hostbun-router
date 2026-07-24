@@ -22,6 +22,61 @@ function priceMap() {
   } catch { /* no prices file → empty map, everything reads as $0 */ }
   return _priceCache.map;
 }
+// ── model cost + tier catalog (2026-07-24) ─────────────────────────────────
+// Notional per-1M-token USD list prices AND a tier for the Anthropic (claudecode) catalog. These are
+// NOT billed — we pay a flat Claude Max subscription, so costUsd() still returns 0 for claudecode.
+// They exist for two reasons the flat subscription hides:
+//   1. every model now has a defined token cost (so nothing shows an unexplained $0 with no reason);
+//   2. each model carries a TIER, so a project quietly running opus/fable on the SHARED pool is
+//      visible — a premium call is ~15x the input / ~15x the output price of haiku and burns the
+//      shared 5h/7d windows far faster. "premium" = opus* or fable* (the flagship Claude 5 tier).
+// Prices are Anthropic public list (USD / 1M tokens), input/output. Keep an entry per advertised id;
+// test/router.test.mjs fails the build if a seeded/aliased model has no cost here.
+const MODEL_COST = {
+  // haiku — cheap
+  "claude-haiku-4-5":            { in: 1,  out: 5,  tier: "haiku" },
+  "claude-haiku-4-5-20251001":  { in: 1,  out: 5,  tier: "haiku" },
+  // sonnet — mid
+  "claude-sonnet-4-5":          { in: 3,  out: 15, tier: "sonnet" },
+  "claude-sonnet-4-5-20250929": { in: 3,  out: 15, tier: "sonnet" },
+  "claude-sonnet-4-6":          { in: 3,  out: 15, tier: "sonnet" },
+  "claude-sonnet-5":            { in: 3,  out: 15, tier: "sonnet" },
+  // opus — premium
+  "claude-opus-4-1-20250805":   { in: 15, out: 75, tier: "opus" },
+  "claude-opus-4-5":            { in: 15, out: 75, tier: "opus" },
+  "claude-opus-4-5-20251101":   { in: 15, out: 75, tier: "opus" },
+  "claude-opus-4-6":            { in: 15, out: 75, tier: "opus" },
+  "claude-opus-4-7":            { in: 15, out: 75, tier: "opus" },
+  "claude-opus-4-8":            { in: 15, out: 75, tier: "opus" },
+  // fable — flagship (Claude 5 family)
+  "claude-fable-5":             { in: 15, out: 75, tier: "fable" },
+};
+const PREMIUM_TIERS = new Set(["opus", "fable"]);
+// Tier of a model id: exact table hit first, then a prefix classifier so an unlisted dated/undated
+// variant (e.g. a brand-new opus id) still classifies before it's added to MODEL_COST. Non-Claude
+// ids (gemini, qwen, …) have no tier → null (never premium).
+function modelTier(id) {
+  const k = String(id || "").toLowerCase();
+  if (!k) return null;
+  if (MODEL_COST[k]) return MODEL_COST[k].tier;
+  if (!k.startsWith("claude")) return null;
+  for (const t of ["opus", "fable", "sonnet", "haiku"]) if (k.includes(t)) return t;
+  return null;
+}
+const isPremiumModel = (id) => PREMIUM_TIERS.has(modelTier(id));
+// Notional (never-billed) list-price USD for a claudecode aggregate — what this traffic WOULD cost
+// at Anthropic list price. Unknown id → 0 (no guess). Metered crazyrouter cost stays in costUsd().
+function listCostUsd(id, ptok, ctok) {
+  const p = MODEL_COST[String(id || "").toLowerCase()];
+  if (!p) return 0;
+  return (ptok || 0) / 1e6 * p.in + (ctok || 0) / 1e6 * p.out;
+}
+// Advertised claudecode ids with no MODEL_COST entry — the coverage warning surfaced in adminState so
+// a newly-shipped Anthropic id without a price is visible instead of silently reading as $0/no-tier.
+function unpricedModels(ids) {
+  return (ids || []).filter((id) => !MODEL_COST[String(id || "").toLowerCase()]);
+}
+
 // Cost in USD for one (sentModel, provider, ptok, ctok) aggregate. claudecode/local = flat → 0.
 function costUsd(prices, sentModel, provider, ptok, ctok) {
   // Allowlist, not denylist. crazyrouter is the ONLY metered provider, so it is the only one that can
@@ -33,4 +88,5 @@ function costUsd(prices, sentModel, provider, ptok, ctok) {
   return (ptok || 0) / 1e6 * p.in + (ctok || 0) / 1e6 * p.out;
 }
 
-module.exports = { priceMap, costUsd, PRICES_FILE };
+module.exports = { priceMap, costUsd, PRICES_FILE,
+  MODEL_COST, modelTier, isPremiumModel, listCostUsd, unpricedModels };

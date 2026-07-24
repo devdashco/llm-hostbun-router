@@ -314,6 +314,27 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   CFG.claudecodeAccountPool = CFG.claudecodeAccountPool.map((a) => { const { disabled, ...rest } = a; return rest; });
 }
 
+{
+  // ── model cost + premium-tier catalog (pure; no server) ──────────────────────
+  const { createRequire } = await import("node:module");
+  const req = createRequire(import.meta.url);
+  const { isPremiumModel, modelTier, unpricedModels, listCostUsd } = req(join(ROOT, "src/pricing.js"));
+  const { CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES } = req(join(ROOT, "src/config.js"));
+  // Every advertised model MUST have a token cost + tier defined — a new Anthropic id shipped without a
+  // price fails the build HERE rather than silently reading as $0 / no-tier in the stats.
+  check("every advertised claudecode model has a token cost", unpricedModels([...CLAUDECODE_MODEL_SEED, ...CLAUDECODE_MODEL_ALIASES]), []);
+  // Only opus/fable classify "premium" — the warning trigger.
+  check("opus is premium", isPremiumModel("claude-opus-4-8"), true);
+  check("fable is premium", isPremiumModel("claude-fable-5"), true);
+  check("sonnet is not premium", isPremiumModel("claude-sonnet-5"), false);
+  check("haiku is not premium", isPremiumModel("claude-haiku-4-5"), false);
+  check("a non-claude id has no tier (never premium)", isPremiumModel("gemini-3.1-flash-lite"), false);
+  check("an unlisted opus variant still reads premium (prefix fallback)", isPremiumModel("claude-opus-9-9"), true);
+  check("modelTier reads the tier", modelTier("claude-sonnet-4-6"), "sonnet");
+  check("a priced model has a non-zero list cost", listCostUsd("claude-opus-4-8", 1e6, 1e6) > 0, true);
+  check("an unknown model list cost is 0 (no guess)", listCostUsd("gemini-x", 1e6, 1e6), 0);
+}
+
 server.kill();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

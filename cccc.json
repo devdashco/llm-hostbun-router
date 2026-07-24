@@ -1,0 +1,30 @@
+{
+  "_note": "cccc project config — https://github.com/devdashco/claudectl. banner shows the repo name above the tabs (banner.name/color/subtitle; banner.enabled=false hides it). issue_template forces the shape of new issues (n): pick a type, a 'type: summary' title, a priority, and a body of the listed sections — required ones can't be blank. issue_template.enabled=false → free-form AI drafter.",
+  "banner": {
+    "enabled": true,
+    "name": "llm-hostbun-router",
+    "color": "#38bdf8",
+    "subtitle": ""
+  },
+  "issue_template": {
+    "enabled": true,
+    "title_rule": "type: summary",
+    "types": [
+      "bug",
+      "feat",
+      "chore",
+      "docs"
+    ],
+    "sections": [
+      "Problem",
+      "Expected",
+      "Repro / Context",
+      "Acceptance criteria"
+    ],
+    "required": [
+      "Problem",
+      "Acceptance criteria"
+    ]
+  },
+  "forge": "gitlab"
+}

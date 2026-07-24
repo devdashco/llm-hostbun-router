@@ -325,6 +325,7 @@ async def usage_today(window: str = "24h") -> dict:
         "claudecode": cc,
         "by_model": stats.get("byModel"),
         "by_project": stats.get("byProject"),
+        "premium_usage": stats.get("premiumUsage"),   # apps using opus/fable on the shared pool
         "router_totals": {k: stats.get(k) for k in
                           ("windowCalls", "windowTokens", "windowPromptTokens",
                            "windowCompletionTokens", "windowErrors", "windowCost")},

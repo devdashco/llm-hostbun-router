@@ -46,7 +46,7 @@ const { resolveRoute, accountFor, usageVerdict, sleep, isGated, throttleDelay } 
 const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL, jsonEnforce, wantsJsonFormat } = require("./src/http");
 const { mergedModels, refreshClaudecodeModels, refreshAccountLimits, CLAUDECODE_MODEL_REFRESH_MS } = require("./src/claudecode");
 const { handleAdminApi } = require("./src/admin");
-const { PRICES_FILE } = require("./src/pricing");
+const { PRICES_FILE, isPremiumModel, modelTier } = require("./src/pricing");
 // Used on every refusal path (missing project, unknown consumer, bad key, unpinned account) and by
 // the upstream-error shipper. Unbound since the split, so each gate 502'd instead of refusing.
 const { extractRequestContent, shipError } = require("./src/telemetry");
@@ -406,6 +406,16 @@ const server = http.createServer(async (req, res) => {
     }
     route.authToken = acct.token;
     route.account = acct.name;
+    // Premium-model warning: an APP (deployed code, kind "app") running an opus*/fable* model on the
+    // shared Max pool is worth flagging — it's ~15x the per-token price of haiku and drains the shared
+    // 5h/7d windows fastest. Devs (a person at a keyboard) choosing opus is expected, so we don't warn
+    // for them. This never blocks — it's a heads-up in the log; the panel/stats surface it too.
+    const sentModel = route.rewriteModel || model;
+    if (isPremiumModel(sentModel)) {
+      const reg = consumerEntry(project);
+      if (reg && reg.kind === "app")
+        console.warn(`[premium] app "${project}" is using ${sentModel} (${modelTier(sentModel)} tier) on account ${acct.name} — premium model on the shared Max pool`);
+    }
   }
 
   // Terminal dispatch: json-enforce path (JSON response_format) or plain proxy.
@@ -433,6 +443,9 @@ server.listen(PORT, () => {
     + ` (${(CFG.claudecodeAccountPool || []).length} accounts) crazyrouter=${CFG.bases.crazyrouter}`
     + ` | key=${CFG.crazyrouterKey ? "set" : "MISSING"} | claude models=${CFG.claudecodeModels.length} (seed)`
     + ` | ui=/`);
+  // Coverage warning: every advertised model should have a token cost defined (src/pricing.js).
+  const unpriced = require("./src/pricing").unpricedModels(CFG.claudecodeModels);
+  if (unpriced.length) console.warn(`[pricing] no token cost defined for: ${unpriced.join(", ")} — add them to MODEL_COST in src/pricing.js`);
   // Reconcile the Claude catalog against Anthropic. Fire-and-forget: boot must not block on it,
   // and a failure leaves the seed in place rather than an empty list.
   refreshClaudecodeModels("boot").catch((e) => console.error(`[models] boot refresh: ${e.message}`));

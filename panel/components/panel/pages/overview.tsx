@@ -13,7 +13,7 @@ import { useApp } from "@/components/panel/context";
 import { api } from "@/lib/api";
 import { ago, nfmt, fmtMs, fmtTime, SLOW_MS, WARN, DANGER } from "@/lib/format";
 
-const SEV: Record<string, string> = { down: DANGER, dry: DANGER, err: DANGER, slow: WARN, refusal: WARN, force: WARN };
+const SEV: Record<string, string> = { down: DANGER, dry: DANGER, err: DANGER, slow: WARN, refusal: WARN, force: WARN, premium: WARN };
 
 function Issues({ health, st, state, pool }: any) {
   const probs: [string, string][] = [];
@@ -35,6 +35,13 @@ function Issues({ health, st, state, pool }: any) {
   }
   if (state.forceModel && state.forceModel.enabled)
     probs.push(["force", `Force-model is ON → every request rewritten to ${state.forceModel.provider}/${state.forceModel.model}.`]);
+  // Premium-model usage: an app (deployed code) running opus/fable on the shared Max pool — ~15x haiku's
+  // per-token price and the heaviest drain on the shared 5h/7d windows. Devs on opus are expected; apps are the signal.
+  (st?.premiumUsage || []).filter((p: any) => p.kind === "app").forEach((p: any) => {
+    probs.push(["premium", `App "${p.project}" is using ${p.model} (${p.tier}) — ${nfmt(p.calls)} call(s), ~$${(p.list_usd || 0).toFixed(2)} list. Premium model on the shared Max pool.`]);
+  });
+  if ((state.unpricedModels || []).length)
+    probs.push(["premium", `${state.unpricedModels.length} advertised model(s) have no token cost defined: ${state.unpricedModels.join(", ")}.`]);
   if (!probs.length)
     return (
       <div className="mb-[18px] rounded-xl border border-ok/35 bg-ok/[0.07] px-4 py-3 text-[13px]">
