@@ -936,13 +936,19 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
         COUNT(*) FILTER (WHERE effort IS NOT NULL OR thinking_tokens > 0)::int AS thinkers,
         string_agg(DISTINCT provider, ',') AS providers
         FROM calls WHERE ${W} GROUP BY 1 ORDER BY n DESC LIMIT 40`, P);
-      // MAX(provider): Postgres will not let a bare column ride along outside GROUP BY the way
-      // SQLite does. One row per model is the shape the UI wants, so collapse provider explicitly.
-      const byModel = await dbRows(`SELECT req_model, MAX(provider) AS provider, COUNT(*)::int AS n,
+      // One row per (requested model, ACTUAL provider) — and expose what was actually served.
+      // Grouping by req_model alone and collapsing with MAX(provider) MISATTRIBUTED every rewrite:
+      // redbut asks for `gemini-2.5-flash-lite` but a projectRoute rewrites it to `claude-haiku-4-5`
+      // on the (free) subscription — yet MAX(provider) labeled all ~90k of those calls `crazyrouter`
+      // (the paid provider, lexicographically largest), reading like a large cloud bill that never
+      // happened. Splitting on provider keeps requested-vs-served honest; `sent_models` shows what
+      // actually ran so a rewrite is visible instead of hidden behind the requested id.
+      const byModel = await dbRows(`SELECT req_model, provider,
+        string_agg(DISTINCT sent_model, ',') AS sent_models, COUNT(*)::int AS n,
         COALESCE(SUM(total_tokens),0) AS tok,
         COALESCE(SUM(prompt_tokens),0) AS ptok, COALESCE(SUM(completion_tokens),0) AS ctok,
         COALESCE(SUM(cache_read),0) AS cr, COALESCE(SUM(cache_write),0) AS cw, ROUND(AVG(duration_ms)) AS avg_ms
-        FROM calls WHERE ${W} GROUP BY req_model ORDER BY tok DESC LIMIT 40`, P);
+        FROM calls WHERE ${W} GROUP BY req_model, provider ORDER BY tok DESC LIMIT 60`, P);
       const byProject = await dbRows(`SELECT COALESCE(NULLIF(project,''),'(none)') AS project, COUNT(*)::int AS n,
         COALESCE(SUM(total_tokens),0) AS tok, COALESCE(SUM(prompt_tokens),0) AS ptok, COALESCE(SUM(completion_tokens),0) AS ctok,
         COALESCE(SUM(cache_read),0) AS cr, COALESCE(SUM(cache_write),0) AS cw,
@@ -959,7 +965,10 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
         const c = costUsd(prices, r.sent_model, r.provider, r.ptok, r.ctok);
         windowCost += c;
         costByProject[r.project] = (costByProject[r.project] || 0) + c;
-        costByModel[r.req_model] = (costByModel[r.req_model] || 0) + c;
+        // Key cost by (req_model, provider) — byModel is now split on provider, so folding on
+        // req_model alone would smear a rewrite's (zero) subscription cost across the paid row.
+        const mk = r.req_model + " " + r.provider;
+        costByModel[mk] = (costByModel[mk] || 0) + c;
       }
       for (const r of byProject) {
         r.usd = +(costByProject[r.project] || 0).toFixed(4);
@@ -973,7 +982,7 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
           r.limitPct = +(Math.max(pt, pc) * 100).toFixed(1);
         }
       }
-      byModel.forEach((r) => { r.usd = +(costByModel[r.req_model] || 0).toFixed(4); });
+      byModel.forEach((r) => { r.usd = +(costByModel[r.req_model + " " + r.provider] || 0).toFixed(4); });
       const oldestRow = await dbRow("SELECT MIN(ts) AS t FROM calls");
       return sendJson(res, 200, { dbReady: true, window: winKey, total: totalRow ? totalRow.n : 0,
         windowCalls: agg.calls || 0, windowErrors: agg.errors || 0, windowTokens: agg.tokens || 0,

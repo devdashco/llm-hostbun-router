@@ -370,7 +370,12 @@ export function Stats() {
                     const hit = r.cr + r.ptok > 0 ? Math.round((r.cr / (r.cr + r.ptok)) * 100) : 0;
                     return (
                       <TableRow key={(r.req_model || "-") + r.provider}>
-                        <TableCell className="font-mono text-[12px]">{r.req_model || "-"}</TableCell>
+                        <TableCell className="font-mono text-[12px]">
+                          {r.req_model || "-"}
+                          {r.sent_models && r.sent_models !== r.req_model && (
+                            <span className="text-muted-foreground"> → {r.sent_models}</span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <ProviderBadge provider={r.provider} />
                         </TableCell>
