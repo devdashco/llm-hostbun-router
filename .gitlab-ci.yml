@@ -34,6 +34,10 @@ test:
         - package-lock.json
     paths:
       - node_modules/
+  # router.test.mjs drives the booted server with `curl` (execFileSync) rather than fetch, on purpose
+  # — some sandboxes block node's outbound sockets. node:24-alpine ships without curl, so install it.
+  before_script:
+    - apk add --no-cache curl
   script:
     - npm ci
     - npm test
