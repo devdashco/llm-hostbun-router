@@ -5,7 +5,7 @@
 //     different provider hides both the cost and the truth.
 //   • One project, one account. accountFor() never rotates: rotation blows the per-org prompt
 //     cache (~12x cost) and makes "who spent this?" unanswerable after the fact.
-const { CFG, normProvider, isImageModel, WINDOW_MS } = require("./config");
+const { CFG, persistConfig, normProvider, isImageModel, WINDOW_MS } = require("./config");
 const { parseConsumer } = require("./identity");
 const { dbUp, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT } = require("./db");
 
@@ -247,6 +247,26 @@ function autoAccount() {
 // No request header can override it. Deterministic: same project ⇒ same account, every time.
 // Exception: accountStrategy "soonest-weekly-reset" auto-selects for APP consumers (see autoAccount).
 // (`consumerAccounts` is the pre-rename name of `projectAccounts`; both are read during migration.)
+// Persistently mark an account disabled after a 403 permission_error (a dead/cancelled login —
+// "OAuth authentication is currently not allowed for this organization"). Called from BOTH the live
+// limits probe (claudecode.js) and real inference traffic (http.js), so a login that dies is taken
+// out of routing automatically, and the mark survives a restart (ACCT_DEAD alone does not). Mutates
+// the pool in place — CFG is never reassigned — and persists. Idempotent; never auto-RE-enables (a
+// dead subscription coming back is an operator decision, and auto-flapping a pin is churn we forbid).
+// Returns the stranded projects (pins that now resolve to no account) for logging.
+function autoDisableAccount(name, why) {
+  const pool = CFG.claudecodeAccountPool || [];
+  const a = pool.find((x) => String(x.name).toLowerCase() === String(name || "").toLowerCase());
+  if (!a || a.disabled) return null;
+  a.disabled = true;
+  CFG.anthropicPool = CFG.claudecodeAccountPool = pool;   // legacy name kept in sync (see admin.js)
+  const persisted = persistConfig();
+  const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
+  const stranded = Object.keys(pins).filter((pj) => String(pins[pj]).toLowerCase() === String(a.name).toLowerCase()).sort();
+  console.warn(`[account] AUTO-DISABLED name=${a.name} reason=${why || "OAuth disabled (403 permission_error)"} stranded=${stranded.join(",") || "-"} persisted=${persisted}`);
+  return stranded;
+}
+
 function accountFor(project) {
   const pool = CFG.claudecodeAccountPool || [];
   if (!pool.length) return null;
@@ -323,7 +343,7 @@ function baseRoute(m, key) {
 
 module.exports = {
   resolveRoute, baseRoute, providerRoute, defaultRouteResolved, projectRule, projectRuleFor,
-  enforceAllow, accountFor, autoAccount, acctHealth, limitFor, projectUsage, usageVerdict,
+  enforceAllow, accountFor, autoAccount, autoDisableAccount, acctHealth, limitFor, projectUsage, usageVerdict,
   localTarget, isClaudeModel, isGated, sleep,
   note429, note2xx, throttleDelay, throttleSnapshot,
 };

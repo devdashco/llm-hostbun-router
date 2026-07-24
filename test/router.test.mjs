@@ -286,6 +286,16 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   check("a disabled pin resolves to no account (403 path)", accountFor("someapp"), null);
   CFG.claudecodeAccountPool = CFG.claudecodeAccountPool.map((a) => { const { disabled, ...rest } = a; return rest; });
   check("re-enabling the pin serves it again", accountFor("someapp").name, "late");
+
+  // autoDisableAccount: a 403 permission_error persistently disables the login and reports the pins
+  // it stranded. Idempotent, and it does NOT auto-re-enable.
+  const { autoDisableAccount } = req(join(ROOT, "src/routing.js"));
+  const stranded = autoDisableAccount("late", "test");
+  check("auto-disable reports the stranded pins", stranded, ["someapp", "somedev"]);
+  check("auto-disable sets the persistent flag", CFG.claudecodeAccountPool.find((a) => a.name === "late").disabled, true);
+  check("auto-disable is idempotent (already disabled → null)", autoDisableAccount("late", "test"), null);
+  check("an auto-disabled pin now resolves to no account", accountFor("someapp"), null);
+  CFG.claudecodeAccountPool = CFG.claudecodeAccountPool.map((a) => { const { disabled, ...rest } = a; return rest; });
 }
 
 server.kill();

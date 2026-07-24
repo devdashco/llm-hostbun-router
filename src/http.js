@@ -12,7 +12,7 @@ const { Readable } = require("node:stream");
 const TR = require("../translate");
 const { CFG } = require("./config");
 const { clip, recordCall, recordLimits, CONTENT_CAP } = require("./db");
-const { accountFor, isGated, resolveRoute, note429, note2xx } = require("./routing");
+const { accountFor, isGated, resolveRoute, note429, note2xx, autoDisableAccount } = require("./routing");
 
 // Hop-by-hop headers: meaningful to ONE connection, never forwarded. Dropped by the split; without
 // them buildHeaders() throws ReferenceError and every proxied request 502s.
@@ -200,7 +200,15 @@ async function proxy(req, res, base, opts = {}) {
   }
   if (up.status >= 400) {
     console.error(`[err] upstream=${up.status} provider=${curProvider || "?"} model=${model || "-"} ${curTarget}`);
-    up.clone().text().then((t) => shipError(`upstream ${up.status} ${req.method} ${req.url}`, { model: model || "-", provider: curProvider || "?", ip, status: up.status, body: t })).catch(() => {});
+    up.clone().text().then((t) => {
+      shipError(`upstream ${up.status} ${req.method} ${req.url}`, { model: model || "-", provider: curProvider || "?", ip, status: up.status, body: t });
+      // A live 403 permission_error on the claudecode pool is a dead login (OAuth disabled), not a
+      // spent window. Auto-disable it so the pinned project stops hammering it — same rule the
+      // on-demand limits probe applies, but caught here on real traffic too (the 30-min sweep only
+      // runs when the auto-strategy is on). `opts.account` is the pool name that served this call.
+      if (up.status === 403 && curProvider === "claudecode" && opts.account && /permission_error/.test(t))
+        autoDisableAccount(opts.account, "OAuth disabled (403 permission_error on live traffic)");
+    }).catch(() => {});
   }
   // Image provider: upstream errors arrive as bare text; convert to OpenAI JSON error envelope.
   if (curProvider === "images" && up.status >= 400) {

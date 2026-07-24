@@ -3,9 +3,9 @@
 // not second-guess per-account model availability (a 429 is a subscription usage window, not a
 // capability, and treating it as one only misled the panel).
 const TR = require("../translate");
-const { CFG, persistConfig, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
+const { CFG, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
 const { ORG_OF_ACCOUNT, ACCT_DEAD, recordLimits } = require("./db");
-const { localTarget } = require("./routing");
+const { localTarget, autoDisableAccount } = require("./routing");
 
 function localModelEntries() {
   const ids = new Set();
@@ -157,8 +157,12 @@ async function refreshAccountLimits(acct) {
     let errType = null, errMsg = null;
     if (!has && !r.ok) { try { const b = (await r.json()).error || {}; errType = b.type || null; errMsg = b.message || null; } catch {} }
     // Feed the auto account picker's dead-login set: a 403 permission_error is a cancelled/disabled
-    // subscription (no reset revives it); a fresh reading proves the login is alive again.
-    if (errType === "permission_error") ACCT_DEAD.add(acct.name);
+    // subscription (no reset revives it); a fresh reading proves the login is alive again. ACCT_DEAD
+    // is runtime-only (lost on restart), so a permission_error ALSO trips the persistent `disabled`
+    // flag: the login stays out of routing across restarts until an operator consciously re-enables
+    // it. We never auto-RE-enable — a dead subscription coming back is an operator decision, and
+    // auto-flapping a pin on/off is exactly the churn a persistent flag exists to prevent.
+    if (errType === "permission_error") { ACCT_DEAD.add(acct.name); autoDisableAccount(acct.name, errMsg); }
     else if (has) ACCT_DEAD.delete(acct.name);
     return {
       account: acct.name, org: org || null, status: r.status, checkedAt: Date.now(), ms: Date.now() - t0,
