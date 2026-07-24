@@ -28,10 +28,12 @@ function priceMap() {
 // They exist for two reasons the flat subscription hides:
 //   1. every model now has a defined token cost (so nothing shows an unexplained $0 with no reason);
 //   2. each model carries a TIER, so a project quietly running opus/fable on the SHARED pool is
-//      visible — a premium call is ~15x the input / ~15x the output price of haiku and burns the
-//      shared 5h/7d windows far faster. "premium" = opus* or fable* (the flagship Claude 5 tier).
-// Prices are Anthropic public list (USD / 1M tokens), input/output. Keep an entry per advertised id;
-// test/router.test.mjs fails the build if a seeded/aliased model has no cost here.
+//      visible — an opus call is 5x and a fable call 10x haiku's per-token price, and both burn the
+//      shared 5h/7d windows far faster. "premium" = opus* or fable* (fable is the flagship tier).
+// Prices are Anthropic public list (USD / 1M tokens), input/output, verified against the claude-api
+// model catalog (fable-5 $10/$50; current opus 4.6/4.7/4.8 $5/$25 — only the legacy opus-4-1 is the
+// old $15/$75 Opus tier). Keep an entry per advertised id; test/router.test.mjs fails the build if a
+// seeded/aliased model has no cost here.
 const MODEL_COST = {
   // haiku — cheap
   "claude-haiku-4-5":            { in: 1,  out: 5,  tier: "haiku" },
@@ -41,15 +43,15 @@ const MODEL_COST = {
   "claude-sonnet-4-5-20250929": { in: 3,  out: 15, tier: "sonnet" },
   "claude-sonnet-4-6":          { in: 3,  out: 15, tier: "sonnet" },
   "claude-sonnet-5":            { in: 3,  out: 15, tier: "sonnet" },
-  // opus — premium
+  // opus — premium. Current Opus (4.5+) is $5/$25; the legacy opus-4-1 is the old $15/$75 Opus tier.
   "claude-opus-4-1-20250805":   { in: 15, out: 75, tier: "opus" },
-  "claude-opus-4-5":            { in: 15, out: 75, tier: "opus" },
-  "claude-opus-4-5-20251101":   { in: 15, out: 75, tier: "opus" },
-  "claude-opus-4-6":            { in: 15, out: 75, tier: "opus" },
-  "claude-opus-4-7":            { in: 15, out: 75, tier: "opus" },
-  "claude-opus-4-8":            { in: 15, out: 75, tier: "opus" },
-  // fable — flagship (Claude 5 family)
-  "claude-fable-5":             { in: 15, out: 75, tier: "fable" },
+  "claude-opus-4-5":            { in: 5,  out: 25, tier: "opus" },
+  "claude-opus-4-5-20251101":   { in: 5,  out: 25, tier: "opus" },
+  "claude-opus-4-6":            { in: 5,  out: 25, tier: "opus" },
+  "claude-opus-4-7":            { in: 5,  out: 25, tier: "opus" },
+  "claude-opus-4-8":            { in: 5,  out: 25, tier: "opus" },
+  // fable — flagship (Claude 5 family), the most expensive per token: $10/$50
+  "claude-fable-5":             { in: 10, out: 50, tier: "fable" },
 };
 const PREMIUM_TIERS = new Set(["opus", "fable"]);
 // Tier of a model id: exact table hit first, then a prefix classifier so an unlisted dated/undated

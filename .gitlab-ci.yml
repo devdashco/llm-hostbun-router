@@ -1,0 +1,61 @@
+# CI for llm-hostbun-router — runs on the hostbun self-hosted GitLab (gitlab.hostbun.cc).
+# NOT GitHub Actions: the github remote is a push-only mirror and the fleet runs its own GitLab CI.
+# Coolify auto-deploys @master independently of this pipeline — CI is the regression GATE, not the
+# deploy trigger. Keep it green before every push (`npm test` locally mirrors the `test` job here).
+#
+# Node 24 matches the Dockerfile (`FROM node:24-alpine`); package.json requires >=22.
+
+stages:
+  - test
+  - build
+
+default:
+  image: node:24-alpine
+  interruptible: true
+  # No runner tag is set, so any available fleet runner picks these up. If the fleet's runners are
+  # tag-gated and jobs sit "pending", add the runner's tag(s) under a `tags:` key here.
+
+# One pipeline per push, plus merge-request pipelines — never both for the same commit.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# ── unit + integration suites (no network, no database) ──────────────────────
+# imports + translate + wire + router (112 checks) then the docs render/secret guard.
+test:
+  stage: test
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+  script:
+    - npm ci
+    - npm test
+    - npm run test:docs
+
+# ── panel static export must build, and must ship no secrets ─────────────────
+# build:panel = `cd panel && npm ci && npm run build`; test:panel scans panel/out for leaked
+# secrets and the expected routes. A wrong import name in the panel is a blank page in prod that
+# nothing else catches, so this gate is load-bearing.
+build:panel:
+  stage: build
+  cache:
+    key:
+      files:
+        - panel/package-lock.json
+    paths:
+      - panel/node_modules/
+  script:
+    - npm run build:panel
+    - npm run test:panel
+  artifacts:
+    paths:
+      - panel/out/
+    expire_in: 1 day
+    when: on_success
