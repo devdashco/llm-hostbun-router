@@ -231,18 +231,40 @@ async def window_status() -> dict:
 
 
 @mcp.tool()
-async def account_add(name: str, token: str) -> dict:
-    """Import or rotate ONE pool account's token (POST /api/accounts/token).
+async def account_add(name: str, token: str, email: str = "") -> dict:
+    """Create, import, or rotate ONE pool account (POST /api/accounts/token).
 
     `token` must be a Claude Max setup-token (`sk-ant-oat…`, from
-    `claude setup-token`). Import/update ONLY — the router stores it in its
-    server-side /data/config.json (the ONLY copy anywhere) and NEVER reveals
-    it back out; there is no read/export endpoint. Merge-safe: other accounts'
-    tokens are untouched. The name must already exist in the pool to rotate;
-    an unknown name is a 400 listing the pool.
+    `claude setup-token`); whitespace (a line-wrapped paste) is stripped
+    server-side. The router stores it in /data/config.json (the ONLY copy
+    anywhere) and NEVER reveals it back out; there is no read/export endpoint.
+    Merge-safe: other accounts' tokens are untouched.
+
+    Create-if-absent: an existing name rotates its token; a NEW name is ADDED
+    to the pool (the only create path — POST config replaces the pool
+    wholesale). `email` is an optional human label for which Anthropic login
+    this is (and updates it on an existing account).
     """
-    return await _proxy_call("POST", "accounts/token",
-                             {"account": name, "token": token})
+    body: dict[str, Any] = {"account": name, "token": token}
+    if email:
+        body["email"] = email
+    return await _proxy_call("POST", "accounts/token", body)
+
+
+@mcp.tool()
+async def account_disable(name: str, disabled: bool = True) -> dict:
+    """Disable / re-enable ONE pool account (POST /api/accounts/disable).
+
+    A disabled account is NEVER routed to: any project pinned to it gets the
+    honest `403 no_account_for_project` (re-pin it) instead of the router
+    hammering a dead/retired subscription. Keeps the token (unlike
+    account_delete, which is irreversible) — flip `disabled=False` to revive.
+    Returns `stranded`: the projects now pinned to a disabled account that
+    must be re-pinned. Use this for a cancelled/OAuth-disabled login you want
+    the router to stop trying.
+    """
+    return await _proxy_call("POST", "accounts/disable",
+                             {"account": name, "disabled": disabled})
 
 
 @mcp.tool()

@@ -210,9 +210,10 @@ function acctSpentNow(r, now) {
   if ((r.s5 === "rejected" || (r.u5 || 0) >= 1) && (!r.reset5 || r.reset5 * 1000 > now)) return true; // 5h spent right now
   return false;
 }
-// "Usable" = the login is alive (not OAuth-disabled) AND no window is currently spent. A no-reading
-// account counts as usable (presumed available) — we only exclude what we KNOW is spent or dead.
-const acctUsable = (a, now) => !ACCT_DEAD.has(a.name) && !acctSpentNow(acctReading(a), now);
+// "Usable" = not config-disabled, the login is alive (not OAuth-disabled), AND no window is currently
+// spent. A no-reading account counts as usable (presumed available) — we only exclude what we KNOW is
+// disabled, dead, or spent. `a.disabled` is the operator flag; ACCT_DEAD is what the live probe found.
+const acctUsable = (a, now) => !a.disabled && !ACCT_DEAD.has(a.name) && !acctSpentNow(acctReading(a), now);
 // The first usable account, deterministic by name — a STABLE pick (same account until its state
 // changes), so serving from it does NOT rotate per request and preserves the per-org prompt cache.
 function firstUsableAccount(now) {
@@ -257,7 +258,11 @@ function accountFor(project) {
   // to its own account without moving the rest.
   const { consumer } = parseConsumer(p);
   const want = String((p && pins[p]) || (consumer && pins[consumer]) || CFG.defaultAccount || "").trim().toLowerCase();
-  const pinned = want ? (pool.find((a) => String(a.name).toLowerCase() === want) || null) : null;
+  let pinned = want ? (pool.find((a) => String(a.name).toLowerCase() === want) || null) : null;
+  // A disabled account is never served, even when explicitly pinned: null it out so the caller gets
+  // the honest `403 no_account_for_project` (re-pin the project) rather than a request to a dead
+  // subscription. This is the "so we don't try to use it" guarantee for a disabled login.
+  if (pinned && pinned.disabled) pinned = null;
 
   if (CFG.accountStrategy === "soonest-weekly-reset") {
     const reg = (CFG.consumers || {})[consumer];

@@ -157,6 +157,34 @@ console.log("accounts — the pool view:");
   api("config", { projectAccounts: {} });
 }
 
+// Creating, labelling with an email, and disabling a pool account — the only create path (POST config
+// replaces the pool wholesale and the panel never holds the other tokens).
+console.log("accounts — create / email / disable:");
+{
+  check("a non-oat token is refused",
+    !!api("accounts/token", { account: "acctC", token: "nope" }).error, true);
+  check("an unknown name creates the account (create-if-absent)", api("accounts/token", { account: "acctC", token: "sk-ant-oat-fake-c", email: "c@mejl.to" }).created, true);
+  check("a line-wrapped token is de-whitespaced, not rejected",
+    api("accounts/token", { account: "acctD", token: "sk-ant-oat-\n  fake-d" }).created, true);
+  api("accounts/remove", { account: "acctD", force: true });
+  const withC = api("accounts").accounts.find((x) => x.name === "acctC");
+  check("the new account appears in the pool", !!withC, true);
+  check("its email is surfaced", withC.email, "c@mejl.to");
+  check("it is enabled by default", withC.disabled, false);
+  // Disable it, and confirm the pool view flags it and names the pin left stranded.
+  api("pins", { project: "cproj", account: "acctC" });
+  const dis = api("accounts/disable", { account: "acctC" });
+  check("disable reports the stranded pin", dis.stranded, ["cproj"]);
+  check("a disabled account is flagged in the pool view", api("accounts").accounts.find((x) => x.name === "acctC").disabled, true);
+  check("re-enabling clears the flag", api("accounts/disable", { account: "acctC", disabled: false }).disabled, false);
+  // Rotating a token can also carry an email change; "" clears it.
+  check("rotate can clear the email", api("accounts/token", { account: "acctC", token: "sk-ant-oat-fake-c2", email: "" }).ok, true);
+  check("the email is now cleared", api("accounts").accounts.find((x) => x.name === "acctC").email, null);
+  // Clean up so later sections see the original two-account pool + no stray pins.
+  api("accounts/remove", { account: "acctC", force: true });
+  api("config", { projectAccounts: {} });
+}
+
 console.log("config — POST config REPLACES projectRoutes (documented, load-bearing):");
 api("config", { projectRoutes: { z: { provider: "local", model: "qwen3.5-9b", allowModels: ["qwen3.5-9b"] } } });
 check("siblings are gone", Object.keys(api("state").projectRoutes), ["z"]);
@@ -251,6 +279,13 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   CFG.accountStrategy = "pinned";
   ACCT_CACHE.set("org-early", reading({}));
   check("strategy pinned → the pin, always", accountFor("someapp").name, "late");
+
+  // A disabled account is never served, even as an explicit pin: accountFor returns null so the
+  // caller gets 403 no_account_for_project (re-pin), never a request to a dead subscription.
+  CFG.claudecodeAccountPool = CFG.claudecodeAccountPool.map((a) => a.name === "late" ? { ...a, disabled: true } : a);
+  check("a disabled pin resolves to no account (403 path)", accountFor("someapp"), null);
+  CFG.claudecodeAccountPool = CFG.claudecodeAccountPool.map((a) => { const { disabled, ...rest } = a; return rest; });
+  check("re-enabling the pin serves it again", accountFor("someapp").name, "late");
 }
 
 server.kill();

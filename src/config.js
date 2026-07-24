@@ -315,7 +315,15 @@ function mergeConfig(base, saved) {
     if (raw) {
       c.claudecodeAccountPool = raw
         .filter((a) => a && typeof a.token === "string" && a.token.trim())
-        .map((a) => ({ name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), email: String(a.email || "").trim(), token: a.token.trim() }));
+        .map((a) => {
+          // email is a human label (which Anthropic login this is); disabled marks a dead/retired
+          // subscription so routing skips it (see accountFor). Both are optional and only kept when
+          // set, so a plain {name,org,token} entry stays byte-clean on disk.
+          const e = { name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), token: a.token.trim() };
+          if (a.email && String(a.email).trim()) e.email = String(a.email).trim();
+          if (a.disabled) e.disabled = true;
+          return e;
+        });
     }
   }
   // UNION, not replace. The live /data/config.json predates four of these ids, and a plain

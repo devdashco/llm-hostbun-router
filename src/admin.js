@@ -20,7 +20,7 @@ const C = require("./config");
 const { CFG, setCFG, persistConfig, mergeConfig, envDefaults, loadConfig, reindexKeys, CANON, OBLIT, E4B,
         PROVIDERS, normProvider, sanitizeRule, sanitizeLimit, IMAGE_MODEL_IDS, CONFIG_FILE } = C;
 const DB = require("./db");
-const { dbUp, dbRow, dbRows, ACCT_CACHE, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
+const { dbUp, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
 const { priceMap, costUsd } = require("./pricing");
 const { mintKey, sha256, parseConsumer } = require("./identity");
 const { resolveRoute, accountFor, autoAccount, acctHealth, isGated, localTarget, limitFor, projectUsage, throttleSnapshot } = require("./routing");
@@ -355,7 +355,12 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
       const l = org ? lim.get(org) : null;
       const s = spend.get(a.name) || {}, s24 = spend24.get(a.name) || {};
       return {
-        name: a.name, org, email: a.email || "",
+        name: a.name, org,
+        email: a.email || null,
+        // disabled = config flag (set here / never routed). dead = runtime: the live limit refresh
+        // saw a 403 permission_error (OAuth disabled) this process. Both mean "don't route to it".
+        disabled: !!a.disabled,
+        dead: ACCT_DEAD.has(a.name),
         projects: Object.keys(pins).filter((p) => pins[p] === a.name).sort(),
         limits: l ? { ts: Number(l.ts) || 0, u5: l.u5, u7: l.u7, reset5: l.reset5, reset7: l.reset7,
           status: l.status, s5: l.s5, s7: l.s7, lastProject: l.project, lastModel: l.model } : null,
@@ -443,9 +448,11 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     const body = await readBody(req);
     let p = {};
     try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
-    const name = String(p.account || "").trim();
+    const name = String(p.account || p.name || "").trim();
     const token = String(p.token || "").replace(/\s+/g, ""); // paste often line-wraps the token; it has no spaces
-    const email = String(p.email || "").trim();
+    // email/disabled: "" or false clears, a value sets, undefined leaves it as-is.
+    const email = p.email !== undefined ? String(p.email || "").trim() : undefined;
+    const disabled = p.disabled !== undefined ? !!p.disabled : undefined;
     if (!name || !token) return sendJson(res, 400, { error: "account and token required" });
     if (!/^sk-ant-oat/.test(token)) return sendJson(res, 400, { error: "expected a Max setup-token (sk-ant-oat…)" });
     const pool = [...(CFG.claudecodeAccountPool || [])];
@@ -454,13 +461,49 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     // the MCP tool and the panel both call it "Import or rotate". A new entry is minimal {name,org,token};
     // org is learned later from the anthropic-organization-id header on the first catalog sweep.
     const created = i < 0;
-    if (created) pool.push({ name, org: "", email, token });
-    else pool[i] = { ...pool[i], token, ...(email ? { email } : {}) };
+    if (created) {
+      if (!/^[a-z0-9._-]+$/i.test(name)) return sendJson(res, 400, { error: "account name must be [a-z0-9._-]" });
+      const entry = { name, org: "", token };
+      if (email) entry.email = email;
+      if (disabled) entry.disabled = true;
+      pool.push(entry);
+    } else {
+      const cur = { ...pool[i], token };
+      if (email !== undefined) { if (email) cur.email = email; else delete cur.email; }
+      if (disabled !== undefined) { if (disabled) cur.disabled = true; else delete cur.disabled; }
+      pool[i] = cur;
+    }
     CFG.claudecodeAccountPool = pool;
     CFG.anthropicPool = pool;   // legacy name, kept in sync so a rollback still boots
     const persisted = persistConfig();
-    console.warn(`[admin] account ${created ? "ADDED" : "token rotated"} name=${name} ip=${ip} persisted=${persisted}`);
+    console.warn(`[admin] account ${created ? "ADDED" : "token rotated"} name=${name} email=${email ?? "(kept)"} disabled=${disabled === undefined ? "(kept)" : disabled} ip=${ip} persisted=${persisted}`);
     return sendJson(res, 200, { ok: true, persisted, account: name, created });
+  }
+
+  // Disable / re-enable ONE account without touching its token (POST /api/accounts/disable
+  // {account, disabled?}). A disabled account is skipped by routing: accountFor() returns null for a
+  // project whose pin points at it, so that project gets the honest `403 no_account_for_project`
+  // (re-pin it) instead of the router hammering a dead subscription. Default disabled=true.
+  if (sub === "accounts/disable" && req.method === "POST") {
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const name = String(p.account || p.name || "").trim();
+    if (!name) return sendJson(res, 400, { error: "account required" });
+    const disabled = p.disabled === undefined ? true : !!p.disabled;
+    const pool = [...(CFG.claudecodeAccountPool || [])];
+    const i = pool.findIndex((a) => String(a.name).toLowerCase() === name.toLowerCase());
+    if (i < 0) return sendJson(res, 400, { error: `unknown account '${name}'`, accounts: pool.map((a) => a.name) });
+    const cur = { ...pool[i] };
+    if (disabled) cur.disabled = true; else delete cur.disabled;
+    pool[i] = cur;
+    CFG.claudecodeAccountPool = pool;
+    CFG.anthropicPool = pool;
+    const persisted = persistConfig();
+    const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
+    const stranded = Object.keys(pins).filter((pj) => String(pins[pj]).toLowerCase() === cur.name.toLowerCase()).sort();
+    console.warn(`[admin] account ${disabled ? "DISABLED" : "re-enabled"} name=${cur.name} stranded=${stranded.join(",") || "-"} ip=${ip} persisted=${persisted}`);
+    return sendJson(res, 200, { ok: true, persisted, account: cur.name, disabled: !!cur.disabled, stranded });
   }
 
   // Remove ONE account from the pool, credential and all. Filters by name server-side so every other
