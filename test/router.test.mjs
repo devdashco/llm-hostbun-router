@@ -275,6 +275,22 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   check("a dev keeps its (even dead) pin — never auto-hopped", accountFor("somedev").name, "late");
   ACCT_DEAD.clear();
 
+  // ── post-429 cooldown: a real 429 benches the auto-pick so the app's NEXT request hops off it ──
+  // A 429 carries no ratelimit headers, so the harvest can't mark the account spent; the cooldown is
+  // what makes autoAccount stop re-picking a dry account and route to an available one instead.
+  const { noteAcctCooldown, acctCooling, clearAcctCooldown } = req(join(ROOT, "src/routing.js"));
+  ACCT_CACHE.set("org-early", reading({ reset7: now + 86400 }));       // soonest weekly reset, usable
+  ACCT_CACHE.set("org-late",  reading({ reset7: now + 3 * 86400 }));   // later, usable
+  ACCT_CACHE.set("org-spent", reading({ reset7: now + 5 * 86400 }));   // latest, usable
+  check("auto picks the soonest usable weekly reset", accountFor("someapp").name, "early");
+  noteAcctCooldown("early");                                            // a real 429 just benched it
+  check("a 429-cooled account reads as cooling", acctCooling("early", Date.now()), true);
+  check("the app hops to the next available account after a 429", accountFor("someapp").name, "late");
+  check("a dev is untouched by app-side cooldown (keeps its pin)", accountFor("somedev").name, "late");
+  clearAcctCooldown("early");
+  check("clearing the cooldown restores the account", accountFor("someapp").name, "early");
+  for (const n of ["early", "late", "spent"]) ACCT_CACHE.delete("org-" + n);
+
   // Strategy off → the invariant, untouched.
   CFG.accountStrategy = "pinned";
   ACCT_CACHE.set("org-early", reading({}));

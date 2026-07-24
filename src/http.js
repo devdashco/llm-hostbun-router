@@ -12,7 +12,7 @@ const { Readable } = require("node:stream");
 const TR = require("../translate");
 const { CFG } = require("./config");
 const { clip, recordCall, recordLimits, CONTENT_CAP } = require("./db");
-const { accountFor, isGated, resolveRoute, note429, note2xx, autoDisableAccount } = require("./routing");
+const { accountFor, isGated, resolveRoute, note429, note2xx, autoDisableAccount, noteAcctCooldown, clearAcctCooldown } = require("./routing");
 
 // Hop-by-hop headers: meaningful to ONE connection, never forwarded. Dropped by the split; without
 // them buildHeaders() throws ReferenceError and every proxied request 502s.
@@ -188,7 +188,12 @@ async function proxy(req, res, base, opts = {}) {
   // else's bill is what the old wrapper→crazyrouter path did, and it hid both cost and truth.
   if (provider === "claudecode" && !threw && up && up.status === 429 && opts.account) {
     recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel, opts.account);
-    console.warn(`[account] 429 on ${opts.account} (project=${base_rec.project || "-"}) — no auto-switch, returning 429 to caller`);
+    // A 429 carries no ratelimit headers, so the harvested reading can't mark this account spent —
+    // bench it for the auto-selector (autoAccount) so an APP's NEXT request hops to an available
+    // account instead of re-hitting this dry one. This does NOT retry the caller's request (invariant
+    // #2): the 429 below still returns to them; only the next pick is steered.
+    noteAcctCooldown(opts.account, Number(up.headers.get("retry-after")) || 0);
+    console.warn(`[account] 429 on ${opts.account} (project=${base_rec.project || "-"}) — cooled for auto-select, returning 429 to caller`);
   }
 
   if (threw) {
@@ -224,7 +229,7 @@ async function proxy(req, res, base, opts = {}) {
   // success clears it. server.js reads throttleDelay() before dispatch to pace a project that is
   // hammering a dry account. The 429 itself still reaches the caller — this only slows what's next.
   if (up.status === 429) note429(base_rec.project);
-  else if (up.status < 400) note2xx(base_rec.project);
+  else if (up.status < 400) { note2xx(base_rec.project); if (provider === "claudecode" && opts.account) clearAcctCooldown(opts.account); }
   const isStream = (up.headers.get("content-type") || "").includes("text/event-stream");
   // Only chat/responses/completions calls carry content worth recording; for those we tee the
   // body (capped) to pull tokens + reply. /v1/models etc. are skipped to keep the log signal high.
@@ -431,6 +436,10 @@ async function jsonEnforce(req, res, route) {
       return res.end(JSON.stringify({ error: { message: "upstream fetch failed: " + e.message } }));
     }
     if (curProvider === "claudecode") recordLimits(up.headers, logRec.project, logRec.sentModel || logRec.reqModel, account);
+    if (curProvider === "claudecode" && account) {         // steer the NEXT auto-pick (never a retry — invariant #2)
+      if (up.status === 429) noteAcctCooldown(account, Number(up.headers.get("retry-after")) || 0);
+      else if (up.status < 400) clearAcctCooldown(account);
+    }
     if (up.status >= 400) {                                // upstream error — surfaced, never masked
       console.error(`[err] upstream=${up.status} provider=${curProvider} model=${model || "-"} ${target} (json-enforce)`);
       shipError(`upstream ${up.status} ${req.method} ${req.url} (json-enforce)`, { model: model || "-", provider: curProvider, ip, status: up.status, body: text });

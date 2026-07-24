@@ -5,7 +5,7 @@
 const TR = require("../translate");
 const { CFG, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
 const { ORG_OF_ACCOUNT, ACCT_DEAD, recordLimits } = require("./db");
-const { localTarget, autoDisableAccount } = require("./routing");
+const { localTarget, autoDisableAccount, clearAcctCooldown } = require("./routing");
 
 function localModelEntries() {
   const ids = new Set();
@@ -163,7 +163,7 @@ async function refreshAccountLimits(acct) {
     // it. We never auto-RE-enable — a dead subscription coming back is an operator decision, and
     // auto-flapping a pin on/off is exactly the churn a persistent flag exists to prevent.
     if (errType === "permission_error") { ACCT_DEAD.add(acct.name); autoDisableAccount(acct.name, errMsg); }
-    else if (has) ACCT_DEAD.delete(acct.name);
+    else if (has) { ACCT_DEAD.delete(acct.name); clearAcctCooldown(acct.name); }   // fresh reading → un-bench any post-429 cooldown
     return {
       account: acct.name, org: org || null, status: r.status, checkedAt: Date.now(), ms: Date.now() - t0,
       errType, errMsg,

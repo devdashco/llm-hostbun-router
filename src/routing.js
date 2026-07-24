@@ -210,10 +210,47 @@ function acctSpentNow(r, now) {
   if ((r.s5 === "rejected" || (r.u5 || 0) >= 1) && (!r.reset5 || r.reset5 * 1000 > now)) return true; // 5h spent right now
   return false;
 }
-// "Usable" = not config-disabled, the login is alive (not OAuth-disabled), AND no window is currently
-// spent. A no-reading account counts as usable (presumed available) — we only exclude what we KNOW is
-// disabled, dead, or spent. `a.disabled` is the operator flag; ACCT_DEAD is what the live probe found.
-const acctUsable = (a, now) => !a.disabled && !ACCT_DEAD.has(a.name) && !acctSpentNow(acctReading(a), now);
+// ── runtime account cooldown (2026-07-24) ──────────────────────────────────
+// A real 429 means the account's CURRENT window is spent — but a 429 carries NO
+// `anthropic-ratelimit-unified-*` headers, so recordLimits() cannot learn from it: the harvested
+// reading can sit at u5≈0.9 while the account is actually dry. Without this, autoAccount() keeps
+// re-picking the just-spent account and the app 429s in a loop until the window resets. This runtime
+// set benches an account the instant it 429s so the auto-selector hops to the next AVAILABLE account
+// on the very next request. It is NOT an in-request fallback (invariant #2): the 429 still reaches the
+// caller; this only steers the NEXT pick. Cleared on the account's next success (real traffic or the
+// live-limits probe), and self-prunes when the cooldown elapses. In-memory, per-process.
+const ACCT_COOL = new Map();   // account name (lowercased) -> until-ms
+const COOL_FLOOR_MS = 60 * 1000, COOL_CAP_MS = 8 * 86400 * 1000;
+// Arm a cooldown for `name` after a 429. Duration = the spent window's own reset (weekly if the cached
+// reading says weekly is spent, else the 5h reset), floored to 60s and honouring a Retry-After header,
+// capped at 8d. With no cached reading we still bench it for the floor so the app hops off immediately.
+function noteAcctCooldown(name, retryAfterSec) {
+  if (!name) return;
+  const now = Date.now();
+  const r = acctReading({ name });                                // cached reading via ORG_OF_ACCOUNT
+  let until = now + COOL_FLOOR_MS;
+  if (retryAfterSec > 0) until = Math.max(until, now + retryAfterSec * 1000);
+  if (r) {
+    const weeklySpent = r.s7 === "rejected" || (r.u7 || 0) >= 1;  // which window drew the 429?
+    const resetSec = weeklySpent ? r.reset7 : (r.reset5 || r.reset7);
+    if (resetSec) until = Math.max(until, resetSec * 1000);       // anthropic resets are epoch SECONDS
+  }
+  ACCT_COOL.set(String(name).toLowerCase(), Math.min(until, now + COOL_CAP_MS));
+}
+function acctCooling(name, now) {
+  const k = String(name || "").toLowerCase();
+  const until = ACCT_COOL.get(k);
+  if (until == null) return false;
+  if (now >= until) { ACCT_COOL.delete(k); return false; }        // self-prune on read
+  return true;
+}
+function clearAcctCooldown(name) { if (name) ACCT_COOL.delete(String(name).toLowerCase()); }
+
+// "Usable" = not config-disabled, the login is alive (not OAuth-disabled), not in a post-429 cooldown,
+// AND no window is currently spent. A no-reading account counts as usable (presumed available) — we
+// only exclude what we KNOW is disabled, dead, cooling, or spent. `a.disabled` is the operator flag;
+// ACCT_DEAD is what the live probe found; ACCT_COOL is what a real 429 just told us.
+const acctUsable = (a, now) => !a.disabled && !ACCT_DEAD.has(a.name) && !acctCooling(a.name, now) && !acctSpentNow(acctReading(a), now);
 // The first usable account, deterministic by name — a STABLE pick (same account until its state
 // changes), so serving from it does NOT rotate per request and preserves the per-org prompt cache.
 function firstUsableAccount(now) {
@@ -346,4 +383,5 @@ module.exports = {
   enforceAllow, accountFor, autoAccount, autoDisableAccount, acctHealth, limitFor, projectUsage, usageVerdict,
   localTarget, isClaudeModel, isGated, sleep,
   note429, note2xx, throttleDelay, throttleSnapshot,
+  noteAcctCooldown, acctCooling, clearAcctCooldown,
 };
