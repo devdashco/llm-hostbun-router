@@ -333,6 +333,12 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   check("modelTier reads the tier", modelTier("claude-sonnet-4-6"), "sonnet");
   check("a priced model has a non-zero list cost", listCostUsd("claude-opus-4-8", 1e6, 1e6) > 0, true);
   check("an unknown model list cost is 0 (no guess)", listCostUsd("gemini-x", 1e6, 1e6), 0);
+
+  // Telemetry is fire-and-forget: shipEvent/shipError must never throw (a HyperDX hiccup can't break
+  // an inference request). With no HYPERDX_INGEST_API_KEY in the test env, both are silent no-ops.
+  const { shipEvent, shipError } = req(join(ROOT, "src/telemetry.js"));
+  check("shipEvent/shipError never throw (fire-and-forget)",
+    (() => { try { shipEvent("premium", { event: "premium_usage" }); shipError("err", {}); return "ok"; } catch { return "threw"; } })(), "ok");
 }
 
 server.kill();

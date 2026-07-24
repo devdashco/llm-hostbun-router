@@ -22,7 +22,7 @@ const HOP_RES = new Set(["connection", "content-length", "content-encoding",
   "transfer-encoding", "keep-alive", "te", "trailer", "upgrade"]);
 const {
   keyLabel, extractReqMeta, extractRequestContent, extractReqParams,
-  normalizeUsage, extractResponseBody, shipError, applyLocalThinkingDefault, isChatCompletions,
+  normalizeUsage, extractResponseBody, shipError, shipEvent, applyLocalThinkingDefault, isChatCompletions,
 } = require("./telemetry");
 
 // ── optional context compression via the headroom-compress sidecar. OFF unless HEADROOM_URL is set.
@@ -194,6 +194,8 @@ async function proxy(req, res, base, opts = {}) {
     // #2): the 429 below still returns to them; only the next pick is steered.
     noteAcctCooldown(opts.account, Number(up.headers.get("retry-after")) || 0);
     console.warn(`[account] 429 on ${opts.account} (project=${base_rec.project || "-"}) — cooled for auto-select, returning 429 to caller`);
+    shipEvent(`account ${opts.account} cooled after 429`,
+      { event: "account_cooldown", account: opts.account, project: base_rec.project || "-", model: base_rec.sentModel || base_rec.reqModel || "-" });
   }
 
   if (threw) {
@@ -211,8 +213,11 @@ async function proxy(req, res, base, opts = {}) {
       // spent window. Auto-disable it so the pinned project stops hammering it — same rule the
       // on-demand limits probe applies, but caught here on real traffic too (the 30-min sweep only
       // runs when the auto-strategy is on). `opts.account` is the pool name that served this call.
-      if (up.status === 403 && curProvider === "claudecode" && opts.account && /permission_error/.test(t))
-        autoDisableAccount(opts.account, "OAuth disabled (403 permission_error on live traffic)");
+      if (up.status === 403 && curProvider === "claudecode" && opts.account && /permission_error/.test(t)) {
+        const stranded = autoDisableAccount(opts.account, "OAuth disabled (403 permission_error on live traffic)");
+        if (stranded) shipEvent(`account ${opts.account} auto-disabled (OAuth 403)`,
+          { event: "account_disabled", account: opts.account, stranded: stranded.join(",") || "-" });
+      }
     }).catch(() => {});
   }
   // Image provider: upstream errors arrive as bare text; convert to OpenAI JSON error envelope.

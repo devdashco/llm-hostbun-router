@@ -181,7 +181,9 @@ function extractResponseBody(buf, isStream) {
 // at zero token cost. Upsert keyed by org-id → always the freshest per account. No-op unless the
 // headers are present (only the anthropic provider / native passthrough carries them).
 
-function shipError(message, attrs) {
+// One OTLP log record → HyperDX. Fire-and-forget; a no-op when no ingest key is configured, so it
+// never blocks or fails a request. `severityNumber` follows the OTLP scale (ERROR=17, WARN=13, INFO=9).
+function shipLog(severityText, severityNumber, message, attrs) {
   if (!HDX_KEY) return;
   const payload = { resourceLogs: [{
     resource: { attributes: [
@@ -190,13 +192,20 @@ function shipError(message, attrs) {
     ] },
     scopeLogs: [{ logRecords: [{
       timeUnixNano: String(Date.now()) + "000000",
-      severityText: "ERROR", severityNumber: 17,
+      severityText, severityNumber,
       body: { stringValue: String(message).slice(0, 2000) },
       attributes: Object.entries(attrs || {}).map(([k, v]) => ({ key: k, value: { stringValue: String(v).slice(0, 500) } })),
     }] }],
   }] };
   fetch(HDX_URL, { method: "POST", headers: { "content-type": "application/json", authorization: HDX_KEY }, body: JSON.stringify(payload) }).catch(() => {});
 }
+// An upstream/runtime failure — the error stream in HyperDX.
+function shipError(message, attrs) { shipLog("ERROR", 17, message, attrs); }
+// A structured, ALERTABLE operational signal (not an error): an app reaching for a premium model, an
+// account cooled off a 429, a login auto-disabled. Same plumbing as shipError, WARN severity, and an
+// `event` attribute so HyperDX can alert per event type. These are also in the Postgres call log —
+// this puts them where you'd set an alert, not just where you'd run a query after the fact.
+function shipEvent(message, attrs) { shipLog("WARN", 13, message, attrs); }
 
 
 // llama.cpp only reads the flag out of `chat_template_kwargs` — a top-level `enable_thinking` is
@@ -216,5 +225,5 @@ const isChatCompletions = (url) => typeof url === "string" && url.split("?")[0].
 
 module.exports = {
   keyLabel, toolsSummary, extractReqMeta, extractRequestContent, extractReqParams,
-  normalizeUsage, extractResponseBody, shipError, applyLocalThinkingDefault, isChatCompletions,
+  normalizeUsage, extractResponseBody, shipError, shipEvent, applyLocalThinkingDefault, isChatCompletions,
 };

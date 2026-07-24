@@ -49,7 +49,7 @@ const { handleAdminApi } = require("./src/admin");
 const { PRICES_FILE, isPremiumModel, modelTier } = require("./src/pricing");
 // Used on every refusal path (missing project, unknown consumer, bad key, unpinned account) and by
 // the upstream-error shipper. Unbound since the split, so each gate 502'd instead of refusing.
-const { extractRequestContent, shipError } = require("./src/telemetry");
+const { extractRequestContent, shipError, shipEvent } = require("./src/telemetry");
 
 // A single malformed request must NEVER take down the whole proxy. This is a
 // stateless per-request router, so a thrown error in one handler is isolated —
@@ -413,8 +413,11 @@ const server = http.createServer(async (req, res) => {
     const sentModel = route.rewriteModel || model;
     if (isPremiumModel(sentModel)) {
       const reg = consumerEntry(project);
-      if (reg && reg.kind === "app")
+      if (reg && reg.kind === "app") {
         console.warn(`[premium] app "${project}" is using ${sentModel} (${modelTier(sentModel)} tier) on account ${acct.name} — premium model on the shared Max pool`);
+        shipEvent(`app "${project}" using premium model ${sentModel}`,
+          { event: "premium_usage", consumer: project, model: sentModel, tier: modelTier(sentModel), account: acct.name });
+      }
     }
   }
 
