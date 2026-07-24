@@ -25,7 +25,10 @@ if (!existsSync(OUT)) {
 // Same regexes docs.test.mjs uses: admin password, Max setup token, a complete sk-llm key, a DSN.
 const SECRETS = [
   [/\bddash\b/, "admin password 'ddash'"],
-  [/sk-ant-oat/, "Anthropic Max setup token (sk-ant-oat…)"],
+  // Match a REAL token (sk-ant-oat01-<long secret>), not the bare vendor prefix — the panel's
+  // Accounts page legitimately renders `sk-ant-oat…` / `sk-ant-oat01-…` as help text, a placeholder,
+  // and a `/^sk-ant-oat/` paste-validation regex, none of which are secrets.
+  [/sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,}/, "Anthropic Max setup token (sk-ant-oat01-…)"],
   [/sk-llm-[0-9a-f]{8}-[\w-]{20,}/, "a complete sk-llm-<id>-<secret> API key"],
   [/postgres(ql)?:\/\/[^:\s]+:[^@\s]+@/, "a DATABASE_URL with credentials"],
 ];

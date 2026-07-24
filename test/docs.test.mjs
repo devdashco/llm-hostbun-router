@@ -62,7 +62,7 @@ console.log("nothing secret is published:");
 // The docs describe the panel and the key format; they must never carry a live value.
 const all = pages.map(md).join("\n") + readFileSync(join(ROOT, "docs/index.html"), "utf8");
 check("no admin password", !/\bddash\b/.test(all));
-check("no Max setup token", !/sk-ant-oat/.test(all));
+check("no Max setup token", !/sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,}/.test(all)); // real token body, not the bare prefix
 check("no complete API key", !/sk-llm-[0-9a-f]{8}-[\w-]{20,}/.test(all));
 check("no DATABASE_URL", !/postgres(ql)?:\/\/[^\s`]+:[^\s`]+@/.test(all));
 
