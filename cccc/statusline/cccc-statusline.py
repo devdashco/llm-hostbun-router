@@ -387,7 +387,7 @@ def _lsp_seg(cwd: str) -> str:
 # counter) is NEUTRAL. That's why mailmcp — which churns its stream all day — reads
 # green here instead of crying wolf every 5 minutes.
 _MCP_LOGS = f"{HOME}/.cache/claude-cli-nodejs"
-_MCP_PROBE = 12          # distinct session log-files to probe when locating ours
+_MCP_PROBE = 40          # distinct session log-files to probe when locating ours
 _MCP_OK = ("Successfully connected", "Connection established with capabilities",
            "reconnection successful", "completed successfully",
            "Channel notifications skipped", "leaving transport up")
@@ -667,7 +667,7 @@ def _mcp_scan(cwd: str, sid: str):
         dirs = [e.path for e in os.scandir(root) if e.name.startswith("mcp-logs-")]
     except OSError:
         return {}, 0.0
-    newest = {}
+    newest, every = {}, []
     for d in dirs:
         try:
             fs = [(e.stat().st_mtime, e.path) for e in os.scandir(d)
@@ -675,13 +675,17 @@ def _mcp_scan(cwd: str, sid: str):
         except OSError:
             continue
         if fs:
+            every += fs
             newest[d] = sorted(fs, reverse=True)[:4]
     # Every server in one session writes to a file named for that session's start, so
     # identify that ONE basename and then match the rest by name instead of reading
     # ~60 logs. Probe by distinct basename (= one read per candidate session), because
     # a busy repo with several panes open has other sessions' files on top.
+    # Hunt over EVERY file, not the per-dir window: a long-running session slides out
+    # of its own dirs' top-N as newer panes open in the same repo, and windowing the
+    # hunt made the badge go silent exactly when the session had been alive longest.
     base, tried = "", set()
-    for _, p in sorted((f for fs in newest.values() for f in fs), reverse=True):
+    for _, p in sorted(every, reverse=True):
         b = os.path.basename(p)
         if b in tried:
             continue
