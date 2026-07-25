@@ -390,6 +390,14 @@ const server = http.createServer(async (req, res) => {
       const pins = CFG.projectAccounts || CFG.consumerAccounts || {};
       const known = Object.keys(pins).sort().join(", ") || "none";
       console.warn(`[account] REFUSED project="${project || "(none)"}" — no pin and no defaultAccount. pinned projects: ${known}`);
+      // Alertable: this is the pool running dry (or a project pinned to a disabled login) — the most
+      // severe state the router has, and until now it was visible only as a console line and a log row.
+      // Distinguish the two causes so the page says which: `strategy` on means the auto-selector found
+      // NO usable account (every window spent / every login disabled), not a missing pin.
+      shipEvent(`no account for project "${project || "(none)"}" — request refused`,
+        { event: "no_account_for_project", consumer: project || "(none)", model: model || "-",
+          strategy: CFG.accountStrategy || "pin", pool: (CFG.claudecodeAccountPool || []).length,
+          usable: (CFG.claudecodeAccountPool || []).filter((a) => !a.disabled).length });
       // Log the refusal. A project that is being turned away spends nothing, so it would otherwise
       // leave no trace at all — and "why is promopilot getting nothing?" becomes unanswerable.
       recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path, project,

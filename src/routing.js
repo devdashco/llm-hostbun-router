@@ -87,14 +87,25 @@ function limitFor(project) {
   return null;
 }
 // Rolling-window usage for a project from the call log, cached ~5s to avoid per-request SUMs.
+// `tokens` is BILLABLE tokens — total minus cache reads — not raw total_tokens. A cached read costs
+// ~0.1x and barely moves the Max 5h/7d window, so quota'ing on the raw total punishes exactly the
+// behaviour the cache breakpoints exist to produce: after the 2026-07-25 fix `autonoma` re-sends an
+// 86k-token prefix per turn at 98% cache hit, which reads as ~2B total_tokens/day but burns the
+// subscription like ~40M. A cap on the raw number would throttle a well-cached app off the pool while
+// an uncached one at 1/50th the total sailed through. The window is what we are protecting, so the
+// quota must count what actually spends it.
 const _usageCache = new Map();
 async function projectUsage(project, windowMs) {
   if (!dbUp() || !project) return { tokens: 0, calls: 0 };
   const key = project + "|" + windowMs, now = Date.now(), c = _usageCache.get(key);
   if (c && now - c.at < 5000) return c.val;                 // ~5s cache: this is on the hot path
   let val = { tokens: 0, calls: 0 };
+  // GREATEST(...,0): cache_read is part of prompt_tokens (normalizeUsage folds it in), but a row
+  // written before that held or from a provider that reports them separately could go negative.
   const r = await dbRow(
-    "SELECT COUNT(*)::int AS calls, COALESCE(SUM(total_tokens),0)::bigint AS tokens FROM calls WHERE project=$1 AND ts>=$2",
+    "SELECT COUNT(*)::int AS calls, " +
+    "COALESCE(SUM(GREATEST(COALESCE(total_tokens,0) - COALESCE(cache_read,0), 0)),0)::bigint AS tokens " +
+    "FROM calls WHERE project=$1 AND ts>=$2",
     [project, now - windowMs]);
   // dbRow swallows errors and returns null → treat as no usage. A quota check must never be the
   // reason an inference request fails.
@@ -231,8 +242,15 @@ function noteAcctCooldown(name, retryAfterSec) {
   let until = now + COOL_FLOOR_MS;
   if (retryAfterSec > 0) until = Math.max(until, now + retryAfterSec * 1000);
   if (r) {
+    // Bench to a window's RESET only when the reading says that window is actually SPENT. A 429 on an
+    // account with headroom is a burst/concurrency limit, not an exhausted window — and the old code
+    // fell through to `r.reset5` for ANY 429, so one transient 429 on a 8%-utilised account benched it
+    // for its whole 5h window. On 2026-07-25 that took the only healthy account out of the pool and
+    // every app got `403 no_account_for_project` for five minutes (16:41–16:46 UTC) while five of the
+    // eight logins were genuinely spent. No window spent ⇒ the 60s floor / Retry-After only.
     const weeklySpent = r.s7 === "rejected" || (r.u7 || 0) >= 1;  // which window drew the 429?
-    const resetSec = weeklySpent ? r.reset7 : (r.reset5 || r.reset7);
+    const fiveSpent = r.s5 === "rejected" || (r.u5 || 0) >= 1;
+    const resetSec = weeklySpent ? r.reset7 : fiveSpent ? r.reset5 : 0;
     if (resetSec) until = Math.max(until, resetSec * 1000);       // anthropic resets are epoch SECONDS
   }
   ACCT_COOL.set(String(name).toLowerCase(), Math.min(until, now + COOL_CAP_MS));

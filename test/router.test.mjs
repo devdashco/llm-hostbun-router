@@ -289,6 +289,32 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   check("a dev is untouched by app-side cooldown (keeps its pin)", accountFor("somedev").name, "late");
   clearAcctCooldown("early");
   check("clearing the cooldown restores the account", accountFor("someapp").name, "early");
+
+  // A 429 on an account WITH headroom is a burst limit, not a spent window — bench it for the 60s
+  // floor, never to the window reset. Benching a healthy account to reset5 is what emptied the pool on
+  // 2026-07-25: the one usable login went dark for hours and every app got 403 no_account_for_project.
+  const FAR5 = now + 4 * 3600, FAR7 = now + 5 * 86400;
+  ACCT_CACHE.set("org-early", reading({ u5: 0.08, u7: 0.02, reset5: FAR5, reset7: FAR7 }));
+  noteAcctCooldown("early");
+  check("a 429 with headroom benches only for the short floor, not the window reset",
+    acctCooling("early", Date.now() + 61_000), false);
+  clearAcctCooldown("early");
+  // ...but when the reading says the 5h window IS spent, the bench really does run to reset5.
+  ACCT_CACHE.set("org-early", reading({ u5: 1, s5: "rejected", reset5: FAR5, reset7: FAR7 }));
+  noteAcctCooldown("early");
+  check("a 429 on a spent 5h window benches until reset5", acctCooling("early", Date.now() + 61_000), true);
+  clearAcctCooldown("early");
+  // A spent WEEKLY window outranks the 5h reset — it is the longer, binding wait.
+  ACCT_CACHE.set("org-early", reading({ u7: 1, s7: "rejected", reset5: now + 60, reset7: FAR7 }));
+  noteAcctCooldown("early");
+  check("a 429 on a spent weekly window benches past the 5h reset",
+    acctCooling("early", Date.now() + 3600_000), true);
+  clearAcctCooldown("early");
+  // Retry-After still wins over the floor when no window is spent.
+  ACCT_CACHE.set("org-early", reading({ u5: 0.08, u7: 0.02, reset5: FAR5, reset7: FAR7 }));
+  noteAcctCooldown("early", 300);
+  check("Retry-After extends the bench even with headroom", acctCooling("early", Date.now() + 61_000), true);
+  clearAcctCooldown("early");
   for (const n of ["early", "late", "spent"]) ACCT_CACHE.delete("org-" + n);
 
   // Strategy off → the invariant, untouched.
