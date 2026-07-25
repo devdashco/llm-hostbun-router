@@ -24,7 +24,7 @@ const { dbUp, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE 
 const { unpricedModels } = require("./pricing");
 const { sha256 } = require("./identity");
 const { resolveRoute, accountFor, autoAccount, acctHealth, isGated, throttleSnapshot } = require("./routing");
-const { readBody, sendJson, mask, buildHeaders } = require("./http");
+const { readBody, readJson, sendJson, mask, buildHeaders } = require("./http");
 const CC = require("./claudecode");
 const { refreshClaudecodeModels, refreshAccountLimits, upstreamCatalogs, localModelEntries } = CC;
 // The three read-only consumption rollups. Split out on 2026-07-26 — see src/analytics.js.
@@ -233,9 +233,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (sub === "state" && req.method === "GET") return sendJson(res, 200, adminState());
 
   if (sub === "config" && req.method === "POST") {
-    const body = await readBody(req);
-    let patch = null;
-    try { patch = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "invalid JSON body" }); }
+    const patch = await readJson(req, res);
+    if (!patch) return;
     // Secret fields: omit/undefined = keep; "" = clear; value = set. Start from current CFG.
     const next = JSON.parse(JSON.stringify(CFG));
     if (patch.bases) {
@@ -308,8 +307,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   // not the last reading a real request happened to harvest (which freezes when an account is idle,
   // e.g. after Anthropic refunds a window). Serial, so we hit one org's limiter at a time.
   if (sub === "claudecode/limits" && req.method === "POST") {
-    const body = await readBody(req);
-    let p = {}; try { p = JSON.parse(body.toString()); } catch {}
+    const p = await readJson(req, res);
+    if (!p) return;
     const pool = CFG.claudecodeAccountPool || [];
     if (p.all || !p.account) {
       const out = [];
@@ -327,8 +326,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   // ~/.claude-accounts/<name>.token to the live pool token after a rotation (else the
   // old local copy 401s on direct while the gateway still works on the fresh one).
   if (sub === "reveal" && req.method === "POST") {
-    const body = await readBody(req);
-    let p = {}; try { p = JSON.parse(body.toString()); } catch {}
+    const p = await readJson(req, res);
+    if (!p) return;
     const pool = CFG.claudecodeAccountPool || [];
     const acct = pool.find((a) => a.name.toLowerCase() === String(p.account || "").trim().toLowerCase());
     if (!acct) return sendJson(res, 400, { error: "no such account", accounts: pool.map((a) => a.name) });
@@ -342,9 +341,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (sub === "accounts" && req.method === "GET") return AC.listAccounts(req, res);
   if (sub === "pins" && req.method === "POST") return AC.setPin(req, res, ip);
   if (sub === "routes" && req.method === "POST") {
-    const body = await readBody(req);
-    let p = {};
-    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const p = await readJson(req, res);
+    if (!p) return;
     const project = String(p.project || "").trim().toLowerCase();
     if (!project) return sendJson(res, 400, { error: "project required" });
     const routes = { ...(CFG.projectRoutes || {}) };
@@ -383,9 +381,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (sub === "consumers/keys" && req.method === "POST") return CO.issueKey(req, res, ip);
   if (sub === "consumers/keys/revoke" && req.method === "POST") return CO.revokeKey(req, res, ip);
   if (sub === "claudecode/strategy" && req.method === "POST") {
-    const body = await readBody(req);
-    let p = {};
-    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const p = await readJson(req, res);
+    if (!p) return;
     if (!["pinned", "soonest-weekly-reset"].includes(p.mode))
       return sendJson(res, 400, { error: "mode must be pinned | soonest-weekly-reset" });
     CFG.accountStrategy = p.mode;
@@ -396,9 +393,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   }
 
   if (sub === "auth" && req.method === "POST") {
-    const body = await readBody(req);
-    let p = {};
-    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const p = await readJson(req, res);
+    if (!p) return;
     if (!["off", "optional", "required"].includes(p.mode)) return sendJson(res, 400, { error: "mode must be off | optional | required" });
     CFG.auth = { mode: p.mode };
     const persisted = persistConfig();
@@ -409,9 +405,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   // Turn the gate on/off. Separate from `config` so it is a deliberate, logged act — flipping it on
   // with an unseeded registry is an instant outage for every caller not yet registered.
   if (sub === "consumers/enforce" && req.method === "POST") {
-    const body = await readBody(req);
-    let p = {};
-    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+    const p = await readJson(req, res);
+    if (!p) return;
     CFG.requireRegisteredConsumer = !!p.enabled;
     const persisted = persistConfig();
     console.warn(`[admin] requireRegisteredConsumer=${CFG.requireRegisteredConsumer} ip=${ip} persisted=${persisted}`);
@@ -461,16 +456,16 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   }
 
   if (sub === "test" && req.method === "POST") {
-    const body = await readBody(req); let p = {};
-    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "invalid JSON body" }); }
+    const p = await readJson(req, res);
+    if (!p) return;
     if (!p.model) return sendJson(res, 400, { error: "model required" });
     return sendJson(res, 200, await adminTest(p.model, p.prompt, p.max_tokens));
   }
 
   // Dry-run: show exactly where a model name routes, without calling upstream.
   if (sub === "resolve" && req.method === "POST") {
-    const body = await readBody(req); let p = {};
-    try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "invalid JSON body" }); }
+    const p = await readJson(req, res);
+    if (!p) return;
     const r = resolveRoute(p.model, p.project);
     const sent = r.rewriteModel || (r.provider === "local" ? r.target : p.model) || p.model || "";
     const gated = r.provider === "local" && isGated(r.target) && !!CFG.oblitToken;

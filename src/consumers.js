@@ -15,16 +15,15 @@
 // turning either on with an unseeded registry is an instant outage, and they are not registry CRUD.
 const { CFG } = require("./config");
 const { dbRows } = require("./db");
-const { sendJson, readBody } = require("./http");
+const { sendJson, readJson } = require("./http");
 const { sha256 } = require("./identity");
 // registry.js pulls config/db/identity and nothing pulls admin, so there is no cycle here — the
 // four inline require()s this replaced were habit, not a guard.
 const REG = require("./registry");
 
 async function setAlias(req, res, ip) {
-  const body = await readBody(req);
-  let p = {};
-  try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+  const p = await readJson(req, res);
+  if (!p) return;
   try {
     await REG.setAlias({ from: p.from, to: p.to });
     console.log(`[admin] alias ${p.from} -> ${p.to || "(removed)"} ip=${ip}`);
@@ -79,9 +78,8 @@ async function listConsumers(req, res) {
 // Translate at this edge rather than teaching either side the other's words.
 const KIND = { dev: "machine", app: "project" };
 async function addConsumer(req, res, ip) {
-  const body = await readBody(req);
-  let p = {};
-  try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+  const p = await readJson(req, res);
+  if (!p) return;
   try {
     if (p.remove) {
       await REG.removeConsumer(p.name);
@@ -104,9 +102,8 @@ async function addConsumer(req, res, ip) {
 // authenticate — is what let a self-asserted header masquerade as identity in the first place.
 // The plaintext is returned ONCE; only its sha256 is stored.
 async function issueKey(req, res, ip) {
-  const body = await readBody(req);
-  let p = {};
-  try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+  const p = await readJson(req, res);
+  if (!p) return;
   try {
     const out = await REG.issueKey({ name: p.name, kind: p.kind ? KIND[p.kind] : undefined, developer: p.owner, note: p.note });
     console.log(`[admin] key issued ${out.consumer} id=${out.keyId} ip=${ip}`);
@@ -119,9 +116,8 @@ async function issueKey(req, res, ip) {
 
 // Revoke one key. The consumer, its pins and its history survive; only this credential dies.
 async function revokeKey(req, res, ip) {
-  const body = await readBody(req);
-  let p = {};
-  try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+  const p = await readJson(req, res);
+  if (!p) return;
   try {
     await REG.revokeKey({ name: p.name, id: p.id });
     console.warn(`[admin] key REVOKED ${p.name} id=${p.id} ip=${ip}`);

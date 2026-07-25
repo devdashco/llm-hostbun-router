@@ -207,6 +207,26 @@ check("a config write is visible to the router", api("state").projectRoutes.z.pr
 console.log("account strategy — the opt-in weekly-reset picker:");
 check("default strategy is pinned", api("state").accountStrategy, "pinned");
 check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" }).error, "mode must be pinned | soonest-weekly-reset");
+
+// Malformed JSON is ONE answer on every control-plane route. Nineteen hand-rolled copies of the
+// read-and-parse preamble had drifted into four different behaviours, and two of them swallowed the
+// error and carried on with an empty object. On claudecode/limits that is not cosmetic: an empty
+// body means "no account named", which the handler reads as "refresh them ALL", so a truncated
+// payload silently fired a live probe at every subscription in the pool. It must refuse instead.
+const rawPost = (path, raw) => {
+  const out = curl([`${BASE}/api/${path}`, "-H", `cookie: hb_admin=${cookie}`,
+                    "-H", "content-type: application/json", "-X", "POST", "-d", raw]);
+  const [bodyText, code] = out.split("\n<");
+  return { code: (code || "").replace(/[<>]/g, ""), body: bodyText };
+};
+{
+  const r = rawPost("claudecode/limits", '{"account":');   // truncated — the realistic malformed body
+  check("a malformed body is a 400, not a fan-out probe", r.code, "400");
+  check("...and says why", JSON.parse(r.body).error, "bad json");
+  // An EMPTY body is still valid: several routes are legitimately called with no payload, and
+  // conflating "sent nothing" with "sent garbage" is the bug above.
+  check("an empty body is still accepted", rawPost("consumers/enforce", "").code, "200");
+}
 {
   const r = api("claudecode/strategy", { mode: "soonest-weekly-reset" });
   check("flipping the strategy answers with the pick", [r.ok, r.mode, r.autoAccount], [true, "soonest-weekly-reset", null]); // no readings → null

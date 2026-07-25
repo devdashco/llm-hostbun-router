@@ -43,6 +43,25 @@ const readBody = (req) => new Promise((resolve) => {
   req.on("error", () => resolve(Buffer.concat(c)));
 });
 
+// Read a JSON request body for a control-plane route. Returns the parsed object, or null after
+// having ALREADY answered 400 — so a caller writes:  const p = await readJson(req, res); if (!p) return;
+//
+// One behaviour, in one place, because the nineteen hand-rolled copies of this preamble had drifted
+// into four: `{error:"bad json"}`, `{error:"invalid JSON body"}`, a RegistryError, and — twice —
+// `catch {}`, which swallowed the failure and carried on with an empty object. That last one is why
+// this exists rather than being a tidy-up: on POST /api/claudecode/limits an empty `p` means "no
+// account named", which the handler reads as "refresh them ALL", so a malformed body silently fired
+// a live probe at every subscription in the pool instead of returning 400.
+//
+// An EMPTY body stays valid and yields {} — several routes are legitimately called with no payload,
+// and conflating "sent nothing" with "sent garbage" is the whole bug above.
+async function readJson(req, res) {
+  const body = await readBody(req);
+  if (!body || !body.length) return {};
+  try { return JSON.parse(body.toString()); }
+  catch { sendJson(res, 400, { error: "bad json" }); return null; }
+}
+
 function sendFile(res, path, type, cors, cacheControl) {
   fs.readFile(path, (e, buf) => {
     if (e) { res.writeHead(404, { "content-type": "text/plain" }); return res.end("not found"); }
@@ -512,6 +531,6 @@ function sendJson(res, status, obj, extraHeaders) {
 const mask = (s) => { const t = String(s || ""); return !t ? "" : t.length <= 6 ? "••••" : "••••" + t.slice(-4); };
 
 module.exports = {
-  readBody, sendFile, sendJson, mask, buildHeaders, proxy, jsonEnforce, wantsJsonFormat,
+  readBody, readJson, sendFile, sendJson, mask, buildHeaders, proxy, jsonEnforce, wantsJsonFormat,
   hasImageContent, headroomCompress, HEADROOM_URL,
 };

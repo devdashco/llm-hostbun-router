@@ -10,7 +10,7 @@
 // save built from a stale render would delete every other project's pin.
 const { CFG, persistConfig } = require("./config");
 const { dbRows, ACCT_DEAD, ORG_OF_ACCOUNT } = require("./db");
-const { sendJson, readBody } = require("./http");
+const { sendJson, readJson } = require("./http");
 const { accountFor } = require("./routing");
 
 async function listAccounts(req, res) {
@@ -70,9 +70,8 @@ async function listAccounts(req, res) {
 // pin. This endpoint is the safe door: it merges, and it refuses an unknown account outright
 // rather than writing a pin that resolves to nothing and 403s at request time.
 async function setPin(req, res, ip) {
-  const body = await readBody(req);
-  let p = {};
-  try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+  const p = await readJson(req, res);
+  if (!p) return;
   const project = String(p.project || "").trim().toLowerCase();
   if (!project) return sendJson(res, 400, { error: "project required" });
   const pins = { ...(CFG.projectAccounts || CFG.consumerAccounts || {}) };
@@ -99,9 +98,8 @@ async function setPin(req, res, ip) {
 //   {project, allowProviders:[…], allowModels:[…]}          → allowlist only, normal routing
 //   {project, rule:null}  /  {project, clear:true}          → back to auto
 async function setAccountToken(req, res, ip) {
-  const body = await readBody(req);
-  let p = {};
-  try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+  const p = await readJson(req, res);
+  if (!p) return;
   const name = String(p.account || p.name || "").trim();
   const token = String(p.token || "").replace(/\s+/g, ""); // paste often line-wraps the token; it has no spaces
   // email/disabled: "" or false clears, a value sets, undefined leaves it as-is.
@@ -139,9 +137,8 @@ async function setAccountToken(req, res, ip) {
 // project whose pin points at it, so that project gets the honest `403 no_account_for_project`
 // (re-pin it) instead of the router hammering a dead subscription. Default disabled=true.
 async function setAccountDisabled(req, res, ip) {
-  const body = await readBody(req);
-  let p = {};
-  try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+  const p = await readJson(req, res);
+  if (!p) return;
   const name = String(p.account || p.name || "").trim();
   if (!name) return sendJson(res, 400, { error: "account required" });
   const disabled = p.disabled === undefined ? true : !!p.disabled;
@@ -166,9 +163,8 @@ async function setAccountDisabled(req, res, ip) {
 // that project on `403 no_account_for_project` — unless `force:true`, which drops those pins too.
 // The pool in /data/config.json is the only copy of these tokens: removing one is irreversible here.
 async function removeAccount(req, res, ip) {
-  const body = await readBody(req);
-  let p = {};
-  try { p = JSON.parse(body.toString()); } catch { return sendJson(res, 400, { error: "bad json" }); }
+  const p = await readJson(req, res);
+  if (!p) return;
   const name = String(p.name || p.account || "").trim();
   if (!name) return sendJson(res, 400, { error: "name required" });
   const pool = CFG.claudecodeAccountPool || [];
