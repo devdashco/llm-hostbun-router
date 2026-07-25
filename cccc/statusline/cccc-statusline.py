@@ -6,7 +6,7 @@ Folds the old 5-script chain (statusline-ratelimits + headroom + statusline-comm
 Headroom required. install.sh vendors this and points settings.json at it, so every
 machine/session shows the byte-identical line:
 
-    📁…/repo · ⑂branch±3 · opus · ctxfree▇67%
+    📁…/repo · ⑂branch±3 · opus · ctxfree▇67% · 🔌17✓
     👤acct✓·direct 5h▇88%↻2h 7d▂27%↻4d · cctl:sha
 
 The context + limit gauges read as "how much is LEFT" (green→plenty, red→nearly
@@ -30,6 +30,26 @@ is never silent: red `⌛stale` = the background refresh itself has failed for 1
 reading is old because the account has served no traffic (idle accounts keep their
 last reading — the router only learns from real responses).
 
+The 🔌 badge is MCP health, and it is deliberately hard to miss. A dead MCP server
+is otherwise INVISIBLE: `claude` prints "failed to connect" once at startup, it
+scrolls away, and after that the tool is simply absent — you discover it when a
+tool call fails. So:
+
+    🔌17✓                        dim: all 17 servers of this session answered
+    🔌⚠1/17 🔑gitlab             BOLD RED, and it MOVES to the front of the line
+    🔌16✓ ⟳autonoma              yellow: enabled but installed after this session
+                                 started — not broken, just needs a restart
+
+    🔑 the server answered and said no (401/token revoked) — fix the credential
+    💀 it never answered (refused / DNS / TLS / timeout) — the box or route is down
+    ✖ failed some other way   ? enabled + configured, yet never showed up at all
+
+Truth comes from Claude Code's own per-server logs filtered to THIS session id, so
+the badge says exactly what `/mcp` says — nothing is probed or inferred. A healthy
+http server is noisy (its SSE stream idles out and re-dials every few minutes), and
+none of that churn counts as broken; only a decisive failure does. `cccc-statusline.py
+--mcp` prints the per-server table behind the badge.
+
 Reads Claude Code's status JSON on stdin. Any segment whose data is absent this turn
 is simply omitted — nothing is fabricated (e.g. rate-limit segments only appear once
 the session has had one API response).
@@ -38,6 +58,7 @@ Optional side-effects, only if the files exist (so an existing Headroom / Claude
 menu-bar app keeps working): mirrors stdin to ~/.claude/headroom-usage.json and feeds
 ~/.claude/claudewatch-feed.sh.
 """
+import calendar
 import json
 import os
 import re
@@ -333,6 +354,284 @@ def _lsp_seg(cwd: str) -> str:
     if covered:
         return f"{_DIM}lsp✓{_LANG_SHORT[covered[0]]}{_RST}"
     return ""
+
+
+# --- MCP health segment ----------------------------------------------------
+# A dead MCP server used to be INVISIBLE: `claude` prints "failed to connect" once
+# at startup, scrolls away, and from then on the tool simply isn't there — you find
+# out by watching a tool call fail. This segment keeps that on screen.
+#
+# Ground truth is Claude Code's OWN per-server debug log (~/.cache/claude-cli-nodejs/
+# <cwd>/mcp-logs-<server>/<session>.jsonl) filtered to THIS session id, so it says
+# exactly what `/mcp` says — no probing, no second opinion, nothing fabricated.
+#
+# The hard part is that a HEALTHY http server is noisy: its SSE stream idles out
+# every ~5 min and reconnects ("HTTP connection dropped", "Terminal connection error
+# 2/3", "Failed to reconnect SSE stream", "SSE GET-stream reconnection exhausted;
+# leaving transport up"). None of those mean broken — Claude re-dials lazily and the
+# POST channel keeps working. So only *decisive* lines move the verdict, last one
+# wins, and everything else (SIGINT, "exited cleanly", a dropped stream, a retry
+# counter) is NEUTRAL. That's why mailmcp — which churns its stream all day — reads
+# green here instead of crying wolf every 5 minutes.
+_MCP_LOGS = f"{HOME}/.cache/claude-cli-nodejs"
+_MCP_PROBE = 12          # distinct session log-files to probe when locating ours
+_MCP_OK = ("Successfully connected", "Connection established with capabilities",
+           "reconnection successful", "completed successfully",
+           "Channel notifications skipped", "leaving transport up")
+_MCP_BAD = ("Connection failed", "Server rejected the configured Authorization",
+            "reached, giving up", "not cached")
+_MCP_AUTH = ("401", "403", "invalid_token", "revoked", "unauthorized", "not authorized",
+             "authorization header", "invalid api key", "authentication", "forbidden")
+_MCP_DOWN = ("econnrefused", "timed out", "timeout", "getaddrinfo", "enotfound",
+             "no available server", "connection closed", "socket hang up",
+             "502", "503", "504", "econnreset", "unable to connect", "certificate")
+# 🔑 = the server answered and said no (token revoked/401) — fix the credential.
+# 💀 = it never answered (refused/DNS/TLS/timeout) — the box or route is down.
+# ✖ = it failed for some other reason.  ⟳ = installed after this session started,
+# so it simply isn't loaded yet (restart).  ? = configured, enabled, and yet never
+# showed up this session — the silent one worth looking at.
+_MCP_GLYPH = {"auth": "🔑", "down": "💀", "err": "✖", "new": "⟳", "?": "?"}
+
+
+def _mcp_dir(name: str) -> str:
+    """Server name → its log dir. Claude Code slugs every non-alphanumeric to '-',
+    so `plugin:coolify:coolify-cli` lands in `mcp-logs-plugin-coolify-coolify-cli`."""
+    return "mcp-logs-" + re.sub(r"[^A-Za-z0-9-]", "-", name)
+
+
+def _mcp_enabled_plugins(cwd: str) -> dict:
+    """Merged enabledPlugins across the settings files that can switch a plugin on —
+    a project's .claude/settings.json enables plugins for that repo alone, so reading
+    only the global file would call a perfectly-configured server 'missing'. The
+    project files are resolved against the SESSION's cwd, not the process's."""
+    out = {}
+    for p in (_cc_file("settings.json", "~/.claude/settings.json"),
+              _cc_file("settings.local.json", "~/.claude/settings.local.json"),
+              os.path.join(cwd or ".", ".claude/settings.json"),
+              os.path.join(cwd or ".", ".claude/settings.local.json")):
+        try:
+            with open(p) as f:
+                out.update(json.load(f).get("enabledPlugins") or {})
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def _mcp_configured(cwd: str, started: float):
+    """(labels, expected, fresh) — every MCP server this box is CONFIGURED to run,
+    so the segment can also flag one that never opened a log at all. `labels` maps a
+    log dir to the name `/mcp` shows; `expected` is the enabled subset; `fresh` are
+    the ones (re)installed after this session started — not broken, just not loaded."""
+    enabled = _mcp_enabled_plugins(cwd)
+    try:
+        with open(f"{HOME}/.claude/plugins/installed_plugins.json") as f:
+            inst = json.load(f).get("plugins") or {}
+    except (OSError, ValueError):
+        inst = {}
+    labels, expected, fresh = {}, set(), set()
+    for key, entries in inst.items():
+        plug = key.split("@", 1)[0]
+        for e in entries or []:
+            try:
+                with open(os.path.join(e.get("installPath") or "", ".mcp.json")) as f:
+                    servers = json.load(f)
+            except (OSError, ValueError):
+                continue
+            new = _mcp_epoch(e.get("lastUpdated") or e.get("installedAt") or "")
+            for srv in servers:
+                d = _mcp_dir(f"plugin-{plug}-{srv}")
+                labels[d] = srv
+                if enabled.get(key):
+                    expected.add(d)
+                    if started and new and new > started:
+                        fresh.add(d)
+            break
+    try:                                   # user-scope servers (`claude mcp add`)
+        with open(_cc_file(".claude.json", "~/.claude.json")) as f:
+            for srv in (json.load(f).get("mcpServers") or {}):
+                labels[_mcp_dir(srv)] = srv
+                expected.add(_mcp_dir(srv))
+    except (OSError, ValueError):
+        pass
+    return labels, expected, fresh
+
+
+def _mcp_epoch(stamp: str) -> float:
+    """ISO-8601 (or Claude's log-file name form) → epoch; 0 when unparseable."""
+    m = re.match(r"(\d{4})-(\d\d)-(\d\d)T(\d\d)[-:](\d\d)[-:](\d\d)", stamp or "")
+    if not m:
+        return 0.0
+    try:
+        return calendar.timegm(tuple(int(x) for x in m.groups()) + (0, 0, 0))
+    except (ValueError, OverflowError):
+        return 0.0
+
+
+def _mcp_label(d: str) -> str:
+    """Fallback display name for a log dir with no live plugin behind it (the plugin
+    was removed, but its logs — and its failure — are still part of this session).
+    The dir is `plugin-<plugin>-<server>` with both halves glued, so drop the leading
+    plugin name and show the server: coolify-hostbun-coolify-hostbun → coolify-hostbun."""
+    rest = d.replace("mcp-logs-", "", 1)
+    if not rest.startswith("plugin-"):
+        return rest
+    parts = rest[len("plugin-"):].split("-")
+    for k in range(1, len(parts)):
+        if parts[k:k + k] == parts[:k]:
+            return "-".join(parts[k:])
+    return "-".join(parts)
+
+
+def _mcp_sid(path: str) -> str:
+    """The session a log file belongs to. Every line carries sessionId and a file is
+    opened per (server, session), so the first line settles it in one read."""
+    try:
+        with open(path, errors="replace") as f:
+            return (json.loads(f.readline()) or {}).get("sessionId") or ""
+    except (OSError, ValueError):
+        return ""
+
+
+def _mcp_verdict(path: str) -> str:
+    """'ok' | 'auth' | 'down' | 'err' from the LAST decisive line — see the note above
+    on why drops and retries are deliberately not decisive. '' = no evidence either
+    way, which is reported as unknown rather than guessed at."""
+    try:
+        sz = os.path.getsize(path)
+        with open(path, errors="replace") as f:
+            if sz > 65536:                 # long-lived servers log all day; the verdict
+                f.seek(sz - 65536)         # only needs the tail
+                f.readline()               # drop the partial line the seek landed in
+            lines = f.readlines()
+    except OSError:
+        return ""
+    state = ""
+    for l in lines:
+        try:
+            d = json.loads(l)
+        except ValueError:
+            continue
+        msg = " ".join(str(d.get(k) or "") for k in ("debug", "error", "message"))
+        if any(p in msg for p in _MCP_BAD):
+            low = msg.lower()
+            # The final line of a dying server is often the bland "max reconnection
+            # attempts reached, giving up" — keep the KIND diagnosed by the earlier,
+            # talkative failure ("certificate", "401") rather than downgrading to ✖.
+            kind = ("auth" if any(p in low for p in _MCP_AUTH) else
+                    "down" if any(p in low for p in _MCP_DOWN) else "")
+            state = kind or (state if state and state != "ok" else "err")
+        elif any(p in msg for p in _MCP_OK):
+            state = "ok"
+    return state
+
+
+def _mcp_scan(cwd: str, sid: str):
+    """({log-dir: state}, session-start-epoch) for the servers THIS session talked to."""
+    root = os.path.join(_MCP_LOGS, re.sub(r"[^A-Za-z0-9]", "-", cwd or ""))
+    try:
+        dirs = [e.path for e in os.scandir(root) if e.name.startswith("mcp-logs-")]
+    except OSError:
+        return {}, 0.0
+    newest = {}
+    for d in dirs:
+        try:
+            fs = [(e.stat().st_mtime, e.path) for e in os.scandir(d)
+                  if e.name.endswith(".jsonl")]
+        except OSError:
+            continue
+        if fs:
+            newest[d] = sorted(fs, reverse=True)[:4]
+    # Every server in one session writes to a file named for that session's start, so
+    # identify that ONE basename and then match the rest by name instead of reading
+    # ~60 logs. Probe by distinct basename (= one read per candidate session), because
+    # a busy repo with several panes open has other sessions' files on top.
+    base, tried = "", set()
+    for _, p in sorted((f for fs in newest.values() for f in fs), reverse=True):
+        b = os.path.basename(p)
+        if b in tried:
+            continue
+        tried.add(b)
+        if _mcp_sid(p) == sid:
+            base = b
+            break
+        if len(tried) >= _MCP_PROBE:
+            break
+    if not base:
+        return {}, 0.0        # this session has no MCP logs at all → say nothing
+    seen = {}
+    for d, fs in newest.items():
+        hit = os.path.join(d, base)
+        if not os.path.exists(hit):        # a server that joined late has its own file
+            hit = next((p for _, p in fs if _mcp_sid(p) == sid), "")
+        v = _mcp_verdict(hit) if hit else ""
+        if v:
+            seen[os.path.basename(d)] = v
+    return seen, _mcp_epoch(base)
+
+
+def _mcp_report(cwd: str, sid: str):
+    """[(label, state)] for every MCP server of this session, worst first."""
+    seen, started = _mcp_scan(cwd, sid)
+    if not seen:
+        return []
+    labels, expected, fresh = _mcp_configured(cwd, started)
+    # "configured but absent" is only reportable when we can see MOST of the session.
+    # A repo with several panes open can bury this session's logs under newer ones,
+    # leaving us a partial view — and a partial view must never be published as
+    # "these servers are missing". Under that bar we report only what we did see.
+    if expected and len(expected & set(seen)) * 3 >= len(expected) * 2:
+        for d in expected - set(seen):
+            seen[d] = "new" if d in fresh else "?"
+    def label(d):
+        return labels.get(d) or _mcp_label(d)
+    rank = {"auth": 0, "down": 0, "err": 0, "?": 1, "new": 2, "ok": 3}
+    return sorted(((label(d), s) for d, s in seen.items()),
+                  key=lambda x: (rank.get(x[1], 0), x[0]))
+
+
+def _mcp_seg(cwd: str, sid: str):
+    """(segment, is_alarm). Quiet dim `🔌17✓` when every server answered; a bold red
+    `🔌⚠1/17 🔑gitlab` naming the casualties when one didn't. The alarm also MOVES to
+    the front of the line (see main) — a broken MCP must not be the thing that gets
+    truncated off the right edge of a narrow pane."""
+    rep = _mcp_report(cwd, sid)
+    if not rep:
+        return "", False
+    bad = [(n, s) for n, s in rep if s in ("auth", "down", "err")]
+    soft = [(n, s) for n, s in rep if s in ("?", "new")]
+    n = len(rep)
+    if bad:
+        names = " ".join(f"{_MCP_GLYPH[s]}{nm}" for nm, s in bad[:3])
+        more = f"+{len(bad) - 3}" if len(bad) > 3 else ""
+        seg = f"{_RED}{_BLD}🔌⚠{len(bad)}/{n}{_RST} {_RED}{names}{more}{_RST}"
+    else:
+        seg = f"{_DIM}🔌{n}{_RST}{_GRN}✓{_RST}"
+    if soft:
+        names = " ".join(f"{_MCP_GLYPH[s]}{nm}" for nm, s in soft[:2])
+        more = f"+{len(soft) - 2}" if len(soft) > 2 else ""
+        seg += f" {_YEL}{names}{more}{_RST}"
+    return seg, bool(bad)      # only a real failure earns the front of the line
+
+
+def _mcp_dump(argv: list) -> int:
+    """`cccc-statusline.py --mcp [cwd] [session]` — the per-server table behind the
+    segment, for when the badge says something is down and you want to know what."""
+    cwd = argv[0] if argv else os.getcwd()
+    sid = argv[1] if len(argv) > 1 else ""
+    if not sid:            # no session given → report the most recent one in this cwd
+        root = os.path.join(_MCP_LOGS, re.sub(r"[^A-Za-z0-9]", "-", cwd))
+        try:
+            files = sorted((e2.stat().st_mtime, e2.path)
+                           for e in os.scandir(root) if e.name.startswith("mcp-logs-")
+                           for e2 in os.scandir(e.path) if e2.name.endswith(".jsonl"))
+        except OSError:
+            files = []
+        sid = _mcp_sid(files[-1][1]) if files else ""
+    seg, _ = _mcp_seg(cwd, sid)
+    print(f"{cwd}  session {sid or '?'}\n{seg or '(no MCP logs for this session)'}\n")
+    for name, state in _mcp_report(cwd, sid):
+        print(f"  {_MCP_GLYPH.get(state, '✓')} {name:<28} {state}")
+    return 0
 
 
 def _short_cwd(cwd: str) -> str:
@@ -1046,6 +1345,8 @@ def main() -> int:
     if "--anthropic-refresh" in sys.argv:   # background: cache the proxy's sticky account + headroom
         _anthropic_refresh()
         return 0
+    if "--mcp" in sys.argv:         # human: the per-server table behind the 🔌 badge
+        return _mcp_dump(sys.argv[sys.argv.index("--mcp") + 1:])
     if "--issue-refresh" in sys.argv:       # background: cache linked-issue OPEN/CLOSED via `gh`
         i = sys.argv.index("--issue-refresh")
         _issue_state_resolve(sys.argv[i + 1] if len(sys.argv) > i + 1 else "",
@@ -1094,6 +1395,12 @@ def main() -> int:
     lsp = _lsp_seg(cwd)
     if lsp:
         line1.append(lsp)
+    # MCP health. Quiet ✓ lives with the other tooling at the end of the line; the
+    # moment a server is actually broken the badge jumps to slot 2, right behind the
+    # host chip, so it survives a narrow pane. The position IS part of the signal.
+    mcp, mcp_alarm = _mcp_seg(cwd, d.get("session_id") or "")
+    if mcp:
+        line1.insert(1, mcp) if mcp_alarm else line1.append(mcp)
 
     # Account cluster: WHO + HOW-HOT as one unit. The account NAME is coloured by its
     # hottest window (green healthy → red nearly dead), so the name itself is the alarm,

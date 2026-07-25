@@ -34,6 +34,32 @@ sh cccc/install.sh      # puts cccc + cccp/cccd/cccr/cccs on ~/.local/bin, wires
 The cmux Dock (`cmuxdock`/`cccl`) installs separately from the `devdashco/claudectl`
 repo.
 
+## Statusline — the 🔌 MCP badge
+
+A dead MCP server is otherwise **invisible**: `claude` prints "failed to connect"
+once at startup, it scrolls away, and after that the tool is just absent — you find
+out when a tool call fails. So the statusline keeps it on screen:
+
+```
+🔌17✓            dim — all 17 servers of this session answered
+🔌⚠1/17 🔑gitlab  BOLD RED, and it moves to the FRONT of line 1 so a narrow
+                 pane can truncate anything except the alarm
+🔌16✓ ⟳autonoma   yellow — enabled but installed after this session started
+```
+
+`🔑` the server answered and said no (401 / revoked token) · `💀` it never answered
+(refused / DNS / TLS / timeout) · `✖` failed some other way · `⟳` needs a restart to
+load · `?` enabled and configured, yet never showed up at all.
+
+Truth is Claude Code's own per-server logs (`~/.cache/claude-cli-nodejs/<cwd>/
+mcp-logs-*/`) filtered to **this session id**, so the badge says exactly what `/mcp`
+says — nothing is probed or inferred. A healthy http server is noisy (its SSE stream
+idles out and re-dials every few minutes), so only a *decisive* failure moves the
+verdict; retries, drops and clean exits do not. "Configured but absent" is reported
+only when most of the expected set was found — a partial view is never published as
+"these are missing". `cccc-statusline.py --mcp [cwd] [session]` prints the table
+behind the badge.
+
 ## Accounts / limits (read before touching limit logic)
 
 Max accounts have a **5-hour** burst limit AND a **7-day** weekly limit; the 7-day is
