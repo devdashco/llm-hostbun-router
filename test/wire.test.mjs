@@ -116,6 +116,17 @@ routes.push(
   ["GET  /api/state", () => adminGet("/api/state")],
   ["GET  /api/health", () => adminGet("/api/health")],
   ["GET  /api/calls?limit=1", () => adminGet("/api/calls?limit=1")],
+  // The rest of the call log (src/calllog.js). What these three actually prove is the DISPATCH
+  // WIRING: that each `CL.x` the handler names really exists and is callable. Typo one and this
+  // goes red on a TypeError. Verified by doing exactly that.
+  //
+  // They prove little about the handler BODIES, and it would be easy to read them as if they did:
+  // with no DB every one returns at its own `dbUp()` guard, the first line in each. Deleting
+  // `dbRow` from calllog.js's imports leaves all three green here — `test/imports.test.mjs` is what
+  // catches that, and did. Anything past the guard is only covered against a real database.
+  ["GET  /api/calls/facets", () => adminGet("/api/calls/facets")],
+  ["GET  /api/call?id=1", () => adminGet("/api/call?id=1")],
+  ["GET  /api/export?limit=1", () => adminGet("/api/export?limit=1")],
   ["GET  /api/stats", () => adminGet("/api/stats")],
   // The other two consumption rollups. They moved to src/analytics.js with stats, but only stats was
   // driven here — so an identifier left unbound in either one (the whole reason this file exists)
