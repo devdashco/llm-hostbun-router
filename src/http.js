@@ -220,10 +220,30 @@ async function proxy(req, res, base, opts = {}) {
       }
     }).catch(() => {});
   }
+  // Which calls are worth a call-log row. Declared HERE, above the image-error branch, because that
+  // branch returns early and needs it — see below.
+  // Only chat/responses/completions calls carry content worth recording; for those we tee the
+  // body (capped) to pull tokens + reply. /v1/models etc. are skipped to keep the log signal high.
+  // Image generation is billed in GPU time, not tokens, so it carries no `usage` — but an unlogged
+  // call is an unattributable one, and `imagegen` went 100% invisible in the call log until 2026-07-09.
+  const recordThis = CFG.logging.enabled && req.method === "POST" && /\/(chat\/completions|responses|completions|messages|chat|images\/(generations|edits|variations))$/.test(base_rec.path);
+
   // Image provider: upstream errors arrive as bare text; convert to OpenAI JSON error envelope.
+  //
+  // This branch returns early, and it used to return without recording anything — so an image call
+  // that FAILED upstream left no row, while the same call succeeding did. Half of "imagegen went
+  // 100% invisible" quietly came back, in the half that matters most. The asymmetry was invisible
+  // because a fetch that THROWS (connection refused) is handled further up and does record: on
+  // 2026-07-26 the log's newest image rows were 502s from two days earlier, while the router was
+  // emitting `upstream=504 provider=images` continuously — the 504s went nowhere, so the log read
+  // as "no image traffic" rather than "image traffic failing".
   if (curProvider === "images" && up.status >= 400) {
     const errText = await up.text().catch(() => "");
     const msg = errText.trim() || `image generation failed (${up.status})`;
+    if (recordThis) {
+      recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0,
+        usage: null, respContent: null, stopReason: null, error: `upstream ${up.status}: ${clip(msg)}` });
+    }
     res.writeHead(up.status, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: msg, type: "upstream_error", param: null } }));
   }
@@ -236,11 +256,6 @@ async function proxy(req, res, base, opts = {}) {
   if (up.status === 429) note429(base_rec.project);
   else if (up.status < 400) { note2xx(base_rec.project); if (provider === "claudecode" && opts.account) clearAcctCooldown(opts.account); }
   const isStream = (up.headers.get("content-type") || "").includes("text/event-stream");
-  // Only chat/responses/completions calls carry content worth recording; for those we tee the
-  // body (capped) to pull tokens + reply. /v1/models etc. are skipped to keep the log signal high.
-  // Image generation is billed in GPU time, not tokens, so it carries no `usage` — but an unlogged
-  // call is an unattributable one, and `imagegen` went 100% invisible in the call log until 2026-07-09.
-  const recordThis = CFG.logging.enabled && req.method === "POST" && /\/(chat\/completions|responses|completions|messages|chat|images\/(generations|edits|variations))$/.test(base_rec.path);
 
   // ── translated responses (OpenAI caller, claudecode provider) ──
   // The upstream spoke Anthropic; the caller expects OpenAI. Rewrite the body, and DON'T forward

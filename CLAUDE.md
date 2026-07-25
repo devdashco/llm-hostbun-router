@@ -65,9 +65,9 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (124 checks, ~25s)
+## Tests — `npm test` (219 checks, ~25s)
 
-Six suites, no network, no database, zero deps. Run before every push.
+Seven suites, no network beyond loopback, no database, zero deps. Run before every push.
 
 - `test/imports.test.mjs` — static check that every cross-module call is actually bound in the file
   making it. The `src/` split left twelve module-level identifiers unimported; `require` doesn't
@@ -89,6 +89,14 @@ Six suites, no network, no database, zero deps. Run before every push.
   mismatch is silent. Fails on a nav slug missing from `UI_ROUTES` (hard-refresh 404), a legacy
   redirect pointing at a dead page/tab or missing its `ALIAS` entry (the bookmark it exists for
   lands nowhere), a redirect chain, and a nav label that doesn't match its landing tab and heading.
+
+- `test/proxy-log.test.mjs` — `proxy()`'s EARLY-RETURN branches still write a call-log row. Stubs
+  `recordCall` on the db module *before* requiring `http.js` (it destructures at require time, so a
+  later patch is captured too late) and drives a real 504 off a loopback upstream. A row is how a
+  call becomes attributable; every path that answers the caller and `return`s is a chance to drop one
+  silently. The image-error branch did: a successful image call was logged and a failed one was not,
+  so during the 2026-07-26 ingress outage the log read "no image traffic" instead of "image traffic
+  failing" — while a *refused* connection, handled higher up, recorded normally and hid the gap.
 
 Two more are **not** in `npm test` because they need `panel/out` or the docs build:
 
