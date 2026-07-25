@@ -351,7 +351,9 @@ then **verify — never stop at `git push`**: wait for
 real request. The headroom sidecar is app `i7pfies89s3maf390ye3rllk`. Both live in Coolify project
 `llm-hostbun-router`, alongside the `llm-proxy-archive` service (uuid `ysjpmznhdq1auwk9f3lqv8hk`).
 **That archive service is now orphaned** — `ops/nas-shipper/`, the only thing that fed it, was deleted
-(2026-07-09). Stop or delete the service; `GET /admin/api/export` is left in place but has no caller.
+(2026-07-09). Stop or delete the service. **`GET /api/export` is NOT dead** — despite what this line
+used to say. `archive/archiver.js:78` is its caller and always has been; a dead-code sweep that
+believed "no caller" would have deleted the only way the NAS archive reads the log.
 
 `Dockerfile` copies **`src/` as a directory** but every top-level file individually. A new module
 under `src/` therefore ships for free; **a new `require`d file at the repo root still needs its own
@@ -379,9 +381,19 @@ MinIO `archive` bucket, gzipped and partitioned `llmrouter/calls/dt=<day>/consum
 with a resume cursor at `llmrouter/_state.json`. Postgres is the *operational* log — it prunes
 non-claudecode rows to `retain` and sits on one un-backed-up volume; the NAS is where the knowledge
 actually persists. Zero-dep (stdlib SigV4 in `archive/s3.js`), reads the router's own `/api/export`,
-so no DB access. Runs hourly as a **Coolify scheduled task** on `scriptbox-pbox` (not a crontab —
-control-plane policy), against the LAN MinIO endpoint, beacon-monitored as `llm-hostbun-archive`.
-Backfilled all ~120k rows 2026-07-12. See `archive/README.md`.
+so no DB access. It is *meant* to run hourly as a **Coolify scheduled task** on `scriptbox-pbox` (not
+a crontab — control-plane policy), against the LAN MinIO endpoint, beacon-monitored as
+`llm-hostbun-archive`.
+
+> **⚠ IT IS NOT RUNNING, and has not since the 2026-07-12 backfill. Verified 2026-07-26.** The cursor
+> at `llmrouter/_state.json` still reads `updatedAt 2026-07-12T17:17:59Z, rows 123035`, while `calls`
+> holds **481,520** rows from 2026-07-06 on — so **~358k rows, 74% of the log and every one of the
+> last 14 days, exist only on the app's single un-backed-up volume.** Nothing schedules it: it is
+> absent from scriptbox-pbox's 17 Coolify tasks, from `crontab -l`, and from `systemctl list-timers`.
+> Nothing has been LOST yet — pruning only touches non-claudecode rows above `retain` (50,000) and
+> there are ~31k of those — but that margin is finite, and claudecode rows are exempt from pruning
+> only, not from losing the volume. Re-create the scheduled task (`archive/run.sh`, `17 * * * *`) to
+> restore it; the config it needs is in keyvault at `llm-archive/config`.
 
 ## Gotchas that will cost you a day
 

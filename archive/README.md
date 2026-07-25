@@ -51,11 +51,18 @@ env-file fallback), finds the host's nvm `node` (the runner container has none o
 fast-forward-updates the repo, holds a `flock` so an overlapping tick is a no-op, then runs the
 archiver (which reports to the beacon control plane itself).
 
-Scheduled as a **Coolify scheduled task** on the `scriptbox-pbox` app (`s18pl11n8t4v8i4jshsy39rg`),
-`17 * * * *` — **not** a local crontab (control-plane policy: every job is a Coolify task, visible in
-the scriptbox TUI + beacon). The runner has `network_mode: host`, so it reaches the LAN MinIO
-(`192.168.0.7:9100`) directly. Registered in the beacon as `llm-hostbun-archive`
-(alerts on fail/overdue).
+> **⚠ NOT CURRENTLY SCHEDULED — verified 2026-07-26.** The task described below does not exist on
+> `scriptbox-pbox` (17 tasks listed, none of them this one), nor in `crontab -l`, nor as a systemd
+> timer. The cursor at `llmrouter/_state.json` has read `updatedAt 2026-07-12T17:17:59Z, rows 123035`
+> ever since the backfill, while the router's `calls` table is at 481,520 rows — roughly **358k rows
+> unarchived**. Re-create the task as described to restore hourly archiving.
+
+Meant to be scheduled as a **Coolify scheduled task** on the `scriptbox-pbox` app
+(`s18pl11n8t4v8i4jshsy39rg`), `17 * * * *` — **not** a local crontab (control-plane policy: every job
+is a Coolify task, visible in the scriptbox TUI + beacon). The runner has `network_mode: host`, so it
+reaches the LAN MinIO (`192.168.0.7:9100`) directly. Registered in the beacon as
+`llm-hostbun-archive` (alerts on fail/overdue) — which, with the task absent, has nothing to alert on:
+a missing job cannot report itself overdue, which is why this went unnoticed for two weeks.
 
 ### Env
 
