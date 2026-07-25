@@ -250,14 +250,31 @@ that would start failing (`keyless` in the `consumers` payload).
 
 ## Translation
 
-`translate.js` — pure functions, no I/O, so it is unit-testable in isolation. It handles seven traps
-that each silently corrupt output if skipped: Anthropic *requires* `max_tokens`; there is no system
-turn (hoist it); OpenAI emits one `tool` message per result but Anthropic wants them batched into a
-single user turn; `input_json_delta` streams partial JSON (forward verbatim, never parse mid-stream);
-`thinking_delta` must not leak into OpenAI `content`; a tool-only turn still needs
+`translate.js` — pure functions, no I/O, so it is unit-testable in isolation. It handles eight traps
+that each silently corrupt output or cost if skipped: Anthropic *requires* `max_tokens`; there is no
+system turn (hoist it); OpenAI emits one `tool` message per result but Anthropic wants them batched
+into a single user turn; `input_json_delta` streams partial JSON (forward verbatim, never parse
+mid-stream); `thinking_delta` must not leak into OpenAI `content`; a tool-only turn still needs
 `finish_reason: "tool_calls"`; cache tokens have no OpenAI home but cost accounting needs them.
 
-Run `node translate.test.js` before touching it. 14 tests, no deps.
+**Trap #8 — nothing on this path was cached until 2026-07-25.** Anthropic only caches a prefix you
+mark with `cache_control`. Native `/v1/messages` callers (real Claude Code) mark their own, which is
+why `pmac`/`pbox` run ~95% cache hits; anything translated from OpenAI marked **nothing**, so it paid
+full price for its whole prompt every time. It stayed invisible until an agent loop arrived:
+`autonoma` re-sent a 227-message / 86k-token transcript for a 42-token reply, ~113 times per verdict,
+at `cache_read=0` — **1.53B uncached input tokens in 7 days**, ~150× every dev box combined, which
+drained the Max pool to 4-of-7 accounts rejecting. `markCacheBreakpoints()` marks the **tail** of each
+prefix section (Anthropic hashes tools → system → messages, and a breakpoint caches everything up to
+itself, so tail-marking chains them), plus two rolling breakpoints on the conversation tail — this
+request's tail is the next one's stable prefix. Live traffic went 0% → **96–99%** cache hits.
+Guards, each of which was a way to make it worse: a caller's own `cache_control` means hands off
+entirely (their breakpoint is a deliberate choice, and a 5th is a 400); under ~8 KB skip it
+(below Anthropic's floor it won't cache anyway and the write bills 1.25×); under 3 messages mark
+tools/system but not a tail that will never be re-sent; and the 4-breakpoint budget is enforced by a
+counter, not by hoping. **Do not add a breakpoint to the native path** — it never reaches this
+function, and invariant 5 says that body is forwarded byte-for-byte.
+
+Run `node translate.test.js` before touching it. 20 tests, no deps.
 
 ## Deploy
 
