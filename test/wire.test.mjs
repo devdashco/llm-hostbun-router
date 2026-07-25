@@ -117,6 +117,11 @@ routes.push(
   ["GET  /api/health", () => adminGet("/api/health")],
   ["GET  /api/calls?limit=1", () => adminGet("/api/calls?limit=1")],
   ["GET  /api/stats", () => adminGet("/api/stats")],
+  // The other two consumption rollups. They moved to src/analytics.js with stats, but only stats was
+  // driven here — so an identifier left unbound in either one (the whole reason this file exists)
+  // would have shipped. Both take a query string, which is the half of the route that throws late.
+  ["GET  /api/usage?win=1h", () => adminGet("/api/usage?win=1h")],
+  ["GET  /api/series?window=1h&by=consumer", () => adminGet("/api/series?window=1h&by=consumer")],
   ["GET  /api/consumers", () => adminGet("/api/consumers")],
   ["GET  /api/developers", () => adminGet("/api/developers")],
   // The registry's read surface. Without a DB these answer 503, not 500 or a hang — a caller must be

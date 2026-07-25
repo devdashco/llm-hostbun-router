@@ -20,6 +20,7 @@ refs may still linger in sibling repos.
   | `db.js` | Postgres call log + harvested account headroom |
   | `claudecode.js` | Anthropic model catalog, per-account live usage-limit refresh |
   | `admin.js` | the control-plane API behind the password cookie |
+  | `analytics.js` | the three read-only consumption rollups — `/api/stats`, `/api/usage`, `/api/series` |
   | `telemetry.js` | call-log row shaping, HyperDX error shipping |
   | `pricing.js` | USD estimates (crazyrouter only) |
 - **`CFG` is mutated in place, never reassigned** (`setCFG()`). Every module holds the same reference;
@@ -317,8 +318,9 @@ real request. The headroom sidecar is app `i7pfies89s3maf390ye3rllk`. Both live 
 **That archive service is now orphaned** — `ops/nas-shipper/`, the only thing that fed it, was deleted
 (2026-07-09). Stop or delete the service; `GET /admin/api/export` is left in place but has no caller.
 
-`Dockerfile` copies files individually. **If you add a new `require`d file, add a `COPY` line** or
-the container crash-loops on boot.
+`Dockerfile` copies **`src/` as a directory** but every top-level file individually. A new module
+under `src/` therefore ships for free; **a new `require`d file at the repo root still needs its own
+`COPY` line** or the container crash-loops on boot.
 
 ## Storage
 
