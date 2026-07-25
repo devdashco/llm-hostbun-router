@@ -17,6 +17,9 @@ control API over the internet.
 |---|---|
 | `router429:<app>` | an app is back-pressured for drawing real upstream 429s (`GET /api/state` → `throttles[]`; devs never appear) |
 | `ratelimit:<account>` | a claudecode account's usage window is spent / OAuth-disabled, or its 5h/7d gauge ≥ `RL_PCT`% (`GET /api/accounts` → `limits`) |
+| `pool-headroom` | ≤ `POOL_MIN` logins can still serve — the whole pool is about to go dark, which is what 403s every app |
+| `cachemiss:<project>` | a project's 1h cache-hit ratio fell below `CACHE_MIN_PCT`, on prompts big enough to be cacheable (`GET /api/stats?window=1h`) |
+| `burn:<project>` | a project is spending > `BURN_1H` **billable** (uncached) tokens/hour |
 | `gpu:<n>` | pbox GPU memory ≥ `GPU_PCT`% of total |
 | `restart:<c>` / `image-running:<c>` / `oom` | a container is restart-looping, the image model (sd-turbo) is running when it should be stopped, or a kernel OOM kill happened in the last `OOM_WINDOW_MIN` min |
 
@@ -24,9 +27,12 @@ control API over the internet.
 
 **Edge-triggered.** An alert fires when a condition first appears, a short *cleared* note when it
 goes away, and a *reminder* re-send every `REMIND_MIN` minutes while it stays hot. Dedup state is
-in `STATE_FILE`. Telegram goes to Philip's DM first, falling back to the devdash channel
-(`@ddbofridemailBot` can't DM until Philip presses **Start** on it). Email is AWS SES (SigV4,
-same stdlib pattern as `archive/s3.js`).
+in `STATE_FILE`. Telegram now targets the **devdash channel directly**: the DM (`7803034119`) returned
+`HTTP 400` on every run since install because Philip never pressed **Start** on `@ddbofridemailBot`, so
+every page was already arriving via the fallback — the "primary" was dead weight that logged an error
+each run. Point `TG_CHAT` back at the DM once that Start is pressed. Email is SES and is currently
+**off** (no `AWS_ACCESS_KEY_ID` in the env), so Telegram is the only live channel. SES is SigV4 over
+the stdlib, the same pattern as `archive/s3.js`.
 
 ## Deploy / operate (on pbox)
 

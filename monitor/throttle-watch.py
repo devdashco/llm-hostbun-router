@@ -13,6 +13,11 @@ Watched conditions
               (GET /api/state -> throttles[]; devs never appear there)
   ratelimit   a claudecode account's usage window is spent / OAuth-disabled, or
               a 5h/7d gauge is >= RL_PCT% (GET /api/accounts -> limits)
+  pool        <= POOL_MIN logins can still serve — the whole pool is going dark,
+              which is what 403s every app (GET /api/accounts)
+  cachemiss   a project's 1h cache-hit ratio collapsed below CACHE_MIN_PCT on
+              prompts big enough to be cacheable (GET /api/stats?window=1h)
+  burn        a project is spending > BURN_1H billable (uncached) tokens/hour
   gpu         pbox GPU memory >= GPU_PCT% of total
   container   a container is restart-looping, was OOM-killed, or the image model
               (sd-turbo) is running when it should be stopped
@@ -55,6 +60,16 @@ GPU_PCT      = float(os.environ.get("GPU_PCT", "90"))
 # not a throttle. Only a real router429 back-pressure or a genuinely-rejecting account status
 # (spent / OAuth-disabled) is a true LLM throttle. Default: off. Set e.g. RL_PCT=97 to opt back in.
 RL_PCT       = float(os.environ.get("RL_PCT", "101"))
+# Pool headroom: page when this many or fewer logins can still serve. 1 = "you are one 429 from a
+# fleet-wide 403", which is exactly the state that produced the 2026-07-25 outage.
+POOL_MIN     = int(os.environ.get("POOL_MIN", "1"))
+# Cache-hit collapse (see check_usage). Gated on volume + average prompt size so short-prompt apps,
+# which sit below Anthropic's ~8 KB cache floor and can never cache, are not permanent false alarms.
+CACHE_MIN_PCT    = float(os.environ.get("CACHE_MIN_PCT", "50"))
+CACHE_MIN_CALLS  = int(os.environ.get("CACHE_MIN_CALLS", "50"))
+CACHE_MIN_PROMPT = float(os.environ.get("CACHE_MIN_PROMPT", "8000"))
+# Billable (uncached) tokens per hour for one project before it is worth waking someone.
+BURN_1H      = float(os.environ.get("BURN_1H", "20000000"))
 REMIND_MIN   = float(os.environ.get("REMIND_MIN", "60"))
 IMAGE_RE     = re.compile(os.environ.get("IMAGE_CONTAINER_RE", r"sd-turbo|imagegen|diffus"), re.I)
 STATE_FILE   = os.environ.get("STATE_FILE", os.path.expanduser("~/.llm-throttle-watch.state.json"))
@@ -99,15 +114,16 @@ def router_get(path, cookie):
 
 
 def check_router(conds):
+    """Poll the router control API. Returns the admin cookie so later checks reuse one login."""
     try:
         cookie = router_login()
         if not cookie:
             conds["router-auth"] = "throttle-watch: router login returned no cookie"
-            return
+            return None
         state = router_get("/api/state", cookie)
     except Exception as e:
         conds["router-down"] = f"router control API unreachable: {type(e).__name__}: {e}"
-        return
+        return None
 
     # 1) router429 back-pressure — one condition per throttled app
     for t in state.get("throttles") or []:
@@ -137,6 +153,74 @@ def check_router(conds):
             conds[f"ratelimit:{name}"] = f"account '{name}' limit status={status} — 5h={p5:.0f}% 7d={p7:.0f}% (reset5={_clock(lim.get('reset5'))}, reset7={_clock(lim.get('reset7'))})"
         elif p5 >= RL_PCT or p7 >= RL_PCT:
             conds[f"ratelimit:{name}"] = f"account '{name}' usage window high: 5h={p5:.0f}% 7d={p7:.0f}% (reset5={_clock(lim.get('reset5'))}, reset7={_clock(lim.get('reset7'))})"
+
+    # 3) pool headroom — how many logins can actually serve right now. Every per-account condition
+    # above is about ONE login; this is the one that says the whole pool is about to go dark, which is
+    # what actually takes apps down (403 no_account_for_project).
+    pool = acc.get("accounts") or []
+    if pool:
+        def _usable(a):
+            if a.get("disabled") or a.get("dead"):
+                return False
+            lim = a.get("limits")
+            if not lim:
+                return True                      # no reading = presumed available, never assume 0%
+            return str(lim.get("status") or "").lower().startswith("allowed")
+        n_ok = sum(1 for a in pool if _usable(a))
+        if n_ok <= POOL_MIN:
+            names = ", ".join(a.get("name", "?") for a in pool if _usable(a)) or "NONE"
+            conds["pool-headroom"] = (
+                f"claudecode pool down to {n_ok}/{len(pool)} usable account(s) [{names}] "
+                f"— at 0 every app gets 403 no_account_for_project"
+            )
+    return cookie
+
+
+def check_usage(conds, cookie):
+    """Cache-hit collapse and burn rate, per project, over the last hour.
+
+    These are the two LEADING indicators the pool has none of. Every other condition in this file
+    fires on a 429/403 — i.e. after a window is already spent. On 2026-07-25 `autonoma` re-sent an
+    86k-token transcript ~113x per verdict at cache_read=0 for seven days (1.53B uncached input
+    tokens, ~150x every dev box combined) and drained the Max pool to 4-of-7 accounts rejecting.
+    Nothing noticed, because nothing was watching the ratio. The cache-breakpoint fix landed, but a
+    regression (a new OpenAI-path consumer, a caller marking its own cache_control, a prompt under
+    Anthropic's ~8 KB cache floor) would reproduce it just as silently.
+    """
+    if not cookie:
+        return
+    try:
+        st = router_get("/api/stats?window=1h", cookie)
+    except Exception as e:
+        conds["stats-read"] = f"could not read /api/stats: {type(e).__name__}: {e}"
+        return
+    for r in st.get("byProject") or []:
+        proj = r.get("project") or "?"
+        if proj == "(none)":
+            continue
+        n = r.get("n") or 0
+        ptok = r.get("ptok") or 0
+        cr = r.get("cr") or 0
+        billable = max((r.get("tok") or 0) - cr, 0)
+
+        # Cache collapse. Gated on volume AND average prompt size: a short-prompt app (redbut averages
+        # ~200 tokens/call) is BELOW Anthropic's cache floor and will always read 0% — alerting on it
+        # would be permanent noise, not a signal. Only prompts big enough to be cacheable count.
+        if n >= CACHE_MIN_CALLS and ptok / max(n, 1) >= CACHE_MIN_PROMPT:
+            hit = 100.0 * cr / max(ptok, 1)
+            if hit < CACHE_MIN_PCT:
+                conds[f"cachemiss:{proj}"] = (
+                    f"'{proj}' cache hit {hit:.0f}% over 1h ({n} calls, avg prompt "
+                    f"{ptok / max(n, 1) / 1000:.0f}k tok) — expected >={CACHE_MIN_PCT:.0f}%. "
+                    f"Uncached agent loop: {billable / 1e6:.0f}M billable tok/h"
+                )
+
+        # Burn rate: billable (uncached) tokens per hour, the number that actually spends the window.
+        if billable >= BURN_1H:
+            conds[f"burn:{proj}"] = (
+                f"'{proj}' burning {billable / 1e6:.0f}M billable tok/h "
+                f"(>{BURN_1H / 1e6:.0f}M), {n} calls — this is what drains the 5h/7d windows"
+            )
 
 
 # ── pbox host checks ──────────────────────────────────────────────────────
@@ -307,7 +391,8 @@ def save_state(s):
 
 def main():
     conds = {}
-    check_router(conds)
+    cookie = check_router(conds)
+    check_usage(conds, cookie)
     # Host checks (GPU / container crash-loops / OOM) are OPT-IN and OFF by default — this watcher
     # is about the LLM router, not pbox housekeeping. Set WATCH_HOST=1 to re-enable them.
     if os.environ.get("WATCH_HOST") == "1":
