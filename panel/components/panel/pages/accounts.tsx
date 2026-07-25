@@ -15,7 +15,7 @@ import { nfmt, ago } from "@/lib/format";
 
 // Account mapping (projectAccounts) — one project → one account, forever. Single-pin merge via
 // POST /api/pins (never the whole map). Ported from accounts.js Pins.
-export function Pins() {
+export function ProjectPins() {
   const { state, reload } = useApp();
   const pins: Record<string, string> = state.projectAccounts || state.consumerAccounts || {};
   const accounts: string[] = (state.claudecodeAccountPool || []).map((a: any) => a.name);
@@ -303,7 +303,7 @@ export function Accounts() {
           </div>
         </div>
       ) : null}
-      <Pins />
+      <ProjectPins />
       <Card>
         <CardHeader>
           <CardTitle>Pool</CardTitle>

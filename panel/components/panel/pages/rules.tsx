@@ -298,7 +298,7 @@ function LimRow({
 
 const DEFAULT_LIMIT = { window: "24h", tokens: 0, calls: 0, warnPct: 80, slowPct: 95, slowMs: 1500, hard: "block" };
 
-export function RoutingRules() {
+export function Rules() {
   const { state, reload } = useApp() as any;
   const [d, setD] = useState<any>(() => seed(state));
   const [known, setKnown] = useState<string[]>([]);

@@ -1,6 +1,6 @@
 "use client";
 import { Tabbed } from "@/components/panel/tabbed";
-import { RoutingRules } from "@/components/panel/pages/routing";
+import { Rules } from "@/components/panel/pages/rules";
 import { Models } from "@/components/panel/pages/models";
 
 export default function RoutingPage() {
@@ -8,7 +8,7 @@ export default function RoutingPage() {
     <Tabbed
       def="rules"
       items={[
-        ["rules", "Rules", RoutingRules],
+        ["rules", "Rules", Rules],
         ["models", "Models", Models],
       ]}
     />

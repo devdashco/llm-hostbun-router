@@ -23,7 +23,7 @@ const EMPTY_FILTERS: any = {
   stream: "", thinking: "", tools: "", cached: "", minTok: "", minMs: "", win: "",
 };
 
-export function Calls() {
+export function CallLog() {
   const { state, openCall, reload } = useApp();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);

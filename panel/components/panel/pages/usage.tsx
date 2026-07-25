@@ -175,7 +175,7 @@ function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any) {
   );
 }
 
-export function Stats() {
+export function Usage() {
   const { gotoCalls } = useApp() as any;
   const [win, setWin] = useState("24h");
   const [s, setS] = useState<any>(null);

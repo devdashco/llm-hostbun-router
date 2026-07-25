@@ -1,15 +1,15 @@
 "use client";
 import { Tabbed } from "@/components/panel/tabbed";
-import { Overview } from "@/components/panel/pages/overview";
-import { Stats } from "@/components/panel/pages/stats";
+import { Health } from "@/components/panel/pages/health";
+import { Usage } from "@/components/panel/pages/usage";
 
 export default function OverviewPage() {
   return (
     <Tabbed
       def="health"
       items={[
-        ["health", "Health", Overview],
-        ["usage", "Usage", Stats],
+        ["health", "Health", Health],
+        ["usage", "Usage", Usage],
       ]}
     />
   );

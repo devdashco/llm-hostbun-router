@@ -133,7 +133,7 @@ function Pool({ d }: { d: any }) {
   );
 }
 
-export function Overview() {
+export function Health() {
   const { state, openCall } = useApp();
   const [health, setHealth] = useState<any>(null);
   const [st1h, setSt1h] = useState<any>(null);

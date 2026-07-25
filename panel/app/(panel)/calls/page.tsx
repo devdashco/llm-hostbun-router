@@ -1,6 +1,6 @@
 "use client";
-import { Calls } from "@/components/panel/pages/calls";
+import { CallLog } from "@/components/panel/pages/call-log";
 
 export default function CallsPage() {
-  return <Calls />;
+  return <CallLog />;
 }
