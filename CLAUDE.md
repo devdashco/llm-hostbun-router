@@ -278,6 +278,19 @@ Run `node translate.test.js` before touching it. 20 tests, no deps.
 
 ## Deploy
 
+**Coolify builds from GitLab, and this repo has TWO remotes.** `origin` =
+`gitlab.hostbun.cc/devdashco/llm-hostbun-router` (what Coolify clones — the deploy log says
+`Importing ssh://…gitlab.hostbun.cc:2224/…`); `github` = github.com, a mirror **nothing deploys from**.
+`git push github master` therefore looks completely successful, Coolify happily builds, and you get a
+container running the *previous* commit — verified the hard way on 2026-07-25, where a full 13-minute
+build shipped an image whose `src/routing.js` still had the old code. **Push to `origin`.** Confirm
+what actually shipped rather than trusting "deploy finished": the deployment's `commit` field, or
+`docker exec <container> grep <a string from your diff> /app/src/<file>.js`. The baked-in push token
+in `remote.origin.pushurl` (`claude-mcp-scoped`) was **revoked 2026-07-25** and now 401s — the live
+per-machine credential is keyvault `gitlab/pbox` (user `philip-pbox`, scopes api+write_repository).
+A push to `origin` also fires Coolify's auto-deploy webhook, so a manual `?uuid=…&force=true` right
+after just queues a second, redundant build of the same commit behind the first.
+
 Pushing does **not** reliably auto-build — the app's `watch_paths` lists `server.js`, `Dockerfile`,
 `entrypoint.sh`, `gen-prices.sh`, `README.md`, `panel/**`, `docs/**`, and **not `translate.js`**, so a
 push that only touches the translator is silently ignored. Trigger the Coolify deploy for app uuid
