@@ -22,8 +22,8 @@ const { CFG, setCFG, persistConfig, mergeConfig, envDefaults, loadConfig, reinde
 const DB = require("./db");
 const { dbUp, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
 const { unpricedModels } = require("./pricing");
-const { mintKey, sha256 } = require("./identity");
-const { resolveRoute, accountFor, autoAccount, acctHealth, isGated, localTarget, throttleSnapshot } = require("./routing");
+const { sha256 } = require("./identity");
+const { resolveRoute, accountFor, autoAccount, acctHealth, isGated, throttleSnapshot } = require("./routing");
 const { readBody, sendJson, mask, buildHeaders } = require("./http");
 const CC = require("./claudecode");
 const { refreshClaudecodeModels, refreshAccountLimits, upstreamCatalogs, localModelEntries } = CC;
