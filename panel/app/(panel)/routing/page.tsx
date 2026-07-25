@@ -9,7 +9,7 @@ export default function RoutingPage() {
       def="rules"
       items={[
         ["rules", "Rules", RoutingRules],
-        ["models", "Models & test", Models],
+        ["models", "Models", Models],
       ]}
     />
   );

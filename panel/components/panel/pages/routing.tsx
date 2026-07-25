@@ -402,7 +402,7 @@ export function RoutingRules() {
   return (
     <div className="space-y-4.5">
       <PageHead
-        title="Routing"
+        title="Rules"
         desc="Where a request goes, and what it is allowed to reach. A per-project rule (exact path, then consumer) beats the defaults."
       />
       <Card className="border-p-crazyrouter/40">

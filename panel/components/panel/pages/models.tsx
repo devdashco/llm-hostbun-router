@@ -180,7 +180,7 @@ export function Models() {
   };
   return (
     <div className="space-y-4.5">
-      <PageHead title="Models & test" desc="What each provider advertises, and what the pinned subscription will actually serve." />
+      <PageHead title="Models" desc="What each provider advertises, and what the pinned subscription will actually serve." />
       <ClaudeCatalog />
       <Card>
         <CardHeader>

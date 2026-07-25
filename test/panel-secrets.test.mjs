@@ -51,7 +51,10 @@ walk(OUT);
 if (!process.exitCode) ok("no admin password, setup token, API key or DSN in the built panel bundle");
 
 // Sanity: the export actually built the panel (index + the routes we expect).
-for (const slug of ["", "overview", "calls", "routing", "identity", "settings"]) {
+for (const slug of ["", "overview", "calls", "routing", "consumers", "providers",
+  // Legacy slugs must keep exporting too — they carry the client-side redirect, and a bookmark on
+  // one of them 404s the moment its `page.tsx` stops being built.
+  "identity", "settings", "accounts", "crazyrouter", "secrets", "stats", "models"]) {
   const f = join(OUT, slug, "index.html");
   if (existsSync(f)) ok(`exported ${slug || "/"} → index.html`);
   else fail(`missing exported route: ${slug || "/"} (${f})`);

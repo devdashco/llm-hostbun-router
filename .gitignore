@@ -11,3 +11,4 @@ headroom-svc/.venv/
 # throttle-watch runtime secrets/state (real env lives only on pbox)
 monitor/throttle-watch.env
 monitor/*.state.json
+.claude/afk-loop.local.md

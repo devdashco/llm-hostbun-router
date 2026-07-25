@@ -129,8 +129,10 @@ console.log("shell routes:");
 if (existsSync(join(ROOT, "panel/out/index.html"))) {
   check("root serves the panel", status("/"), "200");
   check("a UI slug serves the panel", status("/routing"), "200");
-  check("a consolidated slug serves the panel", status("/identity"), "200");
+  check("a consolidated slug serves the panel", status("/consumers"), "200");
+  check("the renamed provider page serves the panel", status("/providers"), "200");
   check("a legacy slug still serves the panel (client-side redirect)", status("/accounts"), "200");
+  check("a renamed-away slug still serves the panel", status("/identity"), "200");
 } else {
   console.log("  skip  panel/out not built — run `npm run build:panel` to exercise shell routes");
 }

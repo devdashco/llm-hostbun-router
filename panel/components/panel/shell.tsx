@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { LayoutGrid, List, Route, Users, Lock, Menu } from "lucide-react";
+import { LayoutGrid, List, Route, Users, Server, Menu } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,12 +12,17 @@ import { ErrorBoundary } from "@/components/panel/error-boundary";
 import { api, setOnUnauth } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-const NAV = [
+// Named for the direction of the wire, because that is what the router actually is: callers come
+// IN (consumers), a rule picks WHERE (routing), an upstream is billed OUT (providers). The old
+// names lied — "Identity" held the outbound Claude Max pool and "Settings" opened on a provider's
+// API key. Each label is repeated verbatim as its landing tab and page heading; three different
+// words for one page is how a nav stops being readable.
+export const NAV = [
   { name: "Overview", slug: "overview", Icon: LayoutGrid },
-  { name: "Calls", slug: "calls", Icon: List },
+  { name: "Call log", slug: "calls", Icon: List },
   { name: "Routing", slug: "routing", Icon: Route },
-  { name: "Identity", slug: "identity", Icon: Users },
-  { name: "Settings", slug: "settings", Icon: Lock },
+  { name: "Consumers", slug: "consumers", Icon: Users },
+  { name: "Providers", slug: "providers", Icon: Server },
 ];
 
 function Sidebar({ active }: { active: string }) {
@@ -93,7 +98,9 @@ function Shell({ active, children }: { active: string; children: React.ReactNode
           <Button variant="outline" size="sm" onClick={() => setSbOpen(!sbOpen)} aria-label="menu">
             <Menu className="size-4" />
           </Button>
-          <h3 className="text-sm font-semibold capitalize">{active}</h3>
+          {/* The nav's own label, not `capitalize` over the slug — that rendered "Call log" as
+              "Calls" and would title-case every word of any two-word name. */}
+          <h3 className="text-sm font-semibold">{NAV.find((n) => n.slug === active)?.name || active}</h3>
         </header>
         <div className="mx-auto w-full max-w-[1200px] px-4 pb-24 pt-5 md:px-7 md:pt-7">
           <ErrorBoundary>{children}</ErrorBoundary>

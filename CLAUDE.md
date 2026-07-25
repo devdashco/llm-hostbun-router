@@ -36,6 +36,14 @@ refs may still linger in sibling repos.
   carve-outs are load-bearing: `/api/v1/*` is real inference (`base_url=…/api`) and `/api/pricing` is
   public — routing either into the cookie-gated handler 401s callers that never had a cookie. Build
   locally: `npm run build:panel`; preview against prod's API: `node panel/scripts/preview.mjs`.
+  **Five pages, named for the direction of the wire** (renamed 2026-07-26): `overview` (Health ·
+  Usage), `calls`, `routing` (Rules · Models), **`consumers`** (Consumers · Access — everything
+  inbound: who may call, and the auth gate) and **`providers`** (Accounts · Crazyrouter — every
+  upstream we spend against). They replace `identity`/`settings`, which filed the outbound Max
+  account pool under "Identity" and a provider's API key under "Settings". **Nav label == landing
+  tab == page heading**, verbatim; three different words for one page is what made the old nav
+  unreadable. Old slugs stay as client-side redirects and stay in `UI_ROUTES` — drop one and a
+  bookmark 404s instead of landing where it used to.
 
 - `docs/` — **docsify** site: `index.html` shell + markdown pages + `_sidebar.md`, docsify vendored in
   `docs/vendor/` (no CDN, `noEmoji: true` because emoji shortcodes fetch images from githubassets).
@@ -406,7 +414,7 @@ Backfilled all ~120k rows 2026-07-12. See `archive/README.md`.
   `POST /admin/api/claudecode/limits {account}` (or `{all:true}`) is the **live** read:
   `refreshAccountLimits()` pings each subscription **once** (`claude-haiku-4-5`, `max_tokens:1`) purely
   to pull fresh headers, feeds them through the same `recordLimits()` the passive harvest uses, and
-  returns `{reading:{u5,u7,reset5,reset7,...}}` — or `null` with a reason. The Accounts tab has a
+  returns `{reading:{u5,u7,reset5,reset7,...}}` — or `null` with a reason. The Accounts tab (under **Providers**) has a
   **"↻ Refresh limits (live)"** button + per-row ↻, and renders `reset5`/`reset7` as clock/date.
 - **A 403 `permission_error` is a dead login, not a spent window.** `"OAuth authentication is
   currently not allowed for this organization"` means the subscription itself is disabled (cancelled

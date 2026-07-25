@@ -92,7 +92,7 @@ function Pool({ d }: { d: any }) {
           {accts.length} subscription{accts.length === 1 ? "" : "s"}, {d.advertisedModels} model ids
         </CardDescription>
         <CardAction>
-          <Button variant="outline" size="sm" onClick={() => go("identity", "accounts")}>
+          <Button variant="outline" size="sm" onClick={() => go("providers", "accounts")}>
             Accounts
           </Button>
         </CardAction>
@@ -110,7 +110,7 @@ function Pool({ d }: { d: any }) {
           </TableHeader>
           <TableBody>
             {accts.map((a: any) => (
-              <TableRow key={a.name} className="cursor-pointer" onClick={() => go("identity", "accounts")}>
+              <TableRow key={a.name} className="cursor-pointer" onClick={() => go("providers", "accounts")}>
                 <TableCell className="font-mono text-ui font-semibold">{a.name}</TableCell>
                 <TableCell className="text-meta text-muted-foreground">{a.projects.length ? a.projects.join(", ") : "— unused"}</TableCell>
                 <TableCell className="min-w-[78px]">
@@ -176,7 +176,7 @@ export function Overview() {
 
   const head = (
     <PageHead
-      title="Overview"
+      title="Health"
       desc="Provider health, the Claude Max pool, and the last hour of traffic."
       actions={
         <Button variant="outline" size="sm" onClick={load}>
