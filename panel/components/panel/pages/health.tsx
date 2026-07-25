@@ -38,10 +38,15 @@ function Issues({ health, st, state, pool }: any) {
   // Premium-model usage: an app (deployed code) running opus/fable on the shared Max pool — ~15x haiku's
   // per-token price and the heaviest drain on the shared 5h/7d windows. Devs on opus are expected; apps are the signal.
   (st?.premiumUsage || []).filter((p: any) => p.kind === "app").forEach((p: any) => {
-    probs.push(["premium", `App "${p.project}" is using ${p.model} (${p.tier}) — ${nfmt(p.calls)} call(s), ~$${(p.list_usd || 0).toFixed(2)} list. Premium model on the shared Max pool.`]);
+    // list_usd is null when the served id has no price in MODEL_COST — NOT zero. `|| 0` here
+    // printed "~$0.00 list" for exactly the models we can't price, which are the newest and
+    // dearest ones; a premium-spend warning that reports the spend as nothing is worse than one
+    // that admits it doesn't know.
+    const cost = p.list_usd == null ? "cost unknown — model has no price defined" : `~$${p.list_usd.toFixed(2)} list`;
+    probs.push(["premium", `App "${p.project}" is using ${p.model} (${p.tier}) — ${nfmt(p.calls)} call(s), ${cost}. Premium model on the shared Max pool.`]);
   });
   if ((state.unpricedModels || []).length)
-    probs.push(["premium", `${state.unpricedModels.length} advertised model(s) have no token cost defined: ${state.unpricedModels.join(", ")}.`]);
+    probs.push(["premium", `${state.unpricedModels.length} advertised model(s) have no token cost defined: ${state.unpricedModels.join(", ")}. Their list cost reads as unknown, not $0.`]);
   if (!probs.length)
     return (
       <div className="mb-4.5 rounded-xl border border-ok/35 bg-ok/[0.07] px-4 py-3 text-body">

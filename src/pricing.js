@@ -67,10 +67,20 @@ function modelTier(id) {
 }
 const isPremiumModel = (id) => PREMIUM_TIERS.has(modelTier(id));
 // Notional (never-billed) list-price USD for a claudecode aggregate — what this traffic WOULD cost
-// at Anthropic list price. Unknown id → 0 (no guess). Metered crazyrouter cost stays in costUsd().
+// at Anthropic list price. Metered crazyrouter cost stays in costUsd().
+//
+// Unknown id → **null, not 0**. Zero is not "no guess", it is the specific claim "this traffic is
+// free", and it is wrong in the one direction that matters: an id is missing from MODEL_COST
+// precisely because Anthropic just shipped it, and the catalog reconciles new ids in at runtime
+// (`refreshClaudecodeModels`), so the unpriced model is typically the NEWEST and most expensive one.
+// Seen in prod 2026-07-26: `claude-opus-5` served and advertised with no entry here, which made the
+// premium-burn banner read "claude-opus-5 (opus) — N calls, ~$0.00 list" — a warning about premium
+// spend, reporting the premium spend as nothing. `modelTier`'s prefix classifier still tags it opus,
+// so the row is flagged premium; only the money was a fabrication. Callers must render null as
+// unknown, never coerce it with `|| 0`.
 function listCostUsd(id, ptok, ctok) {
   const p = MODEL_COST[String(id || "").toLowerCase()];
-  if (!p) return 0;
+  if (!p) return null;
   return (ptok || 0) / 1e6 * p.in + (ctok || 0) / 1e6 * p.out;
 }
 // Advertised claudecode ids with no MODEL_COST entry — the coverage warning surfaced in adminState so

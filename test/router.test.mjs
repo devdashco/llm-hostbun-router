@@ -348,9 +348,13 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   const req = createRequire(import.meta.url);
   const { isPremiumModel, modelTier, unpricedModels, listCostUsd } = req(join(ROOT, "src/pricing.js"));
   const { CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES } = req(join(ROOT, "src/config.js"));
-  // Every advertised model MUST have a token cost + tier defined — a new Anthropic id shipped without a
-  // price fails the build HERE rather than silently reading as $0 / no-tier in the stats.
-  check("every advertised claudecode model has a token cost", unpricedModels([...CLAUDECODE_MODEL_SEED, ...CLAUDECODE_MODEL_ALIASES]), []);
+  // Every SEEDED/ALIASED model must have a token cost + tier. Note the limit of this check, which
+  // its old comment overstated: the live catalog is reconciled against api.anthropic.com at boot
+  // and every 6h, so an id Anthropic ships lands in CFG.claudecodeModels and gets served without
+  // ever passing through here. `claude-opus-5` did exactly that, in prod, on 2026-07-26. A build
+  // gate cannot cover runtime discovery — what covers it is listCostUsd returning null (below),
+  // adminState.unpricedModels, and the panel banner that renders both.
+  check("every seeded/aliased claudecode model has a token cost", unpricedModels([...CLAUDECODE_MODEL_SEED, ...CLAUDECODE_MODEL_ALIASES]), []);
   // Only opus/fable classify "premium" — the warning trigger.
   check("opus is premium", isPremiumModel("claude-opus-4-8"), true);
   check("fable is premium", isPremiumModel("claude-fable-5"), true);
@@ -360,7 +364,12 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   check("an unlisted opus variant still reads premium (prefix fallback)", isPremiumModel("claude-opus-9-9"), true);
   check("modelTier reads the tier", modelTier("claude-sonnet-4-6"), "sonnet");
   check("a priced model has a non-zero list cost", listCostUsd("claude-opus-4-8", 1e6, 1e6) > 0, true);
-  check("an unknown model list cost is 0 (no guess)", listCostUsd("gemini-x", 1e6, 1e6), 0);
+  // An unpriced id must read UNKNOWN, never 0. Zero is the claim "this traffic was free", and the
+  // ids missing from MODEL_COST are the newest — i.e. the dearest. It made the premium-burn banner
+  // announce "claude-opus-5 (opus) — N calls, ~$0.00 list".
+  check("an unknown model list cost is null, not 0", listCostUsd("gemini-x", 1e6, 1e6), null);
+  check("an unpriced NEW claude id is null too (the real case)", listCostUsd("claude-opus-99", 1e6, 1e6), null);
+  check("...while still classifying as premium, so the row is flagged", isPremiumModel("claude-opus-99"), true);
 
   // Telemetry is fire-and-forget: shipEvent/shipError must never throw (a HyperDX hiccup can't break
   // an inference request). With no HYPERDX_INGEST_API_KEY in the test env, both are silent no-ops.

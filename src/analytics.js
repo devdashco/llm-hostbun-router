@@ -196,7 +196,10 @@ async function statsSummary(req, res) {
       const served = String(r.sent_models || "").split(",")[0] || r.req_model;
       r.tier = modelTier(served);
       r.premium = isPremiumModel(served);
-      r.list_usd = r.provider === "claudecode" ? +listCostUsd(served, r.ptok, r.ctok).toFixed(4) : 0;
+      // null (not 0) when the served id has no price — see listCostUsd. A non-claudecode row is a
+      // genuine 0: the sub is flat and local is free, so "no list cost" is the true answer there.
+      const lc = r.provider === "claudecode" ? listCostUsd(served, r.ptok, r.ctok) : 0;
+      r.list_usd = lc == null ? null : +lc.toFixed(4);
     });
     // Premium-usage warning: which PROJECTS (esp. apps) ran an opus/fable model in this window, and
     // how much. Devs choosing opus is expected; an app on premium is the cost signal worth surfacing.
@@ -210,9 +213,10 @@ async function statsSummary(req, res) {
     for (const r of premRows) {
       if (!isPremiumModel(r.sent_model)) continue;
       const reg = r.project && r.project !== "(none)" ? consumerEntry(r.project) : null;
+      const premListUsd = listCostUsd(r.sent_model, r.ptok, r.ctok);
       premiumUsage.push({ project: r.project, kind: reg ? reg.kind : null, model: r.sent_model,
         tier: modelTier(r.sent_model), calls: r.n, tokens: r.tok,
-        list_usd: +listCostUsd(r.sent_model, r.ptok, r.ctok).toFixed(4), last: r.last });
+        list_usd: premListUsd == null ? null : +premListUsd.toFixed(4), last: r.last });
     }
     const oldestRow = await dbRow("SELECT MIN(ts) AS t FROM calls");
     return sendJson(res, 200, { dbReady: true, window: winKey, total: totalRow ? totalRow.n : 0,
