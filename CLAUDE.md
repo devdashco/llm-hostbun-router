@@ -53,9 +53,9 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (95 checks, ~25s)
+## Tests — `npm test` (124 checks, ~25s)
 
-Five suites, no network, no database, zero deps. Run before every push.
+Six suites, no network, no database, zero deps. Run before every push.
 
 - `test/imports.test.mjs` — static check that every cross-module call is actually bound in the file
   making it. The `src/` split left twelve module-level identifiers unimported; `require` doesn't
@@ -71,6 +71,12 @@ Five suites, no network, no database, zero deps. Run before every push.
   escape, a `.dark` colour token never registered in `@theme inline` (which compiles to *nothing* —
   the class is silently dropped), or a drifted type scale. All five had already happened; see
   `panel/AGENTS.md` for the rules it enforces.
+- `test/panel-nav.test.mjs` — the nav, read from **source** (no `panel/` build needed). Five files
+  have to agree on what the pages are called — `shell.tsx`'s `NAV`, the `ALIAS` map, `UI_ROUTES` in
+  `src/config.js`, one `page.tsx` per slug, and each component's `PageHead` title — and every
+  mismatch is silent. Fails on a nav slug missing from `UI_ROUTES` (hard-refresh 404), a legacy
+  redirect pointing at a dead page/tab or missing its `ALIAS` entry (the bookmark it exists for
+  lands nowhere), a redirect chain, and a nav label that doesn't match its landing tab and heading.
 
 Two more are **not** in `npm test` because they need `panel/out` or the docs build:
 
