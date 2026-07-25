@@ -87,10 +87,10 @@ function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any) {
       <>
         <TableCell className="font-mono">{r.n}</TableCell>
         <TableCell className="font-mono">{(r.tok || 0).toLocaleString()}</TableCell>
-        <TableCell className="font-mono text-[12px] text-muted-foreground">
+        <TableCell className="font-mono text-ui text-muted-foreground">
           {nfmt(r.ptok)} → {nfmt(r.ctok)}
         </TableCell>
-        <TableCell className="font-mono text-[12px]">
+        <TableCell className="font-mono text-ui">
           {r.cr > 0 ? <span className="text-ok" title={"cache read " + (r.cr || 0).toLocaleString() + " · write " + (r.cw || 0).toLocaleString() + " tokens"}>{nfmt(r.cr)}</span> : <span className="text-muted-foreground">—</span>}
         </TableCell>
         <TableCell className="font-mono">{usd(r.usd)}</TableCell>
@@ -98,8 +98,8 @@ function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any) {
         <TableCell className="font-mono" style={r.errors > 0 ? { color: "var(--danger)", fontWeight: 700 } : { color: "var(--muted-foreground)" }}>
           {errPct.toFixed(errPct && errPct < 10 ? 1 : 0)}%
         </TableCell>
-        <TableCell className="text-[11px]">{String(r.providers || "").split(",").join(" ")}</TableCell>
-        <TableCell className="font-mono text-[11px] text-muted-foreground">{ago(r.last)}</TableCell>
+        <TableCell className="text-meta">{String(r.providers || "").split(",").join(" ")}</TableCell>
+        <TableCell className="font-mono text-meta text-muted-foreground">{ago(r.last)}</TableCell>
         <TableCell>
           {share == null ? null : (
             <span className="flex h-1.5 overflow-hidden rounded-full bg-secondary">
@@ -130,7 +130,7 @@ function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any) {
           return (
             <>
               <TableRow key={r.project} className="cursor-pointer" onClick={() => gotoCalls({ project: r.project && r.project !== "(none)" ? r.project : "" })}>
-                <TableCell className="whitespace-nowrap font-mono text-[12px]">
+                <TableCell className="whitespace-nowrap font-mono text-ui">
                   {expandable ? (
                     <span
                       onClick={(e) => {
@@ -146,7 +146,7 @@ function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any) {
                     <span className="inline-block w-4" />
                   )}
                   <b>{r.project || "(none)"}</b>
-                  {expandable && <span className="text-[10.5px] text-muted-foreground"> {r.jobs.length} job{r.jobs.length > 1 ? "s" : ""}</span>}
+                  {expandable && <span className="text-micro text-muted-foreground"> {r.jobs.length} job{r.jobs.length > 1 ? "s" : ""}</span>}
                   <LimitBadge r={r} />
                 </TableCell>
                 <Cells r={r} share={share} />
@@ -154,7 +154,7 @@ function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any) {
               {isOpen &&
                 r.jobs.map((j: any) => (
                   <TableRow key={j.project} className="cursor-pointer bg-secondary/40" onClick={() => gotoCalls({ project: j.project })}>
-                    <TableCell className="whitespace-nowrap pl-8 font-mono text-[11.5px] text-muted-foreground">
+                    <TableCell className="whitespace-nowrap pl-8 font-mono text-meta text-muted-foreground">
                       └ {String(j.project).slice(r.project.length + 1)}
                       <LimitBadge r={j} />
                     </TableCell>
@@ -163,7 +163,7 @@ function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any) {
                 ))}
               {isOpen && r.self && r.jobs.length ? (
                 <TableRow key={r.project + "__self"} className="cursor-pointer bg-secondary/40" onClick={() => gotoCalls({ project: r.self.project + ":" })}>
-                  <TableCell className="pl-8 font-mono text-[11.5px] text-muted-foreground">└ (no job)</TableCell>
+                  <TableCell className="pl-8 font-mono text-meta text-muted-foreground">└ (no job)</TableCell>
                   <Cells r={{ ...r.self, cr: r.self.cr || 0, cw: r.self.cw || 0 }} share={null} />
                 </TableRow>
               ) : null}
@@ -215,7 +215,7 @@ export function Stats() {
     })();
   }, [win]);
   return (
-    <div className="space-y-[18px]">
+    <div className="space-y-4.5">
       <PageHead
         title="Usage"
         desc="Where the tokens went: by provider, project, client and model."
@@ -224,7 +224,7 @@ export function Stats() {
       {!s ? (
         <div className="text-muted-foreground">loading…</div>
       ) : s.dbReady === false ? (
-        <div className="rounded-xl border border-danger/40 bg-danger/10 p-3.5 text-[13px] text-danger">The call DB is unavailable, so there is nothing to summarise.</div>
+        <div className="rounded-xl border border-danger/40 bg-danger/10 p-3.5 text-body text-danger">The call DB is unavailable, so there is nothing to summarise.</div>
       ) : (
         <>
           {(() => {
@@ -280,14 +280,14 @@ export function Stats() {
                       tp = (r.tok / totT) * 100;
                     return (
                       <div key={r.provider} className="my-2.5 flex items-center gap-3">
-                        <span className="flex w-[150px] shrink-0 items-center gap-1.5 truncate font-mono text-[13px]">
+                        <span className="flex w-[150px] shrink-0 items-center gap-1.5 truncate font-mono text-body">
                           <span className="inline-block size-2.5 rounded-sm" style={{ background: c }} />
                           {r.provider}
                         </span>
                         <span className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
                           <span className="block h-full rounded-full" style={{ width: cp.toFixed(1) + "%", background: c }} />
                         </span>
-                        <span className="min-w-[170px] text-right font-mono text-[12px] text-muted-foreground">
+                        <span className="min-w-[170px] text-right font-mono text-ui text-muted-foreground">
                           {r.n} calls ({cp.toFixed(0)}%) · {nfmt(r.tok)} tok ({tp.toFixed(0)}%)
                         </span>
                       </div>
@@ -331,15 +331,15 @@ export function Stats() {
                 <TableBody>
                   {(s.byClient || []).map((r: any) => (
                     <TableRow key={r.ua} className="cursor-pointer" onClick={() => gotoCalls({ q: r.ua })}>
-                      <TableCell className="font-mono text-[12px]">{r.ua}</TableCell>
+                      <TableCell className="font-mono text-ui">{r.ua}</TableCell>
                       <TableCell className="font-mono">{r.n}</TableCell>
                       <TableCell className="font-mono">{(r.tok || 0).toLocaleString()}</TableCell>
                       <TableCell className="font-mono" style={r.thinkers > 0 ? { color: "var(--warn)", fontWeight: 600 } : { color: "var(--muted-foreground)" }}>
                         {r.thinkers || 0}
                       </TableCell>
                       <TableCell className="font-mono">{r.ips}</TableCell>
-                      <TableCell className="text-[11.5px] text-muted-foreground">{String(r.providers || "").split(",").join(" ")}</TableCell>
-                      <TableCell className="font-mono text-[11px] text-muted-foreground">{ago(r.last)}</TableCell>
+                      <TableCell className="text-meta text-muted-foreground">{String(r.providers || "").split(",").join(" ")}</TableCell>
+                      <TableCell className="font-mono text-meta text-muted-foreground">{ago(r.last)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -370,7 +370,7 @@ export function Stats() {
                     const hit = r.cr + r.ptok > 0 ? Math.round((r.cr / (r.cr + r.ptok)) * 100) : 0;
                     return (
                       <TableRow key={(r.req_model || "-") + r.provider}>
-                        <TableCell className="font-mono text-[12px]">
+                        <TableCell className="font-mono text-ui">
                           {r.req_model || "-"}
                           {r.sent_models && r.sent_models !== r.req_model && (
                             <span className="text-muted-foreground"> → {r.sent_models}</span>
@@ -381,10 +381,10 @@ export function Stats() {
                         </TableCell>
                         <TableCell className="font-mono">{r.n}</TableCell>
                         <TableCell className="font-mono">{(r.tok || 0).toLocaleString()}</TableCell>
-                        <TableCell className="font-mono text-[12px] text-muted-foreground">
+                        <TableCell className="font-mono text-ui text-muted-foreground">
                           {nfmt(r.ptok)} → {nfmt(r.ctok)}
                         </TableCell>
-                        <TableCell className="font-mono text-[12px]">
+                        <TableCell className="font-mono text-ui">
                           {r.cr > 0 ? (
                             <>
                               <span className="text-ok">{nfmt(r.cr)}</span> <span className="text-muted-foreground">{hit}%</span>
@@ -417,8 +417,8 @@ export function Stats() {
                     return (
                       <Stat key={k} label={<KindBadge kind={k} />}>
                         {nfmt(r.tokens)}
-                        <span className="text-[12px] font-normal text-muted-foreground"> tok</span>
-                        <div className="mt-0.5 font-mono text-[11.5px] font-normal text-muted-foreground">{nfmt(r.calls)} calls</div>
+                        <span className="text-ui font-normal text-muted-foreground"> tok</span>
+                        <div className="mt-0.5 font-mono text-meta font-normal text-muted-foreground">{nfmt(r.calls)} calls</div>
                       </Stat>
                     );
                   })}
@@ -428,7 +428,7 @@ export function Stats() {
               )}
             </CardContent>
           </Card>
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-[18px]">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-4.5">
             <Card>
               <CardHeader>
                 <CardTitle>By developer</CardTitle>
@@ -456,7 +456,7 @@ export function Stats() {
                       ))
                     ) : (
                       <TableRow>
-                        <TableCell colSpan={4} className="text-[12.5px] text-muted-foreground">
+                        <TableCell colSpan={4} className="text-ui text-muted-foreground">
                           No dev traffic, or no dev consumer has an owner yet.
                         </TableCell>
                       </TableRow>
@@ -494,7 +494,7 @@ export function Stats() {
                       ))
                     ) : (
                       <TableRow>
-                        <TableCell colSpan={4} className="text-[12.5px] text-muted-foreground">
+                        <TableCell colSpan={4} className="text-ui text-muted-foreground">
                           No attributed claudecode traffic in this window.
                         </TableCell>
                       </TableRow>

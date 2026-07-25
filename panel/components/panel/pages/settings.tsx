@@ -50,7 +50,7 @@ export function Crazyrouter() {
     }
   }
   return (
-    <div className="space-y-[18px]">
+    <div className="space-y-4.5">
       <PageHead
         title="Crazyrouter"
         desc="The cloud relay, and the only provider that bills per token."
@@ -61,7 +61,7 @@ export function Crazyrouter() {
         }
       />
       {c === "loading" || c == null ? (
-        <div className="rounded-xl border border-border p-3.5 text-[13px]">{c == null ? "Crazyrouter is unreachable." : "Checking…"}</div>
+        <div className="rounded-xl border border-border p-3.5 text-body">{c == null ? "Crazyrouter is unreachable." : "Checking…"}</div>
       ) : (
         <>
           <StatGrid>
@@ -73,7 +73,7 @@ export function Crazyrouter() {
             <Stat label="Key id">{c.keyMasked || "(none)"}</Stat>
           </StatGrid>
           {(c.message || !c.keyValid) && (
-            <div className="rounded-xl border border-warn/35 bg-warn/[0.07] p-3.5 text-[13px]">
+            <div className="rounded-xl border border-warn/35 bg-warn/[0.07] p-3.5 text-body">
               {(c.message || "key check failed") + (c.statuses ? " · statuses " + JSON.stringify(c.statuses) : "")}
             </div>
           )}
@@ -95,7 +95,7 @@ export function Crazyrouter() {
             <Button onClick={saveKey}>Save key</Button>
           </div>
           {test != null && (
-            <pre className="mt-3 max-h-[340px] overflow-auto rounded-lg border border-border bg-sunken p-3.5 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words">{test}</pre>
+            <pre className="mt-3 max-h-[340px] overflow-auto rounded-lg border border-border bg-sunken p-3.5 font-mono text-ui leading-relaxed whitespace-pre-wrap break-words">{test}</pre>
           )}
         </CardContent>
       </Card>
@@ -138,7 +138,7 @@ export function Secrets() {
     }
   }
   return (
-    <div className="space-y-[18px]">
+    <div className="space-y-4.5">
       <PageHead
         title="Secrets & gate"
         desc={
@@ -152,7 +152,7 @@ export function Secrets() {
           <CardTitle>Claudecode account tokens ({(state.claudecodeAccountPool || []).length} in pool)</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-ui text-muted-foreground">
             Max account tokens live in <span className="font-mono">claudecodeAccountPool</span> inside the config file above, and that is the only
             copy anywhere. They are never returned to this UI. Edit them on the volume, and back it up before touching the app.
           </p>
@@ -176,7 +176,7 @@ export function Secrets() {
               Disable gate
             </Button>
           </div>
-          <p className="mt-2.5 text-[12.5px] text-muted-foreground">Gated upstream model ids are edited on Routing, under Advanced → JSON enforcement.</p>
+          <p className="mt-2.5 text-ui text-muted-foreground">Gated upstream model ids are edited on Routing, under Advanced → JSON enforcement.</p>
         </CardContent>
       </Card>
       <Card>

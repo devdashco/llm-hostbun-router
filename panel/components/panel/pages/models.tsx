@@ -63,7 +63,7 @@ function ClaudeCatalog() {
           <Stat label="last checked">
             {cat ? since(cat.checkedAt) : "…"}
             {cat && cat.sweptAccounts && cat.sweptAccounts.length ? (
-              <span className="text-[12.5px] text-muted-foreground">
+              <span className="text-ui text-muted-foreground">
                 {" "}
                 swept {cat.sweptAccounts.length} account{cat.sweptAccounts.length === 1 ? "" : "s"}
               </span>
@@ -71,23 +71,23 @@ function ClaudeCatalog() {
           </Stat>
         </StatGrid>
         {cat && cat.source !== "anthropic" && (
-          <p className="mb-2.5 text-[13px] text-danger">
+          <p className="mb-2.5 text-body text-danger">
             Serving the hardcoded seed — Anthropic&apos;s catalog has not been read successfully
             {cat.error ? ": " + cat.error : ""}. Ids still route; the list may just be stale.
           </p>
         )}
         {cat && cat.failedAccounts && cat.failedAccounts.length > 0 && (
-          <p className="mb-2.5 text-[13px] text-warn">
+          <p className="mb-2.5 text-body text-warn">
             Could not read the catalog on {cat.failedAccounts.map((f: any) => f.account + " (" + f.error + ")").join(", ")}. Any model only those
             accounts can see is missing from this list.
           </p>
         )}
-        <p className="mb-3 text-[12.5px] text-muted-foreground">
+        <p className="mb-3 text-ui text-muted-foreground">
           The catalog is a <b>union</b> across every account. All ids route to the pinned subscription; a{" "}
           <span className="font-mono">429</span> at request time means that subscription&apos;s usage window is spent (and resets), not that the
           model is gone.
         </p>
-        <div className="max-h-[340px] overflow-auto rounded-lg border border-border px-2.5 py-1.5 font-mono text-[13px]">
+        <div className="max-h-[340px] overflow-auto rounded-lg border border-border px-2.5 py-1.5 font-mono text-body">
           {cat ? (
             cat.advertised.map((id: string) => {
               const m = (cat.models || []).find((x: any) => x.id === id);
@@ -179,7 +179,7 @@ export function Models() {
     );
   };
   return (
-    <div className="space-y-[18px]">
+    <div className="space-y-4.5">
       <PageHead title="Models & test" desc="What each provider advertises, and what the pinned subscription will actually serve." />
       <ClaudeCatalog />
       <Card>
@@ -205,7 +205,7 @@ export function Models() {
           </datalist>
           <Input placeholder="prompt" value={tp} onChange={(e) => setTp(e.target.value)} />
           {out != null && (
-            <pre className="max-h-[340px] overflow-auto rounded-lg border border-border bg-sunken p-3.5 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words">
+            <pre className="max-h-[340px] overflow-auto rounded-lg border border-border bg-sunken p-3.5 font-mono text-ui leading-relaxed whitespace-pre-wrap break-words">
               {out}
             </pre>
           )}
@@ -220,7 +220,7 @@ export function Models() {
         </CardHeader>
         <CardContent>
           <Input placeholder="filter…" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          <div className="mt-2.5 max-h-[420px] overflow-auto font-mono text-[13px]">
+          <div className="mt-2.5 max-h-[420px] overflow-auto font-mono text-body">
             {models ? (
               <>
                 <Section title="local" cls="local" arr={models.local} />

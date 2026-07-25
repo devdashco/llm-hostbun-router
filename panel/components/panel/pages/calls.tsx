@@ -178,7 +178,7 @@ export function Calls() {
     }
   }
   return (
-    <div className="space-y-[18px]">
+    <div className="space-y-4.5">
       <PageHead title="Call log" desc="Every request the router has served, with the prompt and reply behind each row." />
       <Card>
         <CardContent className="space-y-2">
@@ -246,7 +246,7 @@ export function Calls() {
             )}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-            <small className="text-[12.5px] text-muted-foreground">
+            <small className="text-ui text-muted-foreground">
               {dbReady ? (
                 <>
                   Showing <b>{A.toLocaleString()}–{B.toLocaleString()}</b> of <b>{total.toLocaleString()}</b> matching. The DB keeps the newest{" "}
@@ -310,11 +310,11 @@ export function Calls() {
             <TableBody>
               {rows.map((r) => (
                 <TableRow key={r.id} className={"cursor-pointer" + (fresh[r.id] ? " bg-ok/10" : "")} onClick={() => openCall(r.id)}>
-                  <TableCell className="whitespace-nowrap font-mono text-[12px] text-muted-foreground">{fmtTime(r.ts)}</TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-ui text-muted-foreground">{fmtTime(r.ts)}</TableCell>
                   <TableCell>
                     <ProjectChip p={r.project} />
                   </TableCell>
-                  <TableCell className="font-mono text-[12px]">
+                  <TableCell className="font-mono text-ui">
                     {r.req_model || "-"}
                     {r.sent_model && r.sent_model !== r.req_model && <span className="text-muted-foreground"> → {r.sent_model}</span>}
                     {r.stream ? <span className="text-muted-foreground"> stream</span> : null}
@@ -323,13 +323,13 @@ export function Calls() {
                   <TableCell>
                     <ProviderBadge provider={r.provider} />
                   </TableCell>
-                  <TableCell className="font-mono text-[12px] text-muted-foreground">{r.key_label || ""}</TableCell>
-                  <TableCell className="font-mono text-[12px]">
+                  <TableCell className="font-mono text-ui text-muted-foreground">{r.key_label || ""}</TableCell>
+                  <TableCell className="font-mono text-ui">
                     {r.effort ? <span className="text-warn">{r.effort}</span> : <span className="text-muted-foreground">—</span>}
                     {r.thinking_tokens > 0 && (
                       <>
                         <br />
-                        <span className="text-[11px] text-muted-foreground">{nfmt(r.thinking_tokens)} think</span>
+                        <span className="text-meta text-muted-foreground">{nfmt(r.thinking_tokens)} think</span>
                       </>
                     )}
                   </TableCell>
@@ -337,7 +337,7 @@ export function Calls() {
                     <StatusBadge status={r.status} error={r.error} />
                   </TableCell>
                   <TableCell className="font-mono">{r.duration_ms ?? "—"}</TableCell>
-                  <TableCell className="whitespace-nowrap font-mono text-[12px]">
+                  <TableCell className="whitespace-nowrap font-mono text-ui">
                     {r.prompt_tokens != null || r.completion_tokens != null ? (
                       <>
                         {nfmt(r.prompt_tokens || 0)} <span className="text-muted-foreground">→</span> {nfmt(r.completion_tokens || 0)}
@@ -346,7 +346,7 @@ export function Calls() {
                       <span className="text-muted-foreground">—</span>
                     )}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap font-mono text-[12px]">
+                  <TableCell className="whitespace-nowrap font-mono text-ui">
                     {r.cache_read > 0 || r.cache_write > 0 ? (
                       <>
                         <span className="text-ok">{nfmt(r.cache_read || 0)}</span> <span className="text-muted-foreground">/ {nfmt(r.cache_write || 0)}</span>
@@ -355,7 +355,7 @@ export function Calls() {
                       <span className="text-muted-foreground">—</span>
                     )}
                   </TableCell>
-                  <TableCell className="font-mono text-[12px]">
+                  <TableCell className="font-mono text-ui">
                     {r.tool_count > 0 ? (
                       <>
                         {r.tool_count}
@@ -365,7 +365,7 @@ export function Calls() {
                       <span className="text-muted-foreground">—</span>
                     )}
                   </TableCell>
-                  <TableCell className="font-mono text-[11px] text-muted-foreground">
+                  <TableCell className="font-mono text-meta text-muted-foreground">
                     {r.ip || ""}
                     <br />
                     {(r.ua || "").slice(0, 32)}
@@ -374,7 +374,7 @@ export function Calls() {
               ))}
               {!rows.length && (
                 <TableRow>
-                  <TableCell colSpan={12} className="text-[12.5px] text-muted-foreground">
+                  <TableCell colSpan={12} className="text-ui text-muted-foreground">
                     No calls match these filters.{activeCount ? " Clear them to see the whole log." : ""}
                   </TableCell>
                 </TableRow>
@@ -392,14 +392,14 @@ export function Calls() {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-center gap-4">
-            <label className="flex items-center gap-2 text-[13px]">
+            <label className="flex items-center gap-2 text-body">
               <Checkbox checked={!!lg.enabled} onCheckedChange={(v) => setLg({ ...lg, enabled: !!v })} /> log calls
             </label>
-            <label className="flex items-center gap-2 text-[13px]">
+            <label className="flex items-center gap-2 text-body">
               <Checkbox checked={!!lg.content} onCheckedChange={(v) => setLg({ ...lg, content: !!v })} /> store prompt + reply content
             </label>
             <div>
-              <label className="mb-1 block text-[12.5px] text-muted-foreground">retain rows</label>
+              <label className="mb-1 block text-ui text-muted-foreground">retain rows</label>
               <Input type="number" min={100} step={1000} className="w-[130px]" value={lg.retain || 50000} onChange={(e) => setLg({ ...lg, retain: e.target.value })} />
             </div>
           </div>

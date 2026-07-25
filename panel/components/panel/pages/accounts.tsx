@@ -49,7 +49,7 @@ export function Pins() {
         <CardDescription>Which Max subscription each project is billed to — set it here.</CardDescription>
       </CardHeader>
       <CardContent>
-        <p className="mb-3.5 text-[12.5px] text-muted-foreground">
+        <p className="mb-3.5 text-ui text-muted-foreground">
           <b>This is where a project is bound to an account.</b> One project → one account (no request header can change it); a project
           that is not mapped gets <span className="font-mono">403 no_account_for_project</span> — the gateway never guesses whose Max plan
           to bill.{" "}
@@ -100,7 +100,7 @@ export function Pins() {
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={3} className="text-[12.5px] text-muted-foreground">
+                <TableCell colSpan={3} className="text-ui text-muted-foreground">
                   Nothing is mapped — every claudecode call is 403&apos;ing.
                 </TableCell>
               </TableRow>
@@ -259,17 +259,17 @@ export function Accounts() {
             <Bar v={u} />
           </div>
           {sl && (
-            <span className="text-[9.5px] font-semibold" style={{ color: sl.c }}>
+            <span className="text-micro font-semibold" style={{ color: sl.c }}>
               {sl.t}
             </span>
           )}
         </div>
         {resetSec ? (
           <>
-            <div className="text-[10px] text-muted-foreground" title={"resets " + resetFull(resetSec)}>
+            <div className="text-micro text-muted-foreground" title={"resets " + resetFull(resetSec)}>
               ↺ {resetAt(resetSec)}
             </div>
-            <div className="font-mono text-[10.5px] font-semibold text-p-crazyrouter" title={"resets " + resetFull(resetSec)}>
+            <div className="font-mono text-micro font-semibold text-p-crazyrouter" title={"resets " + resetFull(resetSec)}>
               in {countdown(resetSec)}
             </div>
           </>
@@ -280,7 +280,7 @@ export function Accounts() {
   const accts = (d && d.accounts) || [];
   const s = (d && d.summary) || {};
   return (
-    <div className="space-y-[18px]">
+    <div className="space-y-4.5">
       <PageHead
         title="Accounts"
         desc="The Claude Max pool: how much usage-window headroom is left, and which project spends which subscription."
@@ -291,7 +291,7 @@ export function Accounts() {
         }
       />
       {d && d.orphanPins && d.orphanPins.length ? (
-        <div className="rounded-xl border border-danger/40 bg-danger/10 p-3.5 text-[13px]">
+        <div className="rounded-xl border border-danger/40 bg-danger/10 p-3.5 text-body">
           <b className="text-danger">{d.orphanPins.length} pin(s) name an account that is not in the pool</b>
           <div className="mt-1.5 text-muted-foreground">
             Those projects <span className="font-mono">403</span> on every call:{" "}
@@ -317,12 +317,12 @@ export function Accounts() {
           </CardAction>
         </CardHeader>
         <CardContent>
-          <p className="mb-1.5 text-[12.5px] text-muted-foreground">
+          <p className="mb-1.5 text-ui text-muted-foreground">
             The <b>5h</b>/<b>7d</b> bars are the Claude Max usage windows, <b className="text-warn">harvested off real traffic — a floor, not live</b>:
             an idle account keeps its last reading until it serves a call. Hit <b>↻ Refresh limits (live)</b> to read the real windows now.
           </p>
           {err && <p className="text-danger">{err}</p>}
-          {!d && <p className="text-[12.5px] text-muted-foreground">loading…</p>}
+          {!d && <p className="text-ui text-muted-foreground">loading…</p>}
           <div className="mt-3 overflow-x-auto">
             <Table>
               <TableHeader>
@@ -346,24 +346,24 @@ export function Accounts() {
                     <TableRow key={a.name} className={live ? "bg-ok/[0.06]" : ""}>
                       <TableCell className="font-mono align-top">
                         <b>{a.name}</b>
-                        {a.email ? <div className="text-[10px] text-muted-foreground">{a.email}</div> : null}
+                        {a.email ? <div className="text-micro text-muted-foreground">{a.email}</div> : null}
                         {a.org ? (
-                          <div className="text-[10px] text-muted-foreground" title={a.org}>
+                          <div className="text-micro text-muted-foreground" title={a.org}>
                             {a.org.slice(0, 12)}…
                           </div>
                         ) : (
-                          <div className="text-[10px] text-muted-foreground">org unknown</div>
+                          <div className="text-micro text-muted-foreground">org unknown</div>
                         )}
                         {live ? (
-                          <div className="text-[9.5px] text-ok">● live · {since(fr.checkedAt)}</div>
+                          <div className="text-micro text-ok">● live · {since(fr.checkedAt)}</div>
                         ) : l && l.ts ? (
-                          <div className="text-[9.5px] text-muted-foreground" title="last reading harvested off real traffic — click ↻ for a live read">
+                          <div className="text-micro text-muted-foreground" title="last reading harvested off real traffic — click ↻ for a live read">
                             as of {since(l.ts)}
                           </div>
                         ) : null}
                         {liveNo && (
                           <div
-                            className="text-[9.5px]"
+                            className="text-micro"
                             style={{ color: fr.status === 403 ? "var(--danger)" : "var(--warn)" }}
                             title={fr.errMsg || fr.error || "the account answered but sent no rate-limit headers — usually a 429"}
                           >
@@ -380,27 +380,27 @@ export function Accounts() {
                             </Badge>
                           ))
                         ) : (
-                          <span className="text-[11px] text-muted-foreground">— unused</span>
+                          <span className="text-meta text-muted-foreground">— unused</span>
                         )}
                       </TableCell>
                       <TableCell className="min-w-[132px] align-top">
-                        {l ? <WindowCell u={l.u5} resetSec={l.reset5} st={l.s5} /> : <span className="text-[11px] text-muted-foreground">no reading</span>}
+                        {l ? <WindowCell u={l.u5} resetSec={l.reset5} st={l.s5} /> : <span className="text-meta text-muted-foreground">no reading</span>}
                       </TableCell>
                       <TableCell className="min-w-[132px] align-top">{l ? <WindowCell u={l.u7} resetSec={l.reset7} st={l.s7} /> : null}</TableCell>
-                      <TableCell className="whitespace-nowrap font-mono text-[12px] align-top">
+                      <TableCell className="whitespace-nowrap font-mono text-ui align-top">
                         {nfmt(a.usage.calls)} calls
                         <br />
                         <span className="text-muted-foreground">{nfmt(a.usage.tokens)} tok</span>
                         {a.usage.rateLimited > 0 && (
                           <>
                             <br />
-                            <span className="text-[11px] text-danger" title="429s served to callers">
+                            <span className="text-meta text-danger" title="429s served to callers">
                               {nfmt(a.usage.rateLimited)}× 429
                             </span>
                           </>
                         )}
                       </TableCell>
-                      <TableCell className="whitespace-nowrap font-mono text-[12px] align-top">
+                      <TableCell className="whitespace-nowrap font-mono text-ui align-top">
                         {a.usage.calls24h ? (
                           <>
                             {nfmt(a.usage.calls24h)} calls
@@ -410,7 +410,7 @@ export function Accounts() {
                         ) : (
                           <span className="text-muted-foreground">idle</span>
                         )}
-                        <div className="text-[10px] text-muted-foreground">{since(a.usage.lastTs)}</div>
+                        <div className="text-micro text-muted-foreground">{since(a.usage.lastTs)}</div>
                       </TableCell>
                       <TableCell className="w-px whitespace-nowrap align-top">
                         <Button variant="ghost" size="sm" disabled={!!busy} title="refresh this account's live window" onClick={() => refreshLimits(a.name)}>
@@ -431,7 +431,7 @@ export function Accounts() {
                 })}
                 {d && !accts.length ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-[12.5px] text-muted-foreground">
+                    <TableCell colSpan={7} className="text-ui text-muted-foreground">
                       The account pool is empty — <span className="font-mono">claudecodeAccountPool</span> in <span className="font-mono">/data/config.json</span> holds the tokens.
                     </TableCell>
                   </TableRow>
@@ -440,7 +440,7 @@ export function Accounts() {
             </Table>
           </div>
           <div className="mt-4 border-t pt-4">
-            <p className="mb-2 text-[12.5px] text-muted-foreground">
+            <p className="mb-2 text-ui text-muted-foreground">
               <b>Add a Max subscription.</b> Paste its setup-token (<span className="font-mono">sk-ant-oat…</span>) — same field rotates an
               existing account&apos;s token if the name matches. This token is the <b>only copy</b>; it lands in{" "}
               <span className="font-mono">/data/config.json</span> and is never shown again.

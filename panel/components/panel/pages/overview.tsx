@@ -44,13 +44,13 @@ function Issues({ health, st, state, pool }: any) {
     probs.push(["premium", `${state.unpricedModels.length} advertised model(s) have no token cost defined: ${state.unpricedModels.join(", ")}.`]);
   if (!probs.length)
     return (
-      <div className="mb-[18px] rounded-xl border border-ok/35 bg-ok/[0.07] px-4 py-3 text-[13px]">
+      <div className="mb-4.5 rounded-xl border border-ok/35 bg-ok/[0.07] px-4 py-3 text-body">
         <b className="text-ok">All healthy</b> <span className="text-muted-foreground">— providers up, no slow providers or elevated errors in the last hour.</span>
       </div>
     );
   const worst = probs.some(([k]) => SEV[k] === DANGER);
   return (
-    <div className={"mb-[18px] rounded-xl border px-4 py-3 text-[13px] " + (worst ? "border-danger/40 bg-danger/[0.07]" : "border-warn/35 bg-warn/[0.07]")}>
+    <div className={"mb-4.5 rounded-xl border px-4 py-3 text-body " + (worst ? "border-danger/40 bg-danger/[0.07]" : "border-warn/35 bg-warn/[0.07]")}>
       <b style={{ color: worst ? "var(--danger)" : "var(--warn)" }}>
         {probs.length} thing{probs.length > 1 ? "s" : ""} to look at
       </b>
@@ -111,17 +111,17 @@ function Pool({ d }: { d: any }) {
           <TableBody>
             {accts.map((a: any) => (
               <TableRow key={a.name} className="cursor-pointer" onClick={() => go("identity", "accounts")}>
-                <TableCell className="font-mono text-[12.5px] font-semibold">{a.name}</TableCell>
-                <TableCell className="text-[11.5px] text-muted-foreground">{a.projects.length ? a.projects.join(", ") : "— unused"}</TableCell>
+                <TableCell className="font-mono text-ui font-semibold">{a.name}</TableCell>
+                <TableCell className="text-meta text-muted-foreground">{a.projects.length ? a.projects.join(", ") : "— unused"}</TableCell>
                 <TableCell className="min-w-[78px]">
                   <Bar v={a.limits && a.limits.u5} />
-                  {a.limits && a.limits.reset5 ? <div className="text-[9.5px] text-muted-foreground">↺ {resetAt(a.limits.reset5)}</div> : null}
+                  {a.limits && a.limits.reset5 ? <div className="text-micro text-muted-foreground">↺ {resetAt(a.limits.reset5)}</div> : null}
                 </TableCell>
                 <TableCell className="min-w-[78px]">
                   <Bar v={a.limits && a.limits.u7} />
-                  {a.limits && a.limits.reset7 ? <div className="text-[9.5px] text-muted-foreground">↺ {resetAt(a.limits.reset7)}</div> : null}
+                  {a.limits && a.limits.reset7 ? <div className="text-micro text-muted-foreground">↺ {resetAt(a.limits.reset7)}</div> : null}
                 </TableCell>
-                <TableCell className="whitespace-nowrap font-mono text-[12px] text-muted-foreground">
+                <TableCell className="whitespace-nowrap font-mono text-ui text-muted-foreground">
                   {a.usage.calls24h ? nfmt(a.usage.calls24h) + " calls" : "idle"}
                 </TableCell>
               </TableRow>
@@ -250,30 +250,30 @@ export function Overview() {
               {(recent || []).length ? (
                 (recent || []).map((r) => (
                   <TableRow key={r.id} className="cursor-pointer" onClick={() => openCall(r.id)}>
-                    <TableCell className="whitespace-nowrap font-mono text-[12px] text-muted-foreground" title={fmtTime(r.ts)}>
+                    <TableCell className="whitespace-nowrap font-mono text-ui text-muted-foreground" title={fmtTime(r.ts)}>
                       {ago(r.ts)} ago
                     </TableCell>
                     <TableCell>
                       <ProjectChip p={r.project} />
                     </TableCell>
-                    <TableCell className="font-mono text-[12px]">{r.req_model || "-"}</TableCell>
+                    <TableCell className="font-mono text-ui">{r.req_model || "-"}</TableCell>
                     <TableCell>
                       <ProviderBadge provider={r.provider} />
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={r.status} error={r.error} />
                     </TableCell>
-                    <TableCell className="font-mono text-[12px]">
+                    <TableCell className="font-mono text-ui">
                       {fmtMs(r.duration_ms)} · {r.total_tokens ?? "—"}t
                     </TableCell>
-                    <TableCell className="whitespace-nowrap font-mono text-[11px] text-muted-foreground" title={r.ua || ""}>
+                    <TableCell className="whitespace-nowrap font-mono text-meta text-muted-foreground" title={r.ua || ""}>
                       {r.ip || "—"}
                     </TableCell>
                   </TableRow>
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-[12.5px] text-muted-foreground">
+                  <TableCell colSpan={7} className="text-ui text-muted-foreground">
                     Nothing has called the router yet. The first request through <span className="font-mono">/v1</span> shows up here.
                   </TableCell>
                 </TableRow>
@@ -311,7 +311,7 @@ export function Overview() {
                     <TableCell>
                       <ProviderBadge provider={provider} />
                     </TableCell>
-                    <TableCell className="font-mono text-[12px] text-muted-foreground">{base}</TableCell>
+                    <TableCell className="font-mono text-ui text-muted-foreground">{base}</TableCell>
                     <TableCell>
                       {r.up ? (
                         <Badge variant="outline" className="text-ok border-ok/40">

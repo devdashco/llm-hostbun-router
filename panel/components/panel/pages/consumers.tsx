@@ -132,7 +132,7 @@ export function Consumers() {
   const unreg = (reg && reg.unregistered) || [];
   const regd = (reg && reg.registered) || [];
   return (
-    <div className="space-y-[18px]">
+    <div className="space-y-4.5">
       <PageHead
         title="Consumers"
         desc="Register who may call the router and issue their keys. Spend lives on the Usage tab."
@@ -147,7 +147,7 @@ export function Consumers() {
           </>
         }
       />
-      {err && <div className="rounded-xl border border-danger/40 bg-danger/10 p-3.5 text-[13px] text-danger">{err}</div>}
+      {err && <div className="rounded-xl border border-danger/40 bg-danger/10 p-3.5 text-body text-danger">{err}</div>}
 
       {issued && (
         <Card className="border-ok/45">
@@ -158,7 +158,7 @@ export function Consumers() {
             <CardDescription>This is the only time it is shown. Only its sha256 is stored. Put it in keyvault now.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="select-all break-all rounded-lg border border-border bg-sunken p-3 font-mono text-[13px]">{issued.key}</div>
+            <div className="select-all break-all rounded-lg border border-border bg-sunken p-3 font-mono text-body">{issued.key}</div>
             <div className="mt-3 flex gap-2">
               <Button
                 onClick={() => {
@@ -282,7 +282,7 @@ export function Consumers() {
                   <TableRow key={c.name}>
                     <TableCell className="font-mono align-top">
                       <b>{c.name}</b>
-                      {c.note && <div className="text-[10px] text-muted-foreground">{c.note}</div>}
+                      {c.note && <div className="text-micro text-muted-foreground">{c.note}</div>}
                     </TableCell>
                     <TableCell className="align-top">
                       <KindBadge kind={c.kind} />
@@ -298,13 +298,13 @@ export function Consumers() {
                             <Badge variant="secondary" className="font-mono text-muted-foreground" title={"issued " + (k.created ? new Date(k.created).toISOString().slice(0, 10) : "?") + " · last used " + since(k.lastUsed)}>
                               {k.id}
                             </Badge>
-                            <span className="text-[10px] text-muted-foreground">{k.lastUsed ? since(k.lastUsed) : "unused"}</span>
+                            <span className="text-micro text-muted-foreground">{k.lastUsed ? since(k.lastUsed) : "unused"}</span>
                             <button className="text-muted-foreground hover:text-danger" title="revoke" onClick={() => revokeKey(c.name, k.id)}>
                               ✕
                             </button>
                           </div>
                         ))}
-                      {!c.activeKeys && <span className="text-[11px] text-danger">no key{mode === "required" ? " — 401ing" : ""}</span>}
+                      {!c.activeKeys && <span className="text-meta text-danger">no key{mode === "required" ? " — 401ing" : ""}</span>}
                     </TableCell>
                     <TableCell className="font-mono text-muted-foreground align-top">{c.jobs || 0}</TableCell>
                     <TableCell className="font-mono align-top">{nfmt(c.calls)}</TableCell>
@@ -323,7 +323,7 @@ export function Consumers() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-[12.5px] text-muted-foreground">
+                  <TableCell colSpan={8} className="text-ui text-muted-foreground">
                     No consumers yet. Register one above — that issues its first key.
                   </TableCell>
                 </TableRow>
@@ -342,7 +342,7 @@ export function Consumers() {
           </div>
         </CardHeader>
         <CardContent>
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-ui text-muted-foreground">
             <span className="font-mono">off</span> — keys ignored; <span className="font-mono">X-Project</span> is the only identity.
             <br />
             <span className="font-mono">optional</span> — a valid key wins; no key falls back to the header. <b>Migration mode.</b> A key presented and <i>bad</i> is always a 401.
@@ -350,21 +350,21 @@ export function Consumers() {
             <span className="font-mono">required</span> — no valid key, no service. The only mode where the self-asserted header stops being an identity.
           </p>
           {mode !== "required" && (
-            <p className="mt-3 text-[13px] text-warn">
+            <p className="mt-3 text-body text-warn">
               <b>The inference endpoints are open.</b> Anyone who can reach <span className="font-mono">llm.hostbun.cc</span> can spend the Max subscriptions by naming a registered consumer. Only <span className="font-mono">required</span> closes that.
             </p>
           )}
           {keyless.length > 0 && (
-            <p className="mt-2 text-[13px] text-danger">
+            <p className="mt-2 text-body text-danger">
               <b>{keyless.length} registered consumer(s) hold no key</b> — {keyless.join(", ")}. Switching to <span className="font-mono">required</span> 401s every one of them.
             </p>
           )}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3.5">
             <div>
-              <b className="text-[13px]">Name gate</b>{" "}
-              <span className="text-[12.5px] text-muted-foreground">— refuse an unregistered consumer with <span className="font-mono">403 unknown_consumer</span> (keyless callers only).</span>
+              <b className="text-body">Name gate</b>{" "}
+              <span className="text-ui text-muted-foreground">— refuse an unregistered consumer with <span className="font-mono">403 unknown_consumer</span> (keyless callers only).</span>
               {unreg.length > 0 && (
-                <div className="mt-1 text-[12px] text-danger">
+                <div className="mt-1 text-ui text-danger">
                   <b>{unreg.length} unregistered consumer(s) in the log.</b> {reg && reg.enforcing ? "Refused now." : "Register them before enabling, or their traffic dies."}
                 </div>
               )}

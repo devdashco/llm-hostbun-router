@@ -6,7 +6,7 @@ import { nfmt } from "@/lib/format";
 // Headroom bar. `null` is NOT 0% — it means nothing has been harvested (drawing empty would read as
 // "plenty left"). Ported from accounts.js Bar.
 export function Bar({ v }: { v: number | null | undefined }) {
-  if (v == null) return <div className="text-[11px] text-muted-foreground">no reading</div>;
+  if (v == null) return <div className="text-meta text-muted-foreground">no reading</div>;
   const p = Math.max(0, Math.min(100, Math.round(v * 100)));
   const c = p >= 90 ? "var(--danger)" : p >= 70 ? "var(--warn)" : "var(--ok)";
   return (
@@ -14,7 +14,7 @@ export function Bar({ v }: { v: number | null | undefined }) {
       <div className="flex h-1.5 overflow-hidden rounded-full bg-secondary">
         <span className="block h-full rounded-full" style={{ width: p + "%", background: c }} />
       </div>
-      <div className="mt-[3px] font-mono text-[11px]" style={{ color: c }}>
+      <div className="mt-[3px] font-mono text-meta" style={{ color: c }}>
         {p}%
       </div>
     </div>

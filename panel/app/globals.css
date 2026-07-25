@@ -12,6 +12,7 @@
   --font-heading: var(--font-sans);
   /* ported from admin/ui/app.css — semantic verdicts + provider identity, so Tailwind
      utilities (text-ok, border-warn, bg-p-claudecode, …) resolve onto our tokens. */
+  --color-brand: var(--brand);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-danger: var(--danger);
@@ -57,6 +58,18 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* The panel's type scale. This is a dense control surface, so it sits below Tailwind's default
+   ramp (text-sm is 14px) — but it is a SCALE, not free pixels. It replaced 10 hand-typed sizes
+   between 9.5px and 13.5px that had accumulated inline as bracket sizes (`text-[12.5px]`). Four steps,
+   named for the job they do. If a new size feels necessary, it almost certainly isn't: pick the
+   nearest step. Anything larger than body uses Tailwind's own text-sm/base/lg. */
+@theme {
+  --text-micro: 10px; /* chips, badges, table super-labels */
+  --text-meta: 11.5px; /* field labels, timestamps, secondary captions */
+  --text-ui: 12.5px; /* dense rows — call log, JSON, mono blocks */
+  --text-body: 13px; /* default running text in the panel */
 }
 
 :root {

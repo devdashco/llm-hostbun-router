@@ -65,7 +65,7 @@ function RuleSelect({
         )}
         {Object.keys(byProv).map((prov) => (
           <SelectGroup key={prov}>
-            <SelectLabel className={cn("font-mono text-[11px] uppercase", TINT[providerCls[prov] || ""])}>
+            <SelectLabel className={cn("font-mono text-meta uppercase", TINT[providerCls[prov] || ""])}>
               {prov}
             </SelectLabel>
             {byProv[prov].map((m) => (
@@ -87,7 +87,7 @@ function Chip({ on, tint, onClick, children }: { on: boolean; tint?: string; onC
       type="button"
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[3px] font-mono text-[11.5px] transition-colors",
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[3px] font-mono text-meta transition-colors",
         on
           ? cn("border-p-crazyrouter bg-p-crazyrouter/15 text-foreground", tint)
           : "border-border bg-sunken text-muted-foreground hover:border-border/80 hover:text-foreground",
@@ -126,7 +126,7 @@ function AllowCell({
   const setMany = (add: string[], rm: string[]) =>
     emit({ allowModels: [...am.filter((m) => !rm.includes(m)), ...add.filter((m) => !am.includes(m))] });
 
-  if (blocked) return <span className="text-[12.5px] text-muted-foreground">blocked — nothing runs</span>;
+  if (blocked) return <span className="text-ui text-muted-foreground">blocked — nothing runs</span>;
 
   const summary =
     !ap.length && !am.length
@@ -149,7 +149,7 @@ function AllowCell({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[min(440px,90vw)] max-h-[60vh] overflow-auto">
         <div>
-          <div className="mb-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+          <div className="mb-2 font-mono text-meta uppercase tracking-wide text-muted-foreground">
             Providers
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -166,7 +166,7 @@ function AllowCell({
           const on = ms.filter((m) => am.includes(m)).length;
           return (
             <div key={prov} className="mt-3.5">
-              <div className="mb-1.5 flex items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+              <div className="mb-1.5 flex items-center gap-2 font-mono text-meta uppercase tracking-wide text-muted-foreground">
                 <span className={TINT[providerCls[prov] || ""]}>{prov}</span> models
                 <span className="flex-1" />
                 <button className="rounded-full border border-border px-2 py-px hover:text-foreground" onClick={() => setMany(ms, [])}>
@@ -192,7 +192,7 @@ function AllowCell({
         })}
         {extras.length > 0 && (
           <div className="mt-3.5">
-            <div className="mb-1.5 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+            <div className="mb-1.5 font-mono text-meta uppercase tracking-wide text-muted-foreground">
               other (not in catalog)
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -204,7 +204,7 @@ function AllowCell({
             </div>
           </div>
         )}
-        <p className="mt-3 text-[12.5px] text-muted-foreground">
+        <p className="mt-3 text-ui text-muted-foreground">
           Nothing selected = no restriction. A call that resolves outside the picked set is rejected,
           never rewritten.
         </p>
@@ -242,7 +242,7 @@ function LimRow({
         {isDef ? (
           <>
             <b>Default</b>
-            <div className="text-[11px] text-muted-foreground">all attributed projects</div>
+            <div className="text-meta text-muted-foreground">all attributed projects</div>
           </>
         ) : (
           <span className="font-mono">{name}</span>
@@ -400,7 +400,7 @@ export function RoutingRules() {
   };
 
   return (
-    <div className="space-y-[18px]">
+    <div className="space-y-4.5">
       <PageHead
         title="Routing"
         desc="Where a request goes, and what it is allowed to reach. A per-project rule (exact path, then consumer) beats the defaults."
@@ -471,7 +471,7 @@ export function RoutingRules() {
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-[12.5px] text-muted-foreground">
+                  <TableCell colSpan={3} className="text-ui text-muted-foreground">
                     No projects seen yet. They appear once an app calls the router with a key or an{" "}
                     <span className="font-mono">X-Project</span> header.
                   </TableCell>
@@ -566,7 +566,7 @@ export function RoutingRules() {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-2 text-[13px]">
+            <label className="flex items-center gap-2 text-body">
               <Checkbox checked={!!d.forceModel.enabled} onCheckedChange={(v) => set("forceModel", { ...d.forceModel, enabled: !!v })} /> force enabled
             </label>
             <Select value={d.forceModel.provider || "claudecode"} onValueChange={(v) => set("forceModel", { ...d.forceModel, provider: v })}>
@@ -597,7 +597,7 @@ export function RoutingRules() {
           <CardDescription>By design, not by omission.</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-[13px] text-muted-foreground">
+          <p className="text-body text-muted-foreground">
             A 429 means the project&apos;s pinned account is out of quota; a 5xx means the upstream
             failed. Both reach the caller unchanged. The gateway never re-answers on a different account
             or provider: doing so blows the per-org prompt cache (~12× cost) and hides who spent what.
@@ -653,14 +653,14 @@ function RoutingAdvanced({ d, set, reload, state }: any) {
 
   if (!openAdv)
     return (
-      <button className="flex items-center gap-2 py-2 text-[13px] font-medium text-muted-foreground hover:text-foreground" onClick={() => setOpenAdv(true)}>
+      <button className="flex items-center gap-2 py-2 text-body font-medium text-muted-foreground hover:text-foreground" onClick={() => setOpenAdv(true)}>
         ▸ Advanced routing and config
       </button>
     );
 
   return (
-    <div className="space-y-[18px]">
-      <button className="flex items-center gap-2 py-2 text-[13px] font-medium text-foreground" onClick={() => setOpenAdv(false)}>
+    <div className="space-y-4.5">
+      <button className="flex items-center gap-2 py-2 text-body font-medium text-foreground" onClick={() => setOpenAdv(false)}>
         ▾ Advanced routing and config
       </button>
 
@@ -678,7 +678,7 @@ function RoutingAdvanced({ d, set, reload, state }: any) {
             </Button>
           </div>
           {resolveOut != null && (
-            <pre className="max-h-[340px] overflow-auto rounded-lg border border-border bg-sunken p-3.5 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words">
+            <pre className="max-h-[340px] overflow-auto rounded-lg border border-border bg-sunken p-3.5 font-mono text-ui leading-relaxed whitespace-pre-wrap break-words">
               {resolveOut}
             </pre>
           )}
@@ -763,16 +763,16 @@ function RoutingAdvanced({ d, set, reload, state }: any) {
           <CardDescription>The only provider that bills per token.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex flex-wrap gap-[18px]">
+          <div className="flex flex-wrap gap-4.5">
             {["open", "allowlist", "off"].map((v) => (
-              <label key={v} className="flex items-center gap-2 text-[13px]">
-                <input type="radio" name="cp" checked={d.cloudPolicy === v} onChange={() => set("cloudPolicy", v)} className="accent-[var(--brand)]" />{" "}
+              <label key={v} className="flex items-center gap-2 text-body">
+                <input type="radio" name="cp" checked={d.cloudPolicy === v} onChange={() => set("cloudPolicy", v)} className="accent-brand" />{" "}
                 {v === "open" ? "open (forward anything)" : v === "allowlist" ? "allowlist only" : "off (block crazyrouter)"}
               </label>
             ))}
           </div>
           <div>
-            <label className="mb-1.5 block text-[12.5px] text-muted-foreground">
+            <label className="mb-1.5 block text-ui text-muted-foreground">
               Crazyrouter allowlist <span className="text-muted-foreground/70">comma-separated model ids</span>
             </label>
             <Input
@@ -782,7 +782,7 @@ function RoutingAdvanced({ d, set, reload, state }: any) {
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-[12.5px] text-muted-foreground">
+            <label className="mb-1.5 block text-ui text-muted-foreground">
               Default route <span className="text-muted-foreground/70">for unknown/empty/blocked models. Provider <span className="font-mono">none</span> rejects with 400.</span>
             </label>
             <div className="flex flex-wrap items-center gap-2">
@@ -868,7 +868,7 @@ function RoutingAdvanced({ d, set, reload, state }: any) {
               Add
             </Button>
           </div>
-          <p className="mt-2.5 text-[12.5px] text-muted-foreground">
+          <p className="mt-2.5 text-ui text-muted-foreground">
             Known local ids: e4b <span className="font-mono">{stg.e4b}</span> · gemma <span className="font-mono">{stg.gemma}</span> · obliterated{" "}
             <span className="font-mono">{stg.obliterated}</span>
           </p>
@@ -881,21 +881,21 @@ function RoutingAdvanced({ d, set, reload, state }: any) {
         </CardHeader>
         <CardContent className="space-y-3">
           <div>
-            <label className="mb-1.5 block text-[12.5px] text-muted-foreground">local provider (llama.cpp @ pbox GPU)</label>
+            <label className="mb-1.5 block text-ui text-muted-foreground">local provider (llama.cpp @ pbox GPU)</label>
             <Input value={d.bases.local} onChange={(e) => set("bases", { ...d.bases, local: e.target.value })} />
           </div>
           <div>
-            <label className="mb-1.5 block text-[12.5px] text-muted-foreground">crazyrouter provider</label>
+            <label className="mb-1.5 block text-ui text-muted-foreground">crazyrouter provider</label>
             <Input value={d.bases.crazyrouter} onChange={(e) => set("bases", { ...d.bases, crazyrouter: e.target.value })} />
           </div>
           <div>
-            <label className="mb-1.5 block text-[12.5px] text-muted-foreground">
+            <label className="mb-1.5 block text-ui text-muted-foreground">
               claudecode provider <span className="text-muted-foreground/70">the real Anthropic API; the account token is injected per project</span>
             </label>
             <Input value={d.bases.claudecode} onChange={(e) => set("bases", { ...d.bases, claudecode: e.target.value })} />
           </div>
           <div>
-            <label className="mb-1.5 block text-[12.5px] text-muted-foreground">
+            <label className="mb-1.5 block text-ui text-muted-foreground">
               claudecode prefix <span className="text-muted-foreground/70">models starting with this route to claudecode (default <span className="font-mono">claude</span>)</span>
             </label>
             <Input value={d.claudePrefix || ""} onChange={(e) => set("claudePrefix", e.target.value)} />
@@ -909,16 +909,16 @@ function RoutingAdvanced({ d, set, reload, state }: any) {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center gap-4">
-            <label className="flex items-center gap-2 text-[13px]">
+            <label className="flex items-center gap-2 text-body">
               <Checkbox checked={!!d.jsonEnforce} onCheckedChange={(v) => set("jsonEnforce", !!v)} /> enabled
             </label>
             <div>
-              <label className="mb-1 block text-[12.5px] text-muted-foreground">max retries</label>
+              <label className="mb-1 block text-ui text-muted-foreground">max retries</label>
               <Input type="number" min={0} max={5} className="w-[90px]" value={d.jsonMaxRetries} onChange={(e) => set("jsonMaxRetries", e.target.value)} />
             </div>
           </div>
           <div>
-            <label className="mb-1.5 block text-[12.5px] text-muted-foreground">
+            <label className="mb-1.5 block text-ui text-muted-foreground">
               Gated upstream model ids <span className="text-muted-foreground/70">these require the obliterated gate token</span>
             </label>
             <Input value={(d.gatedModels || []).join(", ")} onChange={(e) => set("gatedModels", e.target.value.split(",").map((x: string) => x.trim()).filter(Boolean))} />

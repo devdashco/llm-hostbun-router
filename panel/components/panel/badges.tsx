@@ -49,7 +49,7 @@ export function StatusBadge({ status, error }: { status: number; error?: string 
 // Identity path `<consumer>[:<job>]` — consumer carries the weight, the job rides muted. Split on the
 // FIRST colon only, same as the router.
 export function ProjectChip({ p }: { p?: string }) {
-  if (!p) return <span className="text-muted-foreground text-[11px]">(none)</span>;
+  if (!p) return <span className="text-muted-foreground text-meta">(none)</span>;
   const s = String(p);
   const i = s.indexOf(":");
   if (i < 0)

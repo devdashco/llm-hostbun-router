@@ -12,8 +12,8 @@ import { nfmt, fmtMs, fmtTime } from "@/lib/format";
 function Meta({ n, children }: { n: string; children: React.ReactNode }) {
   return (
     <div className="bg-sunken px-3 py-2">
-      <div className="text-[10.5px] text-muted-foreground">{n}</div>
-      <div className="mt-0.5 font-mono text-[13.5px]">{children}</div>
+      <div className="text-micro text-muted-foreground">{n}</div>
+      <div className="mt-0.5 font-mono text-body">{children}</div>
     </div>
   );
 }
@@ -22,7 +22,7 @@ function MsgBox({ children, danger }: { children: React.ReactNode; danger?: bool
   return (
     <div
       className={
-        "max-h-[42vh] overflow-auto rounded-lg border bg-sunken px-3.5 py-3 font-mono text-[12.5px] leading-relaxed break-words whitespace-pre-wrap " +
+        "max-h-[42vh] overflow-auto rounded-lg border bg-sunken px-3.5 py-3 font-mono text-ui leading-relaxed break-words whitespace-pre-wrap " +
         (danger ? "border-danger/35 text-danger" : "border-border")
       }
     >
@@ -81,7 +81,7 @@ export function CallDrawer({ id, onClose }: { id: number | null; onClose: () => 
             <span className="text-danger">error: {c.error}</span>
           ) : (
             <>
-              <div className="mb-[18px] grid grid-cols-[repeat(auto-fit,minmax(128px,1fr))] gap-px overflow-hidden rounded-lg border border-border bg-border">
+              <div className="mb-4.5 grid grid-cols-[repeat(auto-fit,minmax(128px,1fr))] gap-px overflow-hidden rounded-lg border border-border bg-border">
                 <Meta n="when">{fmtTime(c.ts)}</Meta>
                 <Meta n="project">{c.project || "(none)"}</Meta>
                 <Meta n="model">
@@ -114,28 +114,28 @@ export function CallDrawer({ id, onClose }: { id: number | null; onClose: () => 
                 <Meta n="ip">{c.ip || "—"}</Meta>
               </div>
               {c.error && (
-                <div className="mb-[18px]">
-                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-danger">
+                <div className="mb-4.5">
+                  <div className="mb-2 text-meta font-semibold uppercase tracking-wide text-danger">
                     error
                   </div>
                   <MsgBox danger>{c.error}</MsgBox>
                 </div>
               )}
-              <div className="mb-[18px]">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <div className="mb-4.5">
+                <div className="mb-2 text-meta font-semibold uppercase tracking-wide text-muted-foreground">
                   prompt
                 </div>
                 <MsgBox>{c.req_content || "(not stored)"}</MsgBox>
               </div>
-              <div className="mb-[18px]">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <div className="mb-4.5">
+                <div className="mb-2 text-meta font-semibold uppercase tracking-wide text-muted-foreground">
                   reply
                 </div>
                 <MsgBox>{c.resp_content || "(not stored)"}</MsgBox>
               </div>
               {c.ua && (
                 <div>
-                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <div className="mb-2 text-meta font-semibold uppercase tracking-wide text-muted-foreground">
                     client · user-agent
                   </div>
                   <MsgBox>{c.ua}</MsgBox>

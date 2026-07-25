@@ -28,7 +28,7 @@ function Sidebar({ active }: { active: string }) {
           key={slug}
           href={`/${slug}/`}
           className={cn(
-            "flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13.5px] font-medium transition-colors",
+            "flex items-center gap-2.5 rounded-md px-2 py-1.5 text-body font-medium transition-colors",
             active === slug
               ? "bg-secondary text-foreground"
               : "text-muted-foreground hover:bg-secondary hover:text-foreground",
@@ -56,12 +56,12 @@ function Shell({ active, children }: { active: string; children: React.ReactNode
         )}
       >
         <div className="flex items-center gap-2.5 px-1.5 pb-4">
-          <div className="grid size-[30px] place-items-center rounded-lg bg-primary text-[12px] font-bold text-primary-foreground">
+          <div className="grid size-[30px] place-items-center rounded-lg bg-primary text-ui font-bold text-primary-foreground">
             hb
           </div>
           <div>
-            <div className="text-[13.5px] font-semibold leading-tight">hostbun</div>
-            <div className="text-[11.5px] leading-tight text-muted-foreground/80">
+            <div className="text-body font-semibold leading-tight">hostbun</div>
+            <div className="text-meta leading-tight text-muted-foreground/80">
               llm router · control panel
             </div>
           </div>
@@ -122,16 +122,16 @@ function Login({ onOk }: { onOk: () => void }) {
   return (
     <div className="mx-auto mt-[16vh] max-w-[340px] text-center">
       <div className="mb-3.5 flex justify-center">
-        <div className="grid size-[30px] place-items-center rounded-lg bg-primary text-[12px] font-bold text-primary-foreground">
+        <div className="grid size-[30px] place-items-center rounded-lg bg-primary text-ui font-bold text-primary-foreground">
           hb
         </div>
       </div>
       <h1 className="text-lg font-semibold">llm.hostbun.cc</h1>
-      <p className="mb-5 mt-1.5 text-[13px] text-muted-foreground">
+      <p className="mb-5 mt-1.5 text-body text-muted-foreground">
         Control panel for the router. Every model call we make goes through it.
       </p>
       <div className="rounded-xl border border-border bg-card p-5 text-left">
-        <label htmlFor="pw" className="mb-1.5 block text-[12.5px] text-muted-foreground">
+        <label htmlFor="pw" className="mb-1.5 block text-ui text-muted-foreground">
           Password
         </label>
         <Input
@@ -147,7 +147,7 @@ function Login({ onOk }: { onOk: () => void }) {
         <Button className="w-full" onClick={submit}>
           Sign in
         </Button>
-        {err && <p className="mt-3 text-[13px] text-danger">{err}</p>}
+        {err && <p className="mt-3 text-body text-danger">{err}</p>}
       </div>
     </div>
   );
@@ -200,7 +200,10 @@ export function PanelGate({ active, children }: { active: string; children: Reac
 
   return (
     <>
-      <Toaster richColors position="bottom-center" />
+      {/* theme="dark" is load-bearing: the ui/sonner primitive reads next-themes, and this app has
+          no ThemeProvider (it forces .dark on <html> instead), so useTheme() falls back to "system"
+          and toasts render light on a light-mode OS. Overriding here beats editing the primitive. */}
+      <Toaster theme="dark" richColors position="bottom-center" />
       {authed === null ? (
         <Centered>…</Centered>
       ) : !authed ? (

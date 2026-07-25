@@ -45,22 +45,32 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (86 checks, ~25s)
+## Tests — `npm test` (95 checks, ~25s)
 
-Four suites, no network, no database. Run before every push.
+Five suites, no network, no database, zero deps. Run before every push.
 
+- `test/imports.test.mjs` — static check that every cross-module call is actually bound in the file
+  making it. The `src/` split left twelve module-level identifiers unimported; `require` doesn't
+  complain until the line runs.
 - `translate.test.js` — the seven translation traps.
+- `test/wire.test.mjs` — boots the real server against a fake upstream and drives every route, for
+  the same class of bug as `imports` but on the paths only a request reaches.
 - `test/router.test.mjs` — boots a real server on an OS-assigned port: pins, allowlists, job
   inheritance, the image-model refusal, merge-vs-replace endpoints, the auth gate. Written as an
   old-vs-new parity harness during the `src/` split and kept.
-- `test/ui.test.mjs` — loads the real shell + vendor bundle + module graph in jsdom, logs in, and
-  mounts **every** nav page. Nothing else type-checks or bundles the panel, so a wrong import name is
-  otherwise a blank page in prod. jsdom is a devDependency; the image builds `npm ci --omit=dev`.
-  jsdom does not run `<script type="module">`, hence the hand-built environment in that file.
-- `test/docs.test.mjs` — the docs actually render (docsify fetches its markdown at runtime, so a bad
-  `basePath` is a permanent `loading…`), every sidebar link resolves, and no secret is published.
-  Traversal is tested over a raw socket: `fetch()` strips `..` before the request leaves the process,
-  so a traversal test written with `fetch` asserts nothing.
+- `test/panel-tokens.test.mjs` — the panel's design tokens, read from **source** (so it needs no
+  `panel/` build). Fails on a bracket font size, a raw Tailwind palette class, a `foo-[var(--x)]`
+  escape, a `.dark` colour token never registered in `@theme inline` (which compiles to *nothing* —
+  the class is silently dropped), or a drifted type scale. All five had already happened; see
+  `panel/AGENTS.md` for the rules it enforces.
+
+Two more are **not** in `npm test` because they need `panel/out` or the docs build:
+
+- `npm run test:panel` (`test/panel-secrets.test.mjs`) — no secret in the static export.
+- `npm run test:docs` (`test/docs.test.mjs`) — the docs actually render (docsify fetches its markdown
+  at runtime, so a bad `basePath` is a permanent `loading…`), every sidebar link resolves, and no
+  secret is published. Traversal is tested over a raw socket: `fetch()` strips `..` before the
+  request leaves the process, so a traversal test written with `fetch` asserts nothing.
 - `docs/` — static docs, served at `docs.llm.hostbun.cc`.
 - `cccc/` — the fleet control surface (TUI, statusline, claudectl plugin/MCP) — see the
   "`cccc/`" section at the bottom. Not watched by Coolify; ships via `cccc/deploy.sh`.
