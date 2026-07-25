@@ -3,16 +3,20 @@
 Password-gated SPA at the site **root**, `https://llm.hostbun.cc/`. There is no `/admin` page any
 more; it 308s to `/`. Changes apply instantly, with no redeploy, and persist on the volume.
 
-Five pages, each with tabs where two old pages were merged (the old slugs — `/stats`, `/consumers`,
-`/accounts`, `/models`, `/crazyrouter`, `/secrets` — still work; they redirect to the right page + tab):
+Five pages, named for the direction of the wire — callers come **in**, a rule picks **where**, an
+upstream is billed **out**. Old slugs (`/identity`, `/settings`, `/stats`, `/accounts`, `/models`,
+`/crazyrouter`, `/secrets`) still work; they redirect to the right page + tab.
 
 | Page | Tabs | What it does |
 |---|---|---|
 | Overview | Health · Usage | Provider health, recent calls, activity; usage by project, model, provider |
-| Calls | — | Every request with its full prompt and reply, searchable |
-| Routing | Rules · Models & test | Per-project pins and allowlists, groups, usage limits, resolve tracer; merged catalog + one-shot test call |
-| Identity | Consumers · Accounts | The registry (who calls, what it costs, who holds a key); per-account 5h/7d usage windows, project pins, live limit refresh |
-| Settings | Crazyrouter · Secrets & gate | Crazyrouter key status/credit; rotate the crazyrouter key, the local gate, the panel password |
+| Call log | — | Every request with its full prompt and reply, searchable |
+| Routing | Rules · Models | Per-project pins and allowlists, usage limits, resolve tracer; merged catalog + one-shot test call |
+| Consumers | Consumers · Access | **Inbound.** The registry (who calls, what it costs, who holds a key); the auth gate, the local model gate, the panel password |
+| Providers | Accounts · Crazyrouter | **Outbound.** Per-account 5h/7d usage windows, project pins, live limit refresh; crazyrouter key status/credit and rotation |
+
+Renamed 2026-07-26. "Identity" used to hold the outbound Claude Max account pool and "Settings"
+opened on a provider's API key, so neither name told you what was on the page.
 
 Secrets are masked everywhere. The API never returns a key hash, a Max token, or a password.
 
