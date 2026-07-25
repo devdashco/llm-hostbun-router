@@ -50,6 +50,18 @@ http server is noisy (its SSE stream idles out and re-dials every few minutes), 
 none of that churn counts as broken; only a decisive failure does. `cccc-statusline.py
 --mcp` prints the per-server table behind the badge.
 
+The 🧩 badge is the same idea one level up — a PLUGIN that never loaded at all, which
+is quieter still: it has no MCP log for 🔌 to find, and its skills/agents/servers are
+simply absent while `/plugin` buries the reason in an "Errors" tab nobody opens.
+
+    🧩✗3 keyvault cloudflare+1   bold red, also at the front of the line
+
+Its oracle is `claude --debug plugin list` — Claude Code's OWN loader, because the
+predicate is not reproducible from the settings files (a plugin can still resolve via
+a marketplace fallback, and inferring that would mean publishing a guess as a fact).
+That costs a subprocess, so it runs `nice`d in the background at most every 30 min per
+project and the render only ever reads its cache. Silent while everything loads.
+
 Reads Claude Code's status JSON on stdin. Any segment whose data is absent this turn
 is simply omitted — nothing is fabricated (e.g. rate-limit segments only appear once
 the session has had one API response).
@@ -62,6 +74,7 @@ import calendar
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -393,6 +406,128 @@ _MCP_DOWN = ("econnrefused", "timed out", "timeout", "getaddrinfo", "enotfound",
 _MCP_GLYPH = {"auth": "🔑", "down": "💀", "err": "✖", "new": "⟳", "?": "?"}
 
 
+# --- broken-plugin segment -------------------------------------------------
+# The sibling failure to a dead MCP server, and even quieter: a plugin that never
+# LOADS. `claude` collects those into /plugin's "Errors" tab and otherwise says
+# nothing, so the skills, agents and MCP servers it would have provided are simply
+# absent — with no log dir, so the 🔌 badge above cannot see them either.
+#
+# 2026-07-25, the case this was written for: nine plugins (keyvault, cloudflare,
+# hyperdx, fix-codebase, the three LSPs, …) were recorded in installed_plugins.json
+# as installed INTO /Documents/GitHub/bofrid (scope project/local) while
+# ~/.claude/settings.json enabled them globally — so every session outside bofrid
+# reported "not cached" and silently ran without them. Fix was reinstalling each at
+# --scope user; this badge is so the next one is noticed the same day.
+#
+# The oracle is `claude --debug plugin list`, i.e. Claude Code's OWN loader — the
+# predicate it uses is not reproducible from the settings files alone (a plugin can
+# still resolve through a marketplace fallback, and inferring that would mean
+# publishing a guess as a fact). It costs a subprocess, so it follows the same
+# cache + throttled-background-spawn shape as whoami/pool/issue-state: the render
+# only ever reads a file.
+_PLG_CACHE = f"{HOME}/.claude/.cctl-plugins"        # cwd\tepoch\tname:reason,…
+_PLG_STAMP = f"{HOME}/.claude/.cctl-plugins-stamp"  # last spawn (throttle, even on fail)
+_PLG_TTL = 1800        # re-probe a project at most every 30 min
+_PLG_MINGAP = 120      # box-wide: never more than one probe every 2 min
+_PLG_MAXAGE = 10800    # a verdict older than 3h is dropped, not asserted
+_PLG_RE = re.compile(r'Plugin "([^"]+)" (not cached|is enabled)')
+
+
+def _plugin_resolve(cwd: str) -> None:
+    """Background: ask `claude` itself which plugins failed to load here, cache it."""
+    claude = shutil.which("claude")
+    if not claude or not cwd:
+        return
+    dbg = f"{HOME}/.claude/debug"
+    try:
+        before = set(os.listdir(dbg))
+    except OSError:
+        return
+    try:
+        subprocess.run([claude, "--debug", "plugin", "list"], cwd=cwd, timeout=180,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return
+    bad = {}
+    for name in sorted(set(os.listdir(dbg)) - before):
+        p = os.path.join(dbg, name)
+        try:
+            with open(p, errors="replace") as f:
+                for plug, why in _PLG_RE.findall(f.read()):
+                    bad[plug.split("@")[0]] = "cache" if why == "not cached" else "missing"
+        except OSError:
+            continue
+        try:                       # the probe's own debug file is litter — drop it
+            os.remove(p)
+        except OSError:
+            pass
+    try:
+        with open(_PLG_CACHE, "w") as f:
+            f.write(f"{cwd}\t{time.time()}\t" +
+                    ",".join(f"{k}:{v}" for k, v in sorted(bad.items())))
+    except OSError:
+        pass
+
+
+def _plugin_cached(cwd: str):
+    """[(plugin, reason)] for cwd, or None when we have no fresh verdict for it."""
+    try:
+        with open(_PLG_CACHE) as f:
+            ckey, ts, val = f.read().split("\t", 2)
+    except (OSError, ValueError):
+        return None
+    if ckey != cwd or time.time() - float(ts) > _PLG_MAXAGE:
+        return None
+    return [tuple(x.split(":", 1)) for x in val.strip().split(",") if ":" in x]
+
+
+def _plugin_spawn_if_stale(cwd: str) -> None:
+    """Kick the probe when this project's verdict is stale — throttled and detached.
+    It spawns a real `claude` (~25 s), not a file read, so it runs at the lowest
+    priority the box will give it: these machines sit near full load and the badge is
+    worth far less than a responsive foreground. A load-based skip was tried first and
+    was WRONG — pbox is pegged almost always, so it never probed at all."""
+    try:
+        with open(_PLG_CACHE) as f:
+            ckey, ts, _ = f.read().split("\t", 2)
+        if ckey == cwd and time.time() - float(ts) < _PLG_TTL:
+            return
+    except (OSError, ValueError):
+        pass
+    try:
+        with open(_PLG_STAMP) as f:
+            if time.time() - float(f.read().strip()) < _PLG_MINGAP:
+                return
+    except (OSError, ValueError):
+        pass
+    try:                                   # stamp BEFORE spawning → no thundering herd
+        with open(_PLG_STAMP, "w") as f:
+            f.write(str(time.time()))
+    except OSError:
+        return
+    cmd = ["python3", os.path.abspath(__file__), "--plugin-refresh", cwd]
+    if shutil.which("nice"):
+        cmd = ["nice", "-n", "19"] + cmd
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _plugin_seg(cwd: str) -> str:
+    """Silent while every plugin loads (the 🔌 badge already carries 'tooling is
+    fine'); a bold red `🧩✗3 keyvault cloudflare+1` the moment one doesn't."""
+    _plugin_spawn_if_stale(cwd)
+    bad = _plugin_cached(cwd)
+    if not bad:
+        return ""
+    names = " ".join(n for n, _ in bad[:2])
+    more = f"+{len(bad) - 2}" if len(bad) > 2 else ""
+    return f"{_RED}{_BLD}🧩✗{len(bad)}{_RST} {_RED}{names}{more}{_RST}"
+
+
 def _mcp_dir(name: str) -> str:
     """Server name → its log dir. Claude Code slugs every non-alphanumeric to '-',
     so `plugin:coolify:coolify-cli` lands in `mcp-logs-plugin-coolify-coolify-cli`."""
@@ -631,6 +766,12 @@ def _mcp_dump(argv: list) -> int:
     print(f"{cwd}  session {sid or '?'}\n{seg or '(no MCP logs for this session)'}\n")
     for name, state in _mcp_report(cwd, sid):
         print(f"  {_MCP_GLYPH.get(state, '✓')} {name:<28} {state}")
+    if "--no-plugins" not in argv:
+        _plugin_resolve(cwd)                       # synchronous here: you asked
+        bad = _plugin_cached(cwd)
+        print(f"\nplugins: {'all load' if not bad else f'{len(bad)} FAILED TO LOAD'}")
+        for name, why in bad or []:
+            print(f"  🧩 {name:<28} {why}")
     return 0
 
 
@@ -1347,6 +1488,10 @@ def main() -> int:
         return 0
     if "--mcp" in sys.argv:         # human: the per-server table behind the 🔌 badge
         return _mcp_dump(sys.argv[sys.argv.index("--mcp") + 1:])
+    if "--plugin-refresh" in sys.argv:  # background: ask `claude` which plugins broke
+        i = sys.argv.index("--plugin-refresh")
+        _plugin_resolve(sys.argv[i + 1] if len(sys.argv) > i + 1 else os.getcwd())
+        return 0
     if "--issue-refresh" in sys.argv:       # background: cache linked-issue OPEN/CLOSED via `gh`
         i = sys.argv.index("--issue-refresh")
         _issue_state_resolve(sys.argv[i + 1] if len(sys.argv) > i + 1 else "",
@@ -1401,6 +1546,9 @@ def main() -> int:
     mcp, mcp_alarm = _mcp_seg(cwd, d.get("session_id") or "")
     if mcp:
         line1.insert(1, mcp) if mcp_alarm else line1.append(mcp)
+    plg = _plugin_seg(cwd)          # a plugin that never LOADED — no MCP log to find
+    if plg:
+        line1.insert(1, plg)        # always an alarm; same front-of-line rule
 
     # Account cluster: WHO + HOW-HOT as one unit. The account NAME is coloured by its
     # hottest window (green healthy → red nearly dead), so the name itself is the alarm,

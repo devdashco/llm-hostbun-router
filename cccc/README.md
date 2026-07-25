@@ -58,7 +58,34 @@ idles out and re-dials every few minutes), so only a *decisive* failure moves th
 verdict; retries, drops and clean exits do not. "Configured but absent" is reported
 only when most of the expected set was found — a partial view is never published as
 "these are missing". `cccc-statusline.py --mcp [cwd] [session]` prints the table
-behind the badge.
+behind the badge (and the plugin table below).
+
+## Statusline — the 🧩 broken-plugin badge
+
+One level up, and quieter still: a **plugin that never loads** has no MCP log for 🔌
+to find, its skills/agents/servers are simply absent, and `/plugin` buries the reason
+in an "Errors" tab nobody opens.
+
+```
+🧩✗3 keyvault cloudflare+1     bold red, also at the front of line 1
+```
+
+Its oracle is `claude --debug plugin list` — Claude Code's **own** loader. The
+predicate is deliberately not reimplemented from the settings files: a plugin can
+still resolve through a marketplace fallback, so inferring it would mean publishing a
+guess as a fact. That costs a subprocess (~25 s), so it runs `nice`d in the background
+at most every 30 min per project and the render only ever reads its cache. Silent
+while everything loads.
+
+**The failure it was written for (2026-07-25).** Nine plugins — `keyvault`,
+`cloudflare`, `hyperdx`, `fix-codebase`, `frontend-design`, `skill-creator` and the
+three LSPs — were recorded in `installed_plugins.json` as installed **into
+`~/Documents/GitHub/bofrid`** (scope `project`/`local`) while `~/.claude/settings.json`
+enabled them **globally**. Every session outside bofrid therefore reported
+`Plugin "X" not cached` and ran without them — invisibly. Fix: reinstall each at user
+scope, `claude plugin install <name>@<marketplace> --scope user`. Check any box with
+`claude --debug plugin list` and grep the newest `~/.claude/debug/*.txt` for
+`not cached`.
 
 ## Accounts / limits (read before touching limit logic)
 
