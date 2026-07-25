@@ -353,10 +353,16 @@ Backfilled all ~120k rows 2026-07-12. See `archive/README.md`.
 - **The account tokens exist in exactly one place**: `anthropicPool` / `claudecodeAccountPool` inside
   `/data/config.json` on the app's volume. Not in env, not in git, no backup. Lose the volume, lose
   the subscriptions. Back it up before touching the app, the server, or the volume.
-- **The Postgres link no longer crosses the internet.** It used to: the DB was on pbox, the router on
-  hostbun, `sslmode=disable`, so every prompt, every reply and the DB password went out in cleartext.
-  Since 2026-07-10 the DB is a Coolify resource in the same project, on the same box, reachable only on
-  the internal `coolify` network. **Do not point `DATABASE_URL` back at a remote host without TLS.**
+- **⚠ The Postgres link crosses the internet again — REGRESSED, verified in prod 2026-07-26.** The
+  intent below still stands; the deployed config does not match it. The router's live `DATABASE_URL`
+  is `postgres://app:…@80.217.106.60:5435/llmrouter` — pbox's **public** IP, no TLS parameter — so
+  every prompt, every reply and the DB password are once more going out in cleartext, over a port the
+  fleet notes already list as WAN-open. Fixing this means rotating a credential and repointing a
+  live DB, so it is an operator decision, not a code change; re-point at the in-project Coolify
+  Postgres (`b8ubtmws8mnt8viw9mg0syz2`) on the internal `coolify` network and rotate the password.
+  The intent: since 2026-07-10 the DB was moved to a Coolify resource in the same project, on the
+  same box, reachable only on the internal `coolify` network — exactly to end the cleartext hop.
+  **Do not point `DATABASE_URL` back at a remote host without TLS.**
 - **`pg` returns BIGINT as a string.** Every `ts`, `id` and `SUM()` in this schema is a bigint. Left
   unparsed they break timestamp arithmetic and the shapes the admin UI expects. `server.js` installs
   type parsers for oid 20 (int8) and 1700 (numeric) at boot; don't remove them.
