@@ -386,7 +386,13 @@ export function Accounts() {
                       <TableCell className="min-w-[132px] align-top">
                         {l ? <WindowCell u={l.u5} resetSec={l.reset5} st={l.s5} /> : <span className="text-meta text-muted-foreground">no reading</span>}
                       </TableCell>
-                      <TableCell className="min-w-[132px] align-top">{l ? <WindowCell u={l.u7} resetSec={l.reset7} st={l.s7} /> : null}</TableCell>
+                      {/* "no reading", not a blank cell. The 5h column beside this one already says
+                          it, but a reader scanning the 7d column alone sees an empty cell among
+                          full bars and reads it as nothing-used — and 7d is usually the BINDING
+                          window. A null reading must never render like a zero one. */}
+                      <TableCell className="min-w-[132px] align-top">
+                        {l ? <WindowCell u={l.u7} resetSec={l.reset7} st={l.s7} /> : <span className="text-meta text-muted-foreground">no reading</span>}
+                      </TableCell>
                       <TableCell className="whitespace-nowrap font-mono text-ui align-top">
                         {nfmt(a.usage.calls)} calls
                         <br />
