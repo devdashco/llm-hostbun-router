@@ -106,14 +106,25 @@ Two more are **not** in `npm test` because they need `panel/out` or the docs bui
 
 ## Providers
 
-Three. That is the whole taxonomy. (`lane` is the old word for the same thing; a few internals
-still spell it that way.)
+Three **routing** providers — the whole of `PROVIDERS`, i.e. everything a model id can resolve to.
+(`lane` is the old word for the same thing; a few internals still spell it that way.)
 
 | provider | upstream | speaks | cost |
 |---|---|---|---|
 | `local` | llama.cpp on the pbox GPU (`bases.local`, currently `pbox.llm.hostbun.cc`, model `qwen3.5-9b`) | OpenAI | free |
 | `claudecode` | the **claudecode-account-pool** (our Claude Max logins) → `api.anthropic.com` | Anthropic | flat (subscription) |
 | `crazyrouter` | `crazyrouter.com` cloud relay (gemini etc), key injected | OpenAI | **per token** |
+
+**There is a fourth upstream, and it is deliberately not in `PROVIDERS`: `images`.**
+`CFG.bases.images` (`IMAGE_BASE`, default `https://sdturbo.bofrid.dev`) with its own `CFG.imageToken`,
+serving `POST /v1/images/generations` plus `GET /v1/templates` and `GET /v1/loras`. It is left out of
+`PROVIDERS` on purpose — it is **not a routing target**: it is picked by PATH, never by model id, it
+speaks its own request shape, and it bills GPU seconds rather than tokens. That is also why
+`imagegen`/`sd-turbo` on a *text* endpoint is a refusal (invariant: never let an image id fall
+through to crazyrouter and come back as their 404, on our bill) while the same ids are legitimate on
+the image path. It still writes `provider='images'` rows to the call log, so it IS subject to the
+retention prune (`NOT IN ('anthropic','claudecode')`) — that is intended; only Claude Code chats are
+exempt. Don't "fix" the taxonomy by folding it into `PROVIDERS`; the exclusion is the design.
 
 Legacy ids still migrate on read: `cloud`→`crazyrouter`; `claude`/`anthropic`/`wrappy`→`claudecode`.
 The old subprocess wrapper is **deleted** — the router now calls the real Anthropic API with a pinned
