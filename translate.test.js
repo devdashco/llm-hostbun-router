@@ -157,4 +157,73 @@ t("headers are synthesized, never inherited (oauth beta + version + UA)", () => 
   assert.ok(T.anthropicHeaders("t", { extraBeta: "foo,oauth-2025-04-20" })["anthropic-beta"].split(",").filter((x) => x === T.OAUTH_BETA).length === 1, "beta must dedupe");
 });
 
+// ── trap #8: prompt caching on the translated path ────────────────────────
+// A long agent loop re-sends its whole transcript every step. Without a breakpoint Anthropic
+// caches none of it — that is 1.53B uncached input tokens in a week from one caller.
+const bigText = (n) => "x".repeat(n);
+const loopBody = (turns) => {
+  const messages = [
+    { role: "system", content: "# Generation Reviewer\n" + bigText(4000) },
+    { role: "user", content: "review this run" },
+  ];
+  for (let i = 0; i < turns; i++) {
+    messages.push({ role: "assistant", content: null, tool_calls: [{ id: "t" + i, function: { name: "bash", arguments: "{}" } }] });
+    messages.push({ role: "tool", tool_call_id: "t" + i, content: bigText(2000) });
+  }
+  return { model: "claude-haiku-4-5", messages, tools: [{ function: { name: "bash", description: "", parameters: {} } }] };
+};
+const marks = (o) => JSON.stringify(o).split('"cache_control"').length - 1;
+
+t("a long translated conversation gets cache breakpoints", () => {
+  const a = T.openaiToAnthropic(loopBody(6));
+  assert.ok(marks(a) > 0, "the whole reason this exists: an agent loop must be cacheable");
+  assert.ok(marks(a) <= 4, "Anthropic 400s on a 5th breakpoint");
+  assert.deepStrictEqual(a.tools[a.tools.length - 1].cache_control, { type: "ephemeral" }, "tools are the first prefix section");
+  assert.ok(Array.isArray(a.system), "system must become blocks to carry cache_control");
+  assert.deepStrictEqual(a.system[a.system.length - 1].cache_control, { type: "ephemeral" }, "system is the second prefix section");
+});
+
+t("the message breakpoint rolls with the tail of the conversation", () => {
+  const a = T.openaiToAnthropic(loopBody(6));
+  const tailMarked = a.messages.filter((m) => Array.isArray(m.content) && m.content.some((c) => c.cache_control));
+  assert.strictEqual(tailMarked.length, 2, "two rolling breakpoints, a turn apart");
+  // They must be at the END of the conversation — a breakpoint at the head caches nothing new.
+  const idx = a.messages.map((m, i) => (Array.isArray(m.content) && m.content.some((c) => c.cache_control) ? i : -1)).filter((i) => i >= 0);
+  assert.ok(Math.max(...idx) === a.messages.length - 1, "the newest turn must carry one");
+});
+
+t("a caller's own cache_control is never overridden", () => {
+  const body = loopBody(6);
+  body.messages[1] = { role: "user", content: [{ type: "text", text: bigText(9000), cache_control: { type: "ephemeral" } }] };
+  const a = T.openaiToAnthropic(body);
+  assert.strictEqual(a.tools[a.tools.length - 1].cache_control, undefined, "an explicit breakpoint is a deliberate choice — hands off");
+});
+
+t("a short prompt is left uncached (below Anthropic's floor, a write buys nothing)", () => {
+  const a = T.openaiToAnthropic({ model: "m", messages: [{ role: "user", content: "hi" }] });
+  assert.strictEqual(marks(a), 0);
+  assert.strictEqual(typeof a.system, "undefined");
+});
+
+t("a one-shot large prompt marks tools/system but not the tail it will never re-send", () => {
+  const a = T.openaiToAnthropic({
+    model: "m",
+    messages: [{ role: "system", content: bigText(9000) }, { role: "user", content: "go" }],
+  });
+  assert.ok(Array.isArray(a.system) && a.system[0].cache_control, "system repeats across requests — mark it");
+  assert.ok(!a.messages.some((m) => Array.isArray(m.content) && m.content.some((c) => c.cache_control)), "a 2-message body has no history to roll over");
+});
+
+t("caching never changes what is actually being asked", () => {
+  const body = loopBody(6);
+  const plain = T.openaiToAnthropic(body, { cache: false });
+  const cached = T.openaiToAnthropic(body);
+  const strip = (o) => JSON.parse(JSON.stringify(o, (k, v) => (k === "cache_control" ? undefined : v)));
+  // system is blocks-vs-string by design; compare its text, everything else must be identical.
+  assert.strictEqual(strip(cached).system.map((s) => s.text).join("\n\n"), plain.system);
+  const c = strip(cached), p = { ...plain };
+  delete c.system; delete p.system;
+  assert.deepStrictEqual(c, p, "a breakpoint is metadata — model, messages and tools must be untouched");
+});
+
 console.log(`\n${pass} passed${process.exitCode ? ", SOME FAILED" : ", all green"}`);

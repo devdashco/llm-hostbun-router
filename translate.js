@@ -66,7 +66,60 @@ function toBlocks(content) {
   return [];
 }
 
-function openaiToAnthropic(body) {
+// ── trap #8: nothing on the translated path was ever cached ───────────────
+//
+// Anthropic only caches a prefix you explicitly mark with `cache_control`. Real Claude Code hits
+// native /v1/messages and marks its own, which is why pmac/pbox run at ~95% cache hits. Anything
+// arriving as OpenAI /v1/chat/completions was translated by this file, which marked nothing — so
+// every one of those requests paid full price for its whole prompt, every time.
+//
+// It stayed invisible until an agent loop showed up: autonoma re-sent a 227-message, 86k-token
+// transcript for a 42-token reply, ~113 times per verdict, at 0% cache. 1.53B uncached input
+// tokens in 7 days — ~150x the three dev boxes combined, and enough to drain the account pool.
+//
+// The prompt prefix Anthropic hashes is ordered tools → system → messages, and a breakpoint caches
+// everything up to and including itself. So marking the TAIL of each section makes each section a
+// prefix of the next, and the whole stable head of the request becomes one cache entry.
+const MAX_BREAKPOINTS = 4;   // hard Anthropic limit; a 5th is a 400, not a warning
+// Below its floor Anthropic silently declines to cache (2048 tokens on Haiku 4.5, 1024 on
+// Sonnet/Opus). Marking a short prompt buys nothing and still bills a cache_write, so don't.
+// ~4 bytes/token of JSON puts the floor near 8 KB; being conservative costs one uncached small
+// request, being wrong the other way costs a write on every small request.
+const MIN_CACHEABLE_BYTES = 8000;
+
+function markCacheBreakpoints(out) {
+  let left = MAX_BREAKPOINTS;
+  const mark = (block) => {
+    if (left <= 0 || !block || typeof block !== "object") return;
+    block.cache_control = { type: "ephemeral" };
+    left--;
+  };
+
+  if (Array.isArray(out.tools) && out.tools.length) mark(out.tools[out.tools.length - 1]);
+
+  // `system` is built as a joined string above; Anthropic takes either that or a block array, and
+  // only a block can carry cache_control. Convert only when we are actually marking it.
+  if (typeof out.system === "string" && out.system) out.system = [{ type: "text", text: out.system }];
+  if (Array.isArray(out.system) && out.system.length) mark(out.system[out.system.length - 1]);
+
+  // A rolling breakpoint on the tail of the conversation. An agent loop appends a turn per step, so
+  // THIS request's tail is the NEXT request's stable prefix — that is where the hit lands. Two of
+  // them, a turn apart, so a step that appends more than one message still finds a valid entry.
+  //
+  // Only once there is real history: on a one-shot request the tail is never re-sent, so marking it
+  // would bill a cache_write (1.25x) for a hit that never comes. tools+system still get marked —
+  // those genuinely do repeat across unrelated requests.
+  const msgs = Array.isArray(out.messages) ? out.messages : [];
+  if (msgs.length >= 3) {
+    for (let i = msgs.length - 1, found = 0; i >= 0 && found < 2; i -= 2) {
+      const c = msgs[i] && msgs[i].content;
+      if (Array.isArray(c) && c.length) { mark(c[c.length - 1]); found++; }
+    }
+  }
+  return out;
+}
+
+function openaiToAnthropic(body, opts) {
   const b = body && typeof body === "object" ? body : {};
   const systems = [];
   const messages = [];
@@ -145,6 +198,15 @@ function openaiToAnthropic(body) {
   // Deliberately dropped (Anthropic has no equivalent): frequency_penalty, presence_penalty,
   // logit_bias, n. Silently — 400-ing on them would break callers for a parameter that never
   // mattered here.
+
+  // Cache last, on the finished payload. Skipped when the caller already placed its own
+  // cache_control anywhere in the request — an explicit breakpoint is a deliberate choice about
+  // where the stable prefix ends, and ours would both override it and risk a 5th breakpoint.
+  const cache = !opts || opts.cache !== false;
+  if (cache && !JSON.stringify(b).includes('"cache_control"')
+      && JSON.stringify(out).length >= MIN_CACHEABLE_BYTES) {
+    markCacheBreakpoints(out);
+  }
   return out;
 }
 
