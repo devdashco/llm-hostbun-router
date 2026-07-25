@@ -340,6 +340,30 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   check("auto-disable is idempotent (already disabled → null)", autoDisableAccount("late", "test"), null);
   check("an auto-disabled pin now resolves to no account", accountFor("someapp"), null);
   CFG.claudecodeAccountPool = CFG.claudecodeAccountPool.map((a) => { const { disabled, ...rest } = a; return rest; });
+
+  // A reading is a snapshot; the window it describes rolls on its own. Past `reset`, "spent"
+  // describes a window that no longer exists — so an account whose weekly reset has ALREADY passed
+  // must count as usable again, even though its last harvested reading said u7=1/rejected.
+  //
+  // The weekly branch of acctSpentNow used to skip this check (the 5h branch always had it), which
+  // benched the account exactly when `soonest-weekly-reset` had steered work to it *because* it was
+  // about to reset. Reproduced before fixing: accountFor returned null — 403 no_account_for_project
+  // from an account holding a full week of headroom.
+  const { ACCT_CACHE: CACHE, ORG_OF_ACCOUNT: ORGS } = req(join(ROOT, "src/db.js"));
+  const nowMs = Date.now();
+  const prevStrategy = CFG.accountStrategy, prevPool = CFG.claudecodeAccountPool, prevCons = CFG.consumers;
+  CFG.accountStrategy = "soonest-weekly-reset";
+  CFG.consumers = { ...(CFG.consumers || {}), rolledapp: { kind: "app" } };
+  CFG.claudecodeAccountPool = [{ name: "rolled", token: "sk-ant-oat-fake-r" }];
+  ORGS.set("rolled", "org-rolled");
+  const acctReadingAt = (reset7Ms) => ({ u5: 0, u7: 1, s5: "allowed", s7: "rejected",
+    reset5: Math.floor((nowMs - 7200e3) / 1000), reset7: Math.floor(reset7Ms / 1000), ts: nowMs - 8000e3 });
+  CACHE.set("org-rolled", acctReadingAt(nowMs - 3600e3));            // weekly window rolled an hour ago
+  check("a spent weekly window past its reset is usable again", (accountFor("rolledapp") || {}).name, "rolled");
+  CACHE.set("org-rolled", acctReadingAt(nowMs + 3600e3));            // still an hour to go — genuinely spent
+  check("a spent weekly window before its reset is still spent", accountFor("rolledapp"), null);
+  CACHE.delete("org-rolled"); ORGS.delete("rolled");
+  CFG.accountStrategy = prevStrategy; CFG.claudecodeAccountPool = prevPool; CFG.consumers = prevCons;
 }
 
 {

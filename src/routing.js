@@ -217,7 +217,15 @@ function acctHealth(org) {
 const acctReading = (a) => { const org = ORG_OF_ACCOUNT.get(a.name) || a.org; return (org && ACCT_CACHE.get(org)) || null; };
 function acctSpentNow(r, now) {
   if (!r) return false;                                           // no reading → presumed available, not spent
-  if (r.s7 === "rejected" || (r.u7 || 0) >= 1) return true;       // weekly spent — 429s until reset7
+  // Both windows: spent ONLY while the reset is still ahead of us. A reading is a snapshot, and the
+  // window it describes rolls on its own — past `reset`, "spent" describes a window that no longer
+  // exists. The weekly branch used to omit this check, so a stale u7>=1 benched the account forever
+  // (readings only refresh off traffic it is no longer picked to serve, or the 30-min sweep), and it
+  // benched it at the worst possible moment: `soonest-weekly-reset` deliberately steers work to the
+  // account about to reset, then this dropped that same account the instant it did — pushing pinned
+  // apps onto a different account (prompt-cache miss) or, with a one-account pool, answering
+  // `403 no_account_for_project` from an account with a full week of headroom.
+  if ((r.s7 === "rejected" || (r.u7 || 0) >= 1) && (!r.reset7 || r.reset7 * 1000 > now)) return true; // weekly spent
   if ((r.s5 === "rejected" || (r.u5 || 0) >= 1) && (!r.reset5 || r.reset5 * 1000 > now)) return true; // 5h spent right now
   return false;
 }
