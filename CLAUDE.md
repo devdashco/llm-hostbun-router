@@ -19,10 +19,21 @@ refs may still linger in sibling repos.
   | `http.js` | `readBody`, `buildHeaders`, `proxy()`, JSON enforcement |
   | `db.js` | Postgres call log + harvested account headroom |
   | `claudecode.js` | Anthropic model catalog, per-account live usage-limit refresh |
-  | `admin.js` | the control-plane API behind the password cookie |
+  | `admin.js` | the control-plane API behind the password cookie — **the dispatcher and the auth gate** |
   | `analytics.js` | the three read-only consumption rollups — `/api/stats`, `/api/usage`, `/api/series` |
+  | `calllog.js` | the call log — `/api/calls`, `calls/facets`, `call`, `export`, `calls/clear` |
+  | `accounts.js` | the Claude Max pool and its project pins — `/api/accounts*`, `/api/pins` |
+  | `consumers.js` | the registry's HTTP face — `/api/consumers*`, key issue/revoke |
+  | `registry.js` | the only writer of the consumer registry to Postgres |
   | `telemetry.js` | call-log row shaping, HyperDX error shipping |
   | `pricing.js` | USD estimates (crazyrouter only) |
+
+  `handleAdminApi` was one ~900-line function holding a flat if-chain of ~40 routes; the four route
+  modules above were lifted out of it on 2026-07-26 (admin.js 1179 → 594, the handler → 302). Each
+  extraction was verified **byte-for-byte** against the original before committing — that check, plus
+  `imports.test.mjs`, is what makes moving control-plane code safe. **The auth gates stay in the
+  dispatcher**: `login`, `logout`, `auth`, `consumers/enforce` and the session cookie are not route
+  CRUD, and moving a route must never move the lock that guards it.
 - **`CFG` is mutated in place, never reassigned** (`setCFG()`). Every module holds the same reference;
   `CFG = merged` left the router reading a detached copy — the panel saved and changed nothing.
 - `translate.js` — OpenAI ↔ Anthropic translation. Pure, unit-tested.
