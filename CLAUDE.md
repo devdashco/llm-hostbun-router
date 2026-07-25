@@ -141,8 +141,13 @@ account's `sk-ant-oat…` token. Don't reintroduce the old name; the only place 
 
 The field is `provider` everywhere. `lane` was the old word and is **still read** on input
 (`providerOf()` accepts `{lane}` or `{provider}`), because `/data/config.json` on the volume predates
-the rename. Old call-log rows carry `provider='anthropic'`; new ones carry `'claudecode'` — queries
-and the retention prune must match **both**.
+the rename. Pre-rename call-log rows carried `provider='anthropic'`; new ones carry `'claudecode'`.
+**Counted in prod 2026-07-26: zero `anthropic` rows remain** against 450k `claudecode` — the value
+was fully migrated, so a query filtering on `'claudecode'` alone is not missing history today. Keep
+the retention prune matching **both** anyway (`NOT IN ('anthropic','claudecode')`): it is what makes
+Claude Code chats exempt from pruning, and a row carrying the old value would be deleted the moment
+that list stopped naming it. Don't go "fixing" analytics queries to add `'anthropic'` back — there is
+nothing there to find; this note used to imply otherwise and cost a detour to disprove.
 
 Routing lives in a mutable `CFG` seeded from env, overlaid with `/data/config.json` on a persistent
 volume, editable live from the panel at `/`. Changes apply without a redeploy.
