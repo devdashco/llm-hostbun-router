@@ -267,6 +267,12 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
   ACCT_DEAD.clear();
   ACCT_CACHE.set("org-late", reading({ u7: 1, s7: "rejected" }));
   check("a spent pin falls to an available account", accountFor("someapp").name, "early");
+  // A stale reading (reset7 already in the past) describes a window that no longer exists — u7>=1
+  // must NOT bench the account forever. Same reading with reset7 still ahead does bench it.
+  ACCT_CACHE.set("org-late", reading({ u7: 1, s7: "rejected", reset7: now - 60 }));
+  check("a stale spent-weekly reading (reset7 in the past) doesn't bench the pin", accountFor("someapp").name, "late");
+  ACCT_CACHE.set("org-late", reading({ u7: 1, s7: "rejected", reset7: now + 60 }));
+  check("the same reading with reset7 still ahead does bench it", accountFor("someapp").name, "early");
   // EVERY account dead/spent → fall to the pin so the caller gets ITS own 429/403, never a guess.
   ACCT_DEAD.add("early"); ACCT_DEAD.add("spent");
   check("nothing available → the pin, so the truth (429/403) reaches the caller", accountFor("someapp").name, "late");
