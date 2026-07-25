@@ -373,6 +373,43 @@ check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" 
 }
 
 {
+  // ── usage limits resolve like every other per-project rule: exact path, then consumer ────────
+  // A cap is a property of WHO calls, not of which workload they run. limitFor matched the literal
+  // string only, so a cap on `promopilot` never touched `promopilot:generatetext` — and the jobs are
+  // where the traffic is. The same trap projectRoutes hit in 2026-07-09, still standing in the one
+  // control whose job is to stop an app draining the shared pool.
+  const { createRequire } = await import("node:module");
+  const rq = createRequire(import.meta.url);
+  const { CFG: C2 } = rq(join(ROOT, "src/config.js"));
+  const { limitFor: lf, resolveLimit: rl } = rq(join(ROOT, "src/routing.js"));
+  const cap = (tokens) => ({ window: "24h", tokens, calls: 0, warnPct: 80, slowPct: 95, hard: "block" });
+  const prevLimits = C2.projectLimits, prevDefault = C2.projectLimitDefault;
+  C2.projectLimitDefault = { window: "24h", tokens: 0, calls: 0, warnPct: 80, slowPct: 95, hard: "block" };
+
+  C2.projectLimits = { promopilot: cap(1000) };
+  check("a cap on the consumer applies to the consumer", (lf("promopilot") || {}).tokens, 1000);
+  check("a cap on the consumer applies to its jobs", (lf("promopilot:generatetext") || {}).tokens, 1000);
+  // ...and it must METER at that scope too, or three jobs each get the full allowance and the cap
+  // is silently 3x what it says.
+  check("a consumer-scoped cap meters the whole consumer", rl("promopilot:generatetext").byConsumer, true);
+  check("...at the consumer's scope, not the job path", rl("promopilot:generatetext").scope, "promopilot");
+
+  // An exact-path entry still wins outright — including an all-zero one, so a single greedy job can
+  // be exempted from its consumer's cap. Falling through to the consumer here would make "exempt"
+  // unexpressible.
+  C2.projectLimits = { promopilot: cap(1000), "promopilot:heavy": cap(50) };
+  check("an exact-path cap beats the consumer's", (lf("promopilot:heavy") || {}).tokens, 50);
+  check("an exact-path cap meters that path alone", rl("promopilot:heavy").byConsumer, false);
+  C2.projectLimits = { promopilot: cap(1000), "promopilot:free": { window: "24h", tokens: 0, calls: 0, warnPct: 80, slowPct: 95, hard: "block" } };
+  check("an all-zero exact entry exempts the job from its consumer's cap", lf("promopilot:free"), null);
+
+  // A consumer with no cap of its own is unaffected — no accidental prefix matching.
+  C2.projectLimits = { promo: cap(1000) };
+  check("a different consumer is not caught by a prefix", lf("promopilot:generatetext"), null);
+  C2.projectLimits = prevLimits; C2.projectLimitDefault = prevDefault;
+}
+
+{
   // ── model cost + premium-tier catalog (pure; no server) ──────────────────────
   const { createRequire } = await import("node:module");
   const req = createRequire(import.meta.url);

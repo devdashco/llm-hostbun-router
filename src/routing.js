@@ -72,19 +72,44 @@ function enforceAllow(r, m, rule, label) {
 
 // ── per-project usage limits ────────────────────────────────────────────────
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// Resolve the effective limit for a project: exact entry (authoritative) →
-// projectLimitDefault (only when it actually caps something). null = no limit.
-function limitFor(project) {
+// Resolve the effective limit for a project. null = no limit.
+// Resolved exactly like accountFor() and projectRuleFor(): exact path, then the consumer. A cap is a
+// property of WHO calls, not of which workload they run — a limit on `promopilot` has to cover
+// `promopilot:generatetext`, because the jobs are where the traffic actually is (`promopilot` itself
+// logged 4 calls while its three jobs had ~30k between them). It did not: limitFor matched the
+// literal string only, so a cap set on a consumer fell straight through to projectLimitDefault and
+// every job under it ran uncapped. That is the same trap projectRoutes hit and fixed in 2026-07-09,
+// left standing in the one control whose whole job is to stop an app draining the shared pool.
+//
+// Returns the scope it matched at, because the cap and the meter must agree: a consumer-scoped cap
+// has to count the consumer's jobs together, or three jobs each get the full allowance and the
+// "cap" is three times what it says (see projectUsage's byConsumer).
+function resolveLimit(project) {
   if (!project) return null;
   const k = String(project).trim().toLowerCase();
   const pl = CFG.projectLimits || {};
-  if (Object.prototype.hasOwnProperty.call(pl, k)) {
-    const e = pl[k];
-    return (e && (e.tokens > 0 || e.calls > 0)) ? e : null; // explicit all-zero entry = exempt
+  const at = (key, scope, byConsumer) => {
+    const e = pl[key];
+    return (e && (e.tokens > 0 || e.calls > 0)) ? { lim: e, scope, byConsumer } : null; // all-zero entry = exempt
+  };
+  // An exact-path entry decides outright, INCLUDING an all-zero one: exempting a single greedy job
+  // from its consumer's cap has to be expressible, so `promopilot:cheapjob: {0,0}` means exempt and
+  // must not fall through to the consumer's cap or to the default.
+  if (Object.prototype.hasOwnProperty.call(pl, k)) return at(k, k, false);
+  const { consumer } = parseConsumer(k);
+  if (consumer && consumer !== k && Object.prototype.hasOwnProperty.call(pl, consumer)) {
+    return at(consumer, consumer, true);
   }
   const d = CFG.projectLimitDefault;
-  if (d && (d.tokens > 0 || d.calls > 0)) return d;
+  // The default is per-path, not per-consumer: it is a blanket "nobody should exceed this", and
+  // widening it to fold every job of a consumer together would silently tighten it for anyone who
+  // never configured a cap at all.
+  if (d && (d.tokens > 0 || d.calls > 0)) return { lim: d, scope: k, byConsumer: false };
   return null;
+}
+function limitFor(project) {
+  const r = resolveLimit(project);
+  return r ? r.lim : null;
 }
 // Rolling-window usage for a project from the call log, cached ~5s to avoid per-request SUMs.
 // `tokens` is BILLABLE tokens — total minus cache reads — not raw total_tokens. A cached read costs
@@ -95,9 +120,13 @@ function limitFor(project) {
 // an uncached one at 1/50th the total sailed through. The window is what we are protecting, so the
 // quota must count what actually spends it.
 const _usageCache = new Map();
-async function projectUsage(project, windowMs) {
+// `byConsumer` folds every job under `project` into one figure — `split_part(project,':',1)`, the
+// same first-colon split parseConsumer() uses, NOT a LIKE prefix (a consumer named `pmac_claude`
+// would have `_` read as a wildcard and swallow another consumer's usage). Used when the cap was
+// resolved at consumer scope, so the meter measures what the cap actually governs.
+async function projectUsage(project, windowMs, byConsumer = false) {
   if (!dbUp() || !project) return { tokens: 0, calls: 0 };
-  const key = project + "|" + windowMs, now = Date.now(), c = _usageCache.get(key);
+  const key = project + "|" + windowMs + (byConsumer ? "|c" : ""), now = Date.now(), c = _usageCache.get(key);
   if (c && now - c.at < 5000) return c.val;                 // ~5s cache: this is on the hot path
   let val = { tokens: 0, calls: 0 };
   // GREATEST(...,0): cache_read is part of prompt_tokens (normalizeUsage folds it in), but a row
@@ -105,7 +134,7 @@ async function projectUsage(project, windowMs) {
   const r = await dbRow(
     "SELECT COUNT(*)::int AS calls, " +
     "COALESCE(SUM(GREATEST(COALESCE(total_tokens,0) - COALESCE(cache_read,0), 0)),0)::bigint AS tokens " +
-    "FROM calls WHERE project=$1 AND ts>=$2",
+    "FROM calls WHERE " + (byConsumer ? "split_part(project,':',1)=$1" : "project=$1") + " AND ts>=$2",
     [project, now - windowMs]);
   // dbRow swallows errors and returns null → treat as no usage. A quota check must never be the
   // reason an inference request fails.
@@ -119,9 +148,11 @@ async function projectUsage(project, windowMs) {
 // or blocked. A dev consumer short-circuits to null before any cap is consulted.
 async function usageVerdict(project) {
   if (_isDev(_consumerOf(project))) return null;
-  const lim = limitFor(project);
-  if (!lim) return null;
-  const u = await projectUsage(project, WINDOW_MS[lim.window] || WINDOW_MS["24h"]);
+  const res = resolveLimit(project);
+  if (!res) return null;
+  const { lim, scope, byConsumer } = res;
+  // Meter at the scope the cap was resolved at — a consumer's cap counts its jobs together.
+  const u = await projectUsage(scope, WINDOW_MS[lim.window] || WINDOW_MS["24h"], byConsumer);
   const pt = lim.tokens > 0 ? u.tokens / lim.tokens : 0;
   const pc = lim.calls > 0 ? u.calls / lim.calls : 0;
   const pct = Math.max(pt, pc);
@@ -406,7 +437,7 @@ function baseRoute(m, key) {
 
 module.exports = {
   resolveRoute, baseRoute, providerRoute, defaultRouteResolved, projectRule, projectRuleFor,
-  enforceAllow, accountFor, autoAccount, autoDisableAccount, acctHealth, limitFor, projectUsage, usageVerdict,
+  enforceAllow, accountFor, autoAccount, autoDisableAccount, acctHealth, limitFor, resolveLimit, projectUsage, usageVerdict,
   localTarget, isClaudeModel, isGated, sleep,
   note429, note2xx, throttleDelay, throttleSnapshot,
   noteAcctCooldown, acctCooling, clearAcctCooldown,
