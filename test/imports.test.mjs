@@ -114,6 +114,39 @@ for (const rel of files) {
   }
 }
 
+
+// ── second pass: an export used as an OBJECT, never bound here ──────────────────────────────────
+// The pass above only sees a bare `name(` CALL. `claudecodeCatalog.source` is neither a call nor a
+// namespace access — it is an unbound identifier being read as an object — so admin.js threw
+// ReferenceError on every GET /api/claudecode/models until 2026-07-26, and this file stayed green.
+//
+// Deliberately NARROW. A general "any dotted name that is not bound" check was tried first and
+// flagged eleven things on a clean tree — locals declared in multi-declarator form, SQL fragments
+// surviving the strip — and a check that cries wolf eleven times gets switched off. Starting from
+// the known export list instead means it cannot flag a local, a parameter or a string.
+//
+// `bound` requires the name on the LEFT of an `=`. The first version accepted
+// `const cat = claudecodeCatalog;` as a binding of claudecodeCatalog — the value, not the binding —
+// so it could never fail. Verified both ways: zero hits clean, one hit with the bug reintroduced.
+for (const rel of files) {
+  const src = strip(fs.readFileSync(path.join(root, rel), "utf8"));
+  for (const [mod, exp] of Object.entries(exportsOf)) {
+    if (rel === `src/${mod}.js`) continue;
+    for (const name of Object.keys(exp)) {
+      if (!new RegExp(`(^|[^.\\w$])${name}\\s*\\.`).test(src)) continue;   // used as an object
+      if (new RegExp(`(^|[^.\\w$])${name}\\s*\\(`).test(src)) continue;    // a call — pass 1 owns it
+      checked++;
+      const bound = new RegExp(`(?:const|let|var|function|class)\\s+${name}\\b`).test(src)
+                 || new RegExp(`(?:const|let|var)\\s[^;\\n]*?\\b${name}\\s*=`).test(src)
+                 || new RegExp(`\\{[^{}]*\\b${name}\\b[^{}]*\\}\\s*=`).test(src);
+      if (!bound) {
+        console.log(`  FAIL  ${rel}: ${name}.… read as an object but never bound — lives in src/${mod}.js`);
+        failures++;
+      }
+    }
+  }
+}
+
 console.log(failures ? `\n${checked} references checked, ${failures} unbound` : `  ok    ${checked} cross-module references, all bound`);
 console.log(failures ? `\n0 passed, ${failures} failed` : "\n1 passed, 0 failed");
 process.exit(failures ? 1 : 0);

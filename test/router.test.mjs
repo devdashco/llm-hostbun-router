@@ -585,6 +585,35 @@ const rawPost = (path, raw) => {
     (() => { try { shipEvent("premium", { event: "premium_usage" }); shipError("err", {}); return "ok"; } catch { return "threw"; } })(), "ok");
 }
 
+console.log("admin — logout, the last route with no test:");
+{
+  // A fresh login of its own — reusing the suite-wide `cookie` would mean a broken logout (one that
+  // actually revoked something) breaks every check below this block instead of just these five.
+  const freshLoginRaw = curl(["-i", "-X", "POST", `${BASE}/api/login`, "-d", '{"password":"ddash"}']);
+  const oldCookie = (freshLoginRaw.match(/hb_admin=([^;]+)/) || [])[1] || "";
+  check("fresh login for the logout test issued a cookie", oldCookie.length > 0, true);
+
+  const logoutOut = curl([`${BASE}/api/logout`, "-X", "POST", "-H", `cookie: hb_admin=${oldCookie}`]);
+  check("logout answers ok", JSON.parse(logoutOut.split("\n<")[0]).ok, true);
+
+  const logoutRaw = curl(["-i", `${BASE}/api/logout`, "-X", "POST", "-H", `cookie: hb_admin=${oldCookie}`]);
+  check("logout's Set-Cookie clears the cookie client-side (empty value, Max-Age=0)",
+    /hb_admin=;[^\r\n]*Max-Age=0/i.test(logoutRaw), true);
+
+  // BUG, asserted precisely rather than papered over: sessions are a stateless HMAC-signed token
+  // (sign() over CFG.adminPassword + an `exp=` payload — see makeSession()/validSession() in
+  // src/admin.js). validSession() checks only the signature and the expiry; there is no
+  // server-side session store or revocation list for logout to write to. So `POST /api/logout`
+  // can only tell the CLIENT to drop the cookie (Max-Age=0) — it cannot invalidate the token
+  // itself. Replaying the OLD cookie value after "logout" still authenticates every cookie-gated
+  // route, right up to its 7-day expiry.
+  const afterLogout = curl([`${BASE}/api/state`, "-H", `cookie: hb_admin=${oldCookie}`]);
+  const [stateBody, stateStatus] = afterLogout.split("\n<");
+  check("BUG: the OLD cookie still authenticates after logout (no server-side revocation)",
+    stateStatus.replace(/[<>]/g, ""), "200");
+  check("...and it's real state, not an error body", typeof JSON.parse(stateBody).projectRoutes, "object");
+}
+
 // ── POST /api/reset — LAST, because it destroys the fixture everything above reads ──────────────
 // It unlinks CONFIG_FILE and replaces CFG with envDefaults(). Nothing covered it, and it is the one
 // remaining route that can undo the whole control plane in a single call: a reset that quietly did

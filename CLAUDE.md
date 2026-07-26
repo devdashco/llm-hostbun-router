@@ -106,10 +106,12 @@ needs a key), `reset` (restores config defaults), `calls/clear` and `consumers/p
 `reset`, `claudecode/models`, `models`, `limits`, `crazyrouter/test` and both alias routes too —
 only `logout` is left. Covering the "read-mostly tail" was not cosmetic: it found
 `GET /api/claudecode/models` throwing `ReferenceError: claudecodeCatalog is not defined` on every
-call, live. **`imports.test.mjs` cannot catch that class** — it flags a bare `name(` CALL, and this
-was an unbound identifier used as an OBJECT (`claudecodeCatalog.source`), which the guard
-deliberately treats as namespace access. A route that only reads properties off an unimported name
-is still invisible to it. **`reset`'s test runs LAST in
+call, live. `imports.test.mjs` could not catch that class at the time — it flagged a bare `name(` CALL, and this
+was an unbound identifier read as an OBJECT (`claudecodeCatalog.source`). **A second pass now covers
+it** (2026-07-26): an export of another `src/` module, used as `X.…` and never bound in the file.
+158 references checked, up from 135. It is deliberately narrow — a general "any dotted name not
+bound here" version was tried and flagged eleven things on a clean tree, and a check that cries wolf
+gets switched off. **`reset`'s test runs LAST in
 `router.test.mjs` by necessity** — it unlinks the config file and reverts `CFG` to `envDefaults()`,
 so it destroys the fixture every assertion above depends on. Add new cases before it, not after. When adding a control-plane route,
 assume nothing is watching it unless you wrote the test — the read-only routes are the well-covered
