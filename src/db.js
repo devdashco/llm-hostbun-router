@@ -56,10 +56,23 @@ function initDb() {
 
 // Fire-and-forget write. Never awaited on the hot path: an inference request must not wait on, or
 // fail because of, a cross-internet INSERT.
+// Write failures are counted, not just logged. `dbUp()` is `!!pool` — it says a Pool object was
+// constructed, which happens whenever DATABASE_URL is set and says NOTHING about the database being
+// reachable. Since the DB is across the public internet, an outage looks like this: dbReady:true, an
+// empty call log, and a stdout warning per lost row. That is indistinguishable from "no traffic" to
+// anyone reading the panel, which is precisely the failure this router keeps making elsewhere — a
+// plausible-looking value standing in for an unknown. adminState surfaces these so it cannot.
+let writeFails = 0, lastWriteErr = null, lastWriteErrAt = 0;
 function dbWrite(sql, params) {
   if (!pool) return;
-  pool.query(sql, params).catch((e) => console.warn(`[log] write failed: ${e.message}`));
+  pool.query(sql, params).catch((e) => {
+    writeFails++; lastWriteErr = e.message; lastWriteErrAt = Date.now();
+    console.warn(`[log] write failed: ${e.message}`);
+  });
 }
+// Counters since boot. Deliberately not reset by reads: an operator who sees 40k lost rows should
+// keep seeing them until the process restarts, not have the number cleared by opening the panel.
+const dbWriteHealth = () => ({ failures: writeFails, lastError: lastWriteErr, lastErrorAt: lastWriteErrAt || null });
 // Awaited read, used by the admin API. Returns [] rather than throwing so one bad panel can't 500
 // the whole dashboard.
 async function dbRows(sql, params = []) {
@@ -194,6 +207,6 @@ async function clearCalls() {
 }
 
 module.exports = {
-  initDb, dbUp, dbRows, dbRow, dbExec, dbWrite, recordCall, recordLimits, primeAcctCache, primeAcctCacheSoon, clearCalls,
+  initDb, dbUp, dbWriteHealth, dbRows, dbRow, dbExec, dbWrite, recordCall, recordLimits, primeAcctCache, primeAcctCacheSoon, clearCalls,
   ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE, clip, DATABASE_URL, CONTENT_CAP,
 };

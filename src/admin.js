@@ -20,7 +20,7 @@ const C = require("./config");
 const { CFG, setCFG, persistConfig, mergeConfig, envDefaults, loadConfig, reindexKeys, CANON, OBLIT, E4B,
         PROVIDERS, normProvider, sanitizeRule, sanitizeLimit, IMAGE_MODEL_IDS, CONFIG_FILE } = C;
 const DB = require("./db");
-const { dbUp, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
+const { dbUp, dbWriteHealth, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
 const { unpricedModels } = require("./pricing");
 const { sha256 } = require("./identity");
 const { resolveRoute, accountFor, autoAccount, acctHealth, isGated, throttleSnapshot } = require("./routing");
@@ -125,6 +125,11 @@ function adminState() {
     authMode: (CFG.auth && CFG.auth.mode) || "optional",
     logging: CFG.logging,
     loggingDbReady: dbUp(),
+    // ...and what that flag does NOT tell you. loggingDbReady is `!!pool` — true the moment
+    // DATABASE_URL is set, whether or not the database answers. Failed writes are the only signal
+    // that the log is lying, and they were going to stdout alone.
+    loggingWrites: dbWriteHealth(),
+
     // secrets — never returned in clear
     crazyrouterKeySet: !!CFG.crazyrouterKey, crazyrouterKeyMasked: mask(CFG.crazyrouterKey),
     // Each account carries its harvested headroom AND the age of that reading, so any consumer

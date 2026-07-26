@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/imports.test.mjs && node translate.test.js && node test/wire.test.mjs && node test/router.test.mjs && node test/panel-tokens.test.mjs && node test/panel-nav.test.mjs && node test/proxy-log.test.mjs && node test/telemetry-throttle.test.mjs",
+    "test": "node test/imports.test.mjs && node translate.test.js && node test/wire.test.mjs && node test/router.test.mjs && node test/panel-tokens.test.mjs && node test/panel-nav.test.mjs && node test/proxy-log.test.mjs && node test/telemetry-throttle.test.mjs && node test/db-writehealth.test.mjs",
     "test:translate": "node translate.test.js",
     "test:router": "node test/router.test.mjs",
     "test:docs": "node test/docs.test.mjs",
@@ -19,7 +19,8 @@
     "build:panel": "cd panel && npm ci && npm run build",
     "dev": "PORT=${PORT:-8787} CONFIG_FILE=${CONFIG_FILE:-./.local/config.json} DOCS_FILE=./docs/index.html PANEL_DIR=${PANEL_DIR:-$PWD/panel/out} PRICES_FILE=${PRICES_FILE:-./.local/prices.json} SESSION_INSECURE=1 node server.js",
     "dev:prod": "bash scripts/dev-prod.sh",
-    "test:telemetry": "node test/telemetry-throttle.test.mjs"
+    "test:telemetry": "node test/telemetry-throttle.test.mjs",
+    "test:dbhealth": "node test/db-writehealth.test.mjs"
   },
   "dependencies": {
     "pg": "^8.13.1"
