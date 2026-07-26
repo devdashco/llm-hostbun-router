@@ -20,7 +20,16 @@ import { createRequire } from "node:module";
 
 const require_ = createRequire(import.meta.url);
 const root = path.join(import.meta.dirname, "..");
-const MODULES = ["config", "db", "routing", "http", "identity", "telemetry", "claudecode", "pricing", "registry", "admin"];
+// EVERY module in src/, derived — not a hand-kept list. The list used to be literal, and by
+// 2026-07-26 it named ten modules while src/ held fifteen: analytics, calllog, accounts, consumers
+// and jsonenforce were all split out during that session and none was added here. Those files were
+// still SCANNED as callers, so the omission was invisible — what was missing is knowledge of their
+// EXPORTS, so calling `usageRollup()` from another file without importing it would have passed.
+// A hand-maintained list sitting next to a directory scan will drift; this cannot.
+const MODULES = fs.readdirSync(path.join(root, "src"))
+  .filter((f) => f.endsWith(".js"))
+  .map((f) => f.replace(/\.js$/, ""))
+  .sort();
 
 const exportsOf = {};
 for (const m of MODULES) {
