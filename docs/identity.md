@@ -113,9 +113,16 @@ one and revoke the old: `POST /api/consumers/keys {"name":"<consumer>"}`.
 `promopilot:generatetext` is consumer `promopilot`, job `generatetext`. The split is on the **first**
 colon only, so a job may contain colons and a consumer never can.
 
-**Only the consumer is registered. Jobs are free.** A new workload needs no config change. Pins and
-rules resolve exact-path first, then the consumer, so pinning `promopilot` covers every job under it
-while one greedy job can still be split out.
+**Only the consumer is registered. Jobs are free.** A new workload needs no config change. Pins,
+rules **and usage caps** resolve exact-path first, then the consumer, so pinning `promopilot` covers
+every job under it while one greedy job can still be split out.
+
+A cap resolved at consumer scope is also **metered** at consumer scope: a 10M-token cap on
+`promopilot` counts `promopilot:generatetext` + `promopilot:l2_metadata` + everything else together,
+so it is 10M in total rather than 10M each. An exact-path entry still wins outright — including an
+all-zero one, which is how you exempt a single job from its consumer's cap. (Caps behaved as
+literal-string-only until 2026-07-26, which meant a cap set on a consumer never applied to any of
+its jobs — and the jobs are where the traffic is.)
 
 ## Where the router looks for your identity
 
