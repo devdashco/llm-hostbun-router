@@ -4,6 +4,12 @@
 const { CFG } = require("./config");
 // keyLabel() needs it. routing does not require telemetry, so this cannot cycle.
 const { isGated } = require("./routing");
+// `clip` was USED here but never imported. It never crashed because every caller sat inside a
+// `try { ... } catch { return null; }`, so the ReferenceError was swallowed and reqContent came back
+// null — silently, on every non-claudecode call (the claudecode `full` branch returns before
+// reaching clip, which is why prompts were recorded for Claude traffic and nothing else). db does
+// not require telemetry, so this cannot cycle.
+const { clip } = require("./db");
 
 // ── error → HyperDX (OTLP logs, service.name=llm.hostbun.cc). Auth header has NO "Bearer". ──
 const HDX_KEY = process.env.HYPERDX_INGEST_API_KEY || "";
@@ -39,69 +45,86 @@ function toolsSummary(tools) {
 // conversation and how big is it": how many tools (and how many are MCP), which MCP
 // servers, the tool-schema tax in KB (the ~350K-token sink), the conversation length
 // (message count), and the system-prompt size. Fail-safe: nulls on any parse issue.
-function extractReqMeta(bodyBuf) {
-  const out = { toolCount: null, mcpTools: null, toolServers: null, toolsKb: null, msgCount: null, systemKb: null };
-  if (!bodyBuf || !bodyBuf.length) return out;
-  try {
-    const j = JSON.parse(bodyBuf.toString());
-    if (Array.isArray(j.tools) && j.tools.length) {
-      const s = toolsSummary(j.tools);
-      out.toolCount = s.count;
-      out.mcpTools = s.mcp;
-      out.toolServers = (s.servers || []).join(",") || null;
-      out.toolsKb = Math.round(JSON.stringify(j.tools).length / 1024);
-    }
-    if (Array.isArray(j.messages)) out.msgCount = j.messages.length;
-    if (j.system != null) out.systemKb = Math.round(JSON.stringify(j.system).length / 1024);
-  } catch { /* not json */ }
-  return out;
+// Parse a request body ONCE. The three extractors below each used to do their own
+// JSON.parse(bodyBuf.toString()), and proxy() calls all three on every request — so a body was
+// parsed three times and stringified to a fresh JS string three times. Measured on a 340 KB body
+// (the 227-message/86k-token agent transcript shape this router actually carries): 916 µs for the
+// three, against 280 µs for one parse. 636 µs per request of pure duplicate work, on the hottest
+// path in the process. Returns null on a non-JSON body; every extractor already treats that as
+// "nothing to report", which is why they can share one result.
+function parseReq(bodyBuf) {
+  if (!bodyBuf || !bodyBuf.length) return null;
+  try { return JSON.parse(bodyBuf.toString()); } catch { return null; }
 }
 
-function extractRequestContent(bodyBuf, full) {
-  if (!CFG.logging.content || !bodyBuf || !bodyBuf.length) return null;
-  try {
-    const j = JSON.parse(bodyBuf.toString());
-    // Full local-dev save: the conversation verbatim + a compact tools SUMMARY (not the schemas).
-    if (full) return JSON.stringify({ model: j.model, system: j.system, messages: j.messages, tools: toolsSummary(j.tools) });
-    if (Array.isArray(j.messages)) return clip(JSON.stringify(j.messages));
-    if (j.input != null) return clip(typeof j.input === "string" ? j.input : JSON.stringify(j.input));
-    if (typeof j.prompt === "string") return clip(j.prompt);
-    return null;
-  } catch { return null; }
+function reqMetaFrom(j) {
+  const out = { toolCount: null, mcpTools: null, toolServers: null, toolsKb: null, msgCount: null, systemKb: null };
+  if (!j) return out;
+  if (Array.isArray(j.tools) && j.tools.length) {
+    const s = toolsSummary(j.tools);
+    out.toolCount = s.count;
+    out.mcpTools = s.mcp;
+    out.toolServers = (s.servers || []).join(",") || null;
+    out.toolsKb = Math.round(JSON.stringify(j.tools).length / 1024);
+  }
+  if (Array.isArray(j.messages)) out.msgCount = j.messages.length;
+  if (j.system != null) out.systemKb = Math.round(JSON.stringify(j.system).length / 1024);
+  return out;
 }
+function extractReqMeta(bodyBuf) { return reqMetaFrom(parseReq(bodyBuf)); }
+
+function reqContentFrom(j, full) {
+  if (!CFG.logging.content || !j) return null;
+  // Full local-dev save: the conversation verbatim + a compact tools SUMMARY (not the schemas).
+  if (full) return JSON.stringify({ model: j.model, system: j.system, messages: j.messages, tools: toolsSummary(j.tools) });
+  if (Array.isArray(j.messages)) return clip(JSON.stringify(j.messages));
+  if (j.input != null) return clip(typeof j.input === "string" ? j.input : JSON.stringify(j.input));
+  if (typeof j.prompt === "string") return clip(j.prompt);
+  return null;
+}
+function extractRequestContent(bodyBuf, full) { return reqContentFrom(parseReq(bodyBuf), full); }
 
 // Which project a call belongs to. Apps declare it via the `X-Project` header (preferred);
 // we also accept `X-Project-Id`, a body `project`/`metadata.project` field, or the OpenAI
 // `user` field as fallbacks. Normalised to a short lowercase slug. Returns "" if unset.
 
-function extractReqParams(bodyBuf) {
+function reqParamsFrom(j) {
   const out = { effort: null, thinkingTokens: null, maxTokens: null, temperature: null, userId: null };
-  if (!bodyBuf || !bodyBuf.length) return out;
-  try {
-    const j = JSON.parse(bodyBuf.toString());
-    // effort: OpenAI sends reasoning_effort/reasoning.effort as a label. Claude Code / Anthropic
-    // /v1/messages has no effort field — the effort IS the extended-thinking budget, so we derive a
-    // label from thinking.budget_tokens too (so the dev log shows an effort tier either dialect).
-    out.effort = j.reasoning_effort || (j.reasoning && j.reasoning.effort) || null;
-    if (j.thinking && typeof j.thinking === "object") {
-      out.thinkingTokens = j.thinking.type === "enabled"
-        ? (typeof j.thinking.budget_tokens === "number" ? j.thinking.budget_tokens : null)
-        : 0;
-    } else if (typeof j.max_thinking_tokens === "number") {
-      out.thinkingTokens = j.max_thinking_tokens;
-    }
-    if (!out.effort && typeof out.thinkingTokens === "number" && out.thinkingTokens > 0) {
-      // Rough tiers matching Claude Code's effort→budget mapping (labels only; thinking_tokens keeps the raw).
-      out.effort = out.thinkingTokens >= 32000 ? "high" : out.thinkingTokens >= 8000 ? "medium" : "low";
-    }
-    const mt = j.max_tokens ?? j.max_completion_tokens;
-    if (typeof mt === "number") out.maxTokens = mt;
-    if (typeof j.temperature === "number") out.temperature = j.temperature;
-    // Claude Code stamps a per-session identity in metadata.user_id; also accept a top-level user.
-    out.userId = (j.metadata && (j.metadata.user_id || j.metadata.userId)) || (typeof j.user === "string" ? j.user : null) || null;
-  } catch { /* not json */ }
+  if (!j) return out;
+  // effort: OpenAI sends reasoning_effort/reasoning.effort as a label. Claude Code / Anthropic
+  // /v1/messages has no effort field — the effort IS the extended-thinking budget, so we derive a
+  // label from thinking.budget_tokens too (so the dev log shows an effort tier either dialect).
+  out.effort = j.reasoning_effort || (j.reasoning && j.reasoning.effort) || null;
+  if (j.thinking && typeof j.thinking === "object") {
+    out.thinkingTokens = j.thinking.type === "enabled"
+      ? (typeof j.thinking.budget_tokens === "number" ? j.thinking.budget_tokens : null)
+      : 0;
+  } else if (typeof j.max_thinking_tokens === "number") {
+    out.thinkingTokens = j.max_thinking_tokens;
+  }
+  if (!out.effort && typeof out.thinkingTokens === "number" && out.thinkingTokens > 0) {
+    // Rough tiers matching Claude Code's effort→budget mapping (labels only; thinking_tokens keeps the raw).
+    out.effort = out.thinkingTokens >= 32000 ? "high" : out.thinkingTokens >= 8000 ? "medium" : "low";
+  }
+  const mt = j.max_tokens ?? j.max_completion_tokens;
+  if (typeof mt === "number") out.maxTokens = mt;
+  if (typeof j.temperature === "number") out.temperature = j.temperature;
+  // Claude Code stamps a per-session identity in metadata.user_id; also accept a top-level user.
+  out.userId = (j.metadata && (j.metadata.user_id || j.metadata.userId)) || (typeof j.user === "string" ? j.user : null) || null;
   return out;
 }
+function extractReqParams(bodyBuf) { return reqParamsFrom(parseReq(bodyBuf)); }
+
+// Everything proxy() needs off the request body, from ONE parse. The three single-purpose
+// extractors above stay exported: they are the readable unit, and each is still correct alone.
+function extractReqAll(bodyBuf, full) {
+  const j = parseReq(bodyBuf);
+  return { reqContent: reqContentFrom(j, full), ...reqParamsFrom(j), ...reqMetaFrom(j) };
+}
+
+// Which project a call belongs to. Apps declare it via the `X-Project` header (preferred);
+// we also accept `X-Project-Id`, a body `project`/`metadata.project` field, or the OpenAI
+// `user` field as fallbacks. Normalised to a short lowercase slug. Returns "" if unset.
 
 // Normalise a usage block to {prompt_tokens, completion_tokens, total_tokens}. OpenAI already
 // uses those names; anthropic /v1/messages uses {input_tokens, output_tokens} (+ cache_* which
@@ -224,6 +247,6 @@ function applyLocalThinkingDefault(j) {
 const isChatCompletions = (url) => typeof url === "string" && url.split("?")[0].endsWith("/chat/completions");
 
 module.exports = {
-  keyLabel, toolsSummary, extractReqMeta, extractRequestContent, extractReqParams,
+  keyLabel, toolsSummary, extractReqMeta, extractRequestContent, extractReqParams, extractReqAll,
   normalizeUsage, extractResponseBody, shipError, shipEvent, applyLocalThinkingDefault, isChatCompletions,
 };
