@@ -30,34 +30,37 @@ const fail = (m, why) => { console.log(`  FAIL  ${m}${why ? `\n        ${why}` :
 
 console.log("health tab — no all-clear on an unrun check:");
 
-// The fetch must record that it failed. `.catch(() => null)` alone throws the distinction away.
-if (/api\("stats[^)]*"\)\.catch\(/.test(src)) {
-  if (/setStFailed\(/.test(src)) ok("the stats fetch records whether it succeeded (setStFailed)");
-  else fail("the stats fetch swallows its own failure",
-    "api(\"stats\").catch(() => null) leaves `st` null, which is indistinguishable from a clean read");
-} else ok("the stats fetch no longer swallows failures with a bare .catch");
+// EVERY fetch that feeds a finding must record its own failure. A `catch {}` that only stops the
+// throw leaves the source null, which is indistinguishable from a clean read — and the check it
+// feeds silently stops running. `recent` is exempt: it drives a table, not a finding.
+const FEEDS_A_FINDING = ["stats", "accounts"];
+for (const srcName of FEEDS_A_FINDING) {
+  const re = new RegExp(`missing\\.push\\("${srcName}"\\)`);
+  if (re.test(src)) ok(`a failed /api/${srcName} is recorded, not swallowed`);
+  else fail(`/api/${srcName} fails silently`, `nothing pushes "${srcName}" onto the missing list, so its check just stops running`);
+}
 
-// Reset on success, or one transient blip pins the warning up until reload.
-if (/setStFailed\(s == null\)|setStFailed\(false\)/.test(src)) ok("...and clears the flag when a later poll succeeds");
-else fail("the flag is never cleared", "a transient failure would leave the warning permanently on");
+// Assigned wholesale each poll, or a recovered source keeps warning until reload.
+if (/setUnavailable\(missing\)/.test(src)) ok("...and the list is reassigned each poll, so a recovered source clears itself");
+else fail("the unavailable list is never reset", "a transient failure would leave the warning permanently on");
 
 // Issues must actually receive it.
 const sig = src.match(/function Issues\(\{([^}]*)\}/);
-if (sig && /stFailed/.test(sig[1])) ok("Issues() receives stFailed");
-else fail("Issues() does not take stFailed", `signature was: ${sig ? sig[1].trim() : "not found"}`);
-if (/<Issues[^>]*stFailed=\{/.test(src)) ok("...and the call site passes it");
-else fail("the <Issues /> call site does not pass stFailed");
+if (sig && /unavailable/.test(sig[1])) ok("Issues() receives the unavailable list");
+else fail("Issues() does not take `unavailable`", `signature was: ${sig ? sig[1].trim() : "not found"}`);
+if (/<Issues[^>]*unavailable=\{/.test(src)) ok("...and the call site passes it");
+else fail("the <Issues /> call site does not pass `unavailable`");
 
 // The ordering invariant — the whole point. The finding must be pushed while it can still stop the
 // banner. Pushed after the `if (!probs.length)` early return, it is dead code on exactly the path
 // that needs it.
-const iFlag = src.indexOf("if (stFailed)");
+const iFlag = src.indexOf("(unavailable || [])");
 const iEmpty = src.indexOf("if (!probs.length)");
-if (iFlag < 0) fail("no `if (stFailed)` finding is raised at all");
+if (iFlag < 0) fail("no finding is raised for an unavailable source at all");
 else if (iEmpty < 0) fail("could not find the empty-findings early return — this suite has drifted from the source");
 else if (iFlag < iEmpty) ok("the 'stats unavailable' finding is raised BEFORE the all-clear early return");
 else fail("the 'stats unavailable' finding is raised too late",
-  `if (stFailed) at ${iFlag} comes after if (!probs.length) at ${iEmpty} — the banner already returned`);
+  `the unavailable-source loop at ${iFlag} comes after if (!probs.length) at ${iEmpty} — the banner already returned`);
 
 // Every st-derived read stays guarded. `st.foo` outside a `st &&` / `st?.` guard throws on the very
 // failure this file is about, turning a degraded page into a blank one.

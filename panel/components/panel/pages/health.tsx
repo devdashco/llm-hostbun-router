@@ -15,7 +15,7 @@ import { ago, nfmt, fmtMs, fmtTime, SLOW_MS, WARN, DANGER } from "@/lib/format";
 
 const SEV: Record<string, string> = { down: DANGER, dry: DANGER, err: DANGER, slow: WARN, refusal: WARN, force: WARN, premium: WARN };
 
-function Issues({ health, st, state, pool, stFailed }: any) {
+function Issues({ health, st, state, pool, unavailable }: any) {
   const probs: [string, string][] = [];
   ["local", "claudecode", "crazyrouter"].forEach((l) => {
     const r = health[l];
@@ -64,9 +64,14 @@ function Issues({ health, st, state, pool, stFailed }: any) {
   // worst possible default for this screen: the observability page reporting all-clear precisely
   // when its observability broke. A null `st` cannot distinguish "clean" from "never arrived", so
   // the fetch has to say which.
-  if (stFailed)
-    probs.push(["err", "Traffic stats unavailable (/api/stats failed) — provider reachability is all that was checked. "
-      + "Slow-provider, error-rate, JSON-refusal, premium-spend and unattributed-image checks did NOT run."]);
+  const SKIPPED: Record<string, string> = {
+    stats: "slow-provider, error-rate, JSON-refusal, premium-spend and unattributed-image",
+    accounts: "stranded-pin",
+  };
+  ((unavailable || []) as string[]).forEach((srcName) => {
+    probs.push(["err", `/api/${srcName} did not load — the ${SKIPPED[srcName] || srcName} check(s) did NOT run. `
+      + "This page is reporting on less than it looks like."]);
+  });
   if (!probs.length)
     return (
       <div className="mb-4.5 rounded-xl border border-ok/35 bg-ok/[0.07] px-4 py-3 text-body">
@@ -162,13 +167,20 @@ export function Health() {
   const { state, openCall } = useApp();
   const [health, setHealth] = useState<any>(null);
   const [st1h, setSt1h] = useState<any>(null);
-  const [stFailed, setStFailed] = useState(false);
+  const [unavailable, setUnavailable] = useState<string[]>([]);
   const [recent, setRecent] = useState<any[] | null>(null);
   const [series, setSeries] = useState<any>(null);
   const [ovWin, setOvWin] = useState("6h");
   const [ovMetric, setOvMetric] = useState("n");
   const [pool, setPool] = useState<any>(null);
   const load = useCallback(async () => {
+    // Every panel below is fed by its own request, and each one used to fail into a silent `null`.
+    // That is fine for a table (it renders empty) and wrong for a FINDING: Issues() gates six checks
+    // on `st` and the stranded-pin check on `pool`, so a failed fetch removed the check rather than
+    // reporting one, and the page settled on "All healthy". Track which sources did not arrive and
+    // let Issues() say so. A list rather than a flag per fetch, because the next panel added here
+    // would otherwise reintroduce exactly this bug.
+    const missing: string[] = [];
     try {
       const [h, s] = await Promise.all([
         api("health"),
@@ -176,21 +188,23 @@ export function Health() {
       ]);
       setHealth(h);
       setSt1h(s);
-      // Reset on success too: a transient failure must not leave the warning up forever.
-      setStFailed(s == null);
+      if (s == null) missing.push("stats");
     } catch {
-      /* ignore */
+      missing.push("stats");
     }
     try {
       setRecent(((await api("calls?limit=18")) as any).rows || []);
     } catch {
-      /* ignore */
+      /* the recent-calls table renders empty on its own; it drives no finding */
     }
     try {
       setPool(await api("accounts"));
     } catch {
-      /* ignore */
+      missing.push("accounts");
     }
+    // Assigned wholesale from this poll, so a source that recovers clears itself and a transient
+    // failure cannot pin the warning up until reload.
+    setUnavailable(missing);
   }, []);
   useEffect(() => {
     load();
@@ -236,7 +250,7 @@ export function Health() {
   return (
     <>
       {head}
-      <Issues health={health} st={st1h} state={state} pool={pool} stFailed={stFailed} />
+      <Issues health={health} st={st1h} state={state} pool={pool} unavailable={unavailable} />
       <StatGrid>
         <Stat label="Providers up">{up < 3 ? <span className="text-danger">{up} / 3</span> : up + " / 3"}</Stat>
         <Stat label="Pool">{poolN ? `${poolN} account${poolN === 1 ? "" : "s"}` : <span className="text-danger">none</span>}</Stat>
