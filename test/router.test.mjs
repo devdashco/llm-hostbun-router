@@ -94,6 +94,25 @@ console.log("routing — the paid door stays shut:");
 check("imagegen refused on a text endpoint", route("imagegen", "x"), { blocked: true });
 check("sd-turbo refused too", route("sd-turbo", "x"), { blocked: true });
 
+console.log("admin — minting and revoking credentials:");
+// registry/keys mints an sk-llm-; both revoke routes destroy one. A key that authenticates until
+// the next registry write and then silently vanishes is not hypothetical here — it is what the
+// legacy CFG-writing path did (reproduced 2026-07-10, fixed in c385a5e). The rule that came out of
+// that is: a registry write with no DB REFUSES. None of these three routes was covered until now.
+{
+  const issued = api("registry/keys", { name: "brand-new-consumer", kind: "app" });
+  check("minting a key needs the DB", issued.error, "registry unavailable: no database connection");
+  check("...and hands back no secret to store", issued.key, undefined);
+  check("revoking via the registry route needs the DB",
+    api("registry/keys/revoke", { name: "acme", id: "deadbeef" }).error, "registry unavailable: no database connection");
+  check("revoking via the consumers route needs the DB",
+    api("consumers/keys/revoke", { name: "acme", id: "deadbeef" }).error, "registry unavailable: no database connection");
+  // Validation still answers without a DB — a caller's error should be about their request, not our
+  // infrastructure. This is the line that keeps "refuses" from degrading into "always 503".
+  check("a mint with no name is a validation error, not a DB error",
+    /name/i.test(api("registry/keys", { kind: "app" }).error || ""), true);
+}
+
 console.log("admin — the destructive routes, with no database to destroy:");
 // calls/clear wipes the call log; consumers/purge deletes an unregistered caller's history. Neither
 // had a test until 2026-07-26, which is the wrong way round — the read-only routes were covered
