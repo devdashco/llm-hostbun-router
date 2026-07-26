@@ -16,7 +16,7 @@ refs may still linger in sibling repos.
   | `config.js` | live `CFG`, env + `/data/config.json`, sanitizers, key index |
   | `identity.js` | consumer/job paths, API keys, `authenticate()` |
   | `routing.js` | pins, allowlists, usage limits, account pinning |
-  | `http.js` | `readBody`, `buildHeaders`, `proxy()`, JSON enforcement |
+  | `http.js` | `readBody`/`readJson`, `buildHeaders`, `proxy()`, JSON enforcement — **536 lines, over the 500 budget** |
   | `db.js` | Postgres call log + harvested account headroom |
   | `claudecode.js` | Anthropic model catalog, per-account live usage-limit refresh |
   | `admin.js` | the control-plane API behind the password cookie — **the dispatcher and the auth gate** |
@@ -65,7 +65,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (219 checks, ~25s)
+## Tests — `npm test` (211 checks, ~25s)
 
 Seven suites, no network beyond loopback, no database, zero deps. Run before every push.
 
@@ -97,6 +97,16 @@ Seven suites, no network beyond loopback, no database, zero deps. Run before eve
   silently. The image-error branch did: a successful image call was logged and a failed one was not,
   so during the 2026-07-26 ingress outage the log read "no image traffic" instead of "image traffic
   failing" — while a *refused* connection, handled higher up, recorded normally and hid the gap.
+
+**The suite has teeth — probed, not assumed (2026-07-26).** Deliberately breaking each of the five
+load-bearing invariants turns the gate red: an allowlist that substitutes instead of refusing
+(invariant 2), a disabled account served anyway, an image id allowed on a text endpoint, the
+`max_tokens` default dropped (trap #1), and `markCacheBreakpoints` neutered (trap #8 — the change
+that took live cache hits 0% → 96%). Two caveats worth keeping: a probe is only as good as its
+anchor — one of these first read as UNCAUGHT because the patch landed on a comment mentioning
+`max_tokens` rather than the assignment — and this was a one-off measurement, not a harness. A
+brittle mutation harness that silently stops matching is the `imports.test.mjs` failure mode again,
+so this is recorded as a fact with a date rather than automated.
 
 Two more are **not** in `npm test` because they need `panel/out` or the docs build:
 
