@@ -92,6 +92,11 @@ console.log("proxy() early returns still record:");
   rows.length = 0;
   const res = fakeRes();
   await proxy(fakeReq("/v1/templates", "GET"), res, BASE, { bodyBuf: Buffer.alloc(0), provider: "images" });
+  // This one happens to record synchronously — the stub 504s, so the image-error branch writes the
+  // row before proxy returns. Waiting anyway: the difference between this case and the vacuous one
+  // below is only which branch the upstream steers into, and a stub that started answering 200 would
+  // silently turn this into an assertion that cannot fail.
+  await new Promise((r) => { res.on("end", r); res.on("finish", r); setTimeout(r, 250); });
   if (rows.length !== 1) bad("a GET through the image provider is recorded", `got ${rows.length} rows`);
   else {
     ok("a GET through the image provider is recorded");

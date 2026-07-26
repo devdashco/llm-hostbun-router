@@ -139,6 +139,20 @@ SCREAMING_CASE names are covered without being exported). Trimming them shrinks 
 that is genuinely dead — no caller anywhere, internal or external — is a different thing and should
 go: `extractReqMeta` and `extractReqParams` were removed on that basis the same day.
 
+**Every suite was probed individually, not just the invariants (2026-07-26).** One targeted
+mutation per suite, all eight caught it: `imports` (drop telemetry's `clip` import), `translate`
+(drop the max_tokens default), `router` (serve a disabled account), `wire` (typo a dispatch binding),
+`panel-tokens` (drop `usd`'s null guard), `panel-nav` (drop a slug from `UI_ROUTES`), `proxy-log`
+(stop recording image requests), `telemetry-throttle` (disable the repeat gate).
+
+**The failure mode to watch for when adding cases is an assertion that cannot fail.** Four turned up
+this session, all in tests written the same day as the code. The recurring one:  `proxy()` RETURNS
+BEFORE its response stream finishes — on the streaming path the call-log row is written from the
+`end` handler — so anything asserted straight after `await proxy(...)` checks a row that has not been
+written yet and passes whatever the code does. Wait for `end`/`finish` first. The other was a
+response fake that was a plain object rather than a `Writable`, which held up only while the tests
+happened to drive early-return branches. Mutating is what found all four; reading them did not.
+
 **The suite has teeth — probed, not assumed (2026-07-26).** Deliberately breaking each of the five
 load-bearing invariants turns the gate red: an allowlist that substitutes instead of refusing
 (invariant 2), a disabled account served anyway, an image id allowed on a text endpoint, the
