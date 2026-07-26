@@ -95,6 +95,18 @@ console.log("routing — the paid door stays shut:");
 check("imagegen refused on a text endpoint", route("imagegen", "x"), { blocked: true });
 check("sd-turbo refused too", route("sd-turbo", "x"), { blocked: true });
 
+console.log("admin — the alias routes:");
+// consumers/alias and registry/alias fold a legacy caller name onto its canonical consumer. Both
+// write the registry, so both must REFUSE without a DB rather than write CFG — the same rule as
+// key issuance. Driven here rather than in wire.test.mjs: 503 is the CORRECT answer, and that suite
+// treats any 5xx as the router breaking.
+{
+  check("consumers/alias needs the DB",
+    api("consumers/alias", { alias: "old-name", consumer: "acme" }).error, "registry unavailable: no database connection");
+  check("registry/alias needs the DB",
+    api("registry/alias", { alias: "old-name", consumer: "acme" }).error, "registry unavailable: no database connection");
+}
+
 console.log("admin — minting and revoking credentials:");
 // registry/keys mints an sk-llm-; both revoke routes destroy one. A key that authenticates until
 // the next registry write and then silently vanishes is not hypothetical here — it is what the

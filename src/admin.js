@@ -286,18 +286,24 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   // GET is cached (whatever the last refresh found); POST forces a round trip.
   if (sub === "claudecode/models" && (req.method === "GET" || req.method === "POST")) {
     if (req.method === "POST") await refreshClaudecodeModels(`admin ip=${ip}`);
+    // claudecode.js exports this as a GETTER — `claudecodeCatalog: () => claudecodeCatalog` — because
+    // the catalog is reassigned on every refresh, so a value captured at require time would freeze at
+    // the boot seed. This read used the name as a bare variable and never imported it either way, so
+    // the route threw ReferenceError on EVERY call; the process-wide fatal-guard swallowed it and the
+    // container stayed healthy while the panel's Models tab got nothing.
+    const cat = CC.claudecodeCatalog();
     return sendJson(res, 200, {
       advertised: CFG.claudecodeModels,
       seed: [...C.CLAUDECODE_MODEL_SEED],
       aliases: [...C.CLAUDECODE_MODEL_ALIASES],
-      source: claudecodeCatalog.source,
-      checkedAt: claudecodeCatalog.ts || null,
-      sweptAccounts: claudecodeCatalog.accounts || [],
-      failedAccounts: claudecodeCatalog.failed || [],
-      error: claudecodeCatalog.error,
+      source: cat.source,
+      checkedAt: cat.ts || null,
+      sweptAccounts: cat.accounts || [],
+      failedAccounts: cat.failed || [],
+      error: cat.error,
       // `accounts` = which orgs list this id. An id offered by only some accounts will 404 on the
       // others, so a project pinned to one of those cannot use it however it is advertised.
-      models: (claudecodeCatalog.models || []).map((m) => ({ id: m.id, display_name: m.display_name, created_at: m.created_at, accounts: m.accounts || [] })),
+      models: (cat.models || []).map((m) => ({ id: m.id, display_name: m.display_name, created_at: m.created_at, accounts: m.accounts || [] })),
     });
   }
 

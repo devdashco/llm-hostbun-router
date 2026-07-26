@@ -110,6 +110,14 @@ const cookie = (login.headers.getSetCookie?.() || []).join("; ");
 const adminGet = (p) => fetch(`http://127.0.0.1:${PORT}${p}`, { headers: { cookie }, signal: AbortSignal.timeout(8000) })
   .then(async (r) => { await r.arrayBuffer(); return r.status; })
   .catch((e) => `ERR ${e.name === "TimeoutError" ? "timed out (hung)" : e.message}`);
+// Same, for the POST side of the control plane. router.test.mjs cannot drive the routes that touch
+// a provider — its header says so, and its seed points bases.local at the real pbox host with
+// bases.crazyrouter defaulting to the real crazyrouter.com, so a test there would leave the
+// network. HERE every base is the loopback fake above, which is why these belong in this file.
+const adminPost = (p, body) => fetch(`http://127.0.0.1:${PORT}${p}`,
+  { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout(8000) })
+  .then(async (r) => { await r.arrayBuffer(); return r.status; })
+  .catch((e) => `ERR ${e.name === "TimeoutError" ? "timed out (hung)" : e.message}`);
 
 routes.push(
   ["POST /api/login", () => Promise.resolve(login.status)],
@@ -133,6 +141,14 @@ routes.push(
   // would have shipped. Both take a query string, which is the half of the route that throws late.
   ["GET  /api/usage?win=1h", () => adminGet("/api/usage?win=1h")],
   ["GET  /api/series?window=1h&by=consumer", () => adminGet("/api/series?window=1h&by=consumer")],
+  // The read-mostly tail of the control plane, uncovered until 2026-07-26. Low blast radius each,
+  // but they are the routes that read a query string or call a provider, which is precisely the
+  // shape that hung the whole panel when the src/ split dropped a require (see this file's header).
+  ["GET  /api/models", () => adminGet("/api/models")],
+  ["GET  /api/limits", () => adminGet("/api/limits")],
+  ["GET  /api/claudecode/models", () => adminGet("/api/claudecode/models")],
+  ["GET  /api/crazyrouter", () => adminGet("/api/crazyrouter")],
+  ["POST /api/crazyrouter/test", () => adminPost("/api/crazyrouter/test", { key: "sk-test-not-a-real-key" })],
   ["GET  /api/consumers", () => adminGet("/api/consumers")],
   ["GET  /api/developers", () => adminGet("/api/developers")],
   // The registry's read surface. Without a DB these answer 503, not 500 or a hang — a caller must be
