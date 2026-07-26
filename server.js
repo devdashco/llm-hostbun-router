@@ -214,8 +214,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   let bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
-  let model = null;
-  if (bodyBuf.length) { try { model = JSON.parse(bodyBuf.toString()).model; } catch { /* not json */ } }
+  // Parse the body ONCE here and reuse it: `model` and the project fallback in extractProject both
+  // want it, and re-parsing a 340 KB agent transcript costs ~280 µs a time. null = not JSON.
+  let reqJson = null;
+  if (bodyBuf.length) { try { reqJson = JSON.parse(bodyBuf.toString()); } catch { /* not json */ } }
+  const model = reqJson && reqJson.model != null ? reqJson.model : null;
   const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   // Identity. A valid key OUTRANKS anything the caller says about itself: the consumer comes from
   // the key, and only the job half of X-Project (or an X-Job header) is still taken on trust — a job
@@ -224,10 +227,10 @@ const server = http.createServer(async (req, res) => {
   const auth = authMode === "off" ? null : authenticate(req);
   let project;
   if (auth && auth.ok) {
-    const job = String(req.headers["x-job"] || "").trim().toLowerCase() || parseConsumer(extractProject(req, bodyBuf)).job;
+    const job = String(req.headers["x-job"] || "").trim().toLowerCase() || parseConsumer(extractProject(req, bodyBuf, reqJson)).job;
     project = job ? `${auth.consumer}:${job}` : auth.consumer;
   } else {
-    project = extractProject(req, bodyBuf);
+    project = extractProject(req, bodyBuf, reqJson);
   }
   const route = resolveRoute(model, project);
   const provider = route.provider;

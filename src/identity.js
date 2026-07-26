@@ -4,12 +4,18 @@
 const crypto = require("node:crypto");
 const { CFG, keyIndex } = require("./config");
 
-function extractProject(req, bodyBuf) {
+// `parsed` is the caller's already-parsed body, when it has one. server.js parses the body a line
+// earlier to read `.model`, and this re-parsed the same bytes to look for a project field — on a
+// 340 KB agent transcript that is ~280 µs of duplicate work, and it fires on the NORMAL path now:
+// with key-based auth the key identifies the caller, so a well-behaved client sends no X-Project
+// header at all and this falls through to the body every time. Pass it when you have it; the
+// signature stays back-compatible for callers that don't (the 401 path, which is not hot).
+function extractProject(req, bodyBuf, parsed) {
   let p = req.headers["x-project"] || req.headers["x-consumer"] || req.headers["x-project-id"] || "";
-  if (!p && bodyBuf && bodyBuf.length) {
+  if (!p && (parsed || (bodyBuf && bodyBuf.length))) {
     try {
-      const j = JSON.parse(bodyBuf.toString());
-      p = j.project || (j.metadata && j.metadata.project) || j.user || "";
+      const j = parsed !== undefined ? parsed : JSON.parse(bodyBuf.toString());
+      if (j) p = j.project || (j.metadata && j.metadata.project) || j.user || "";
     } catch { /* not json */ }
   }
   return normalizeConsumerPath(String(p || "").trim().toLowerCase().slice(0, 64));

@@ -393,6 +393,34 @@ const rawPost = (path, raw) => {
 }
 
 {
+  // ── extractProject accepts a pre-parsed body, and must answer identically either way ─────────
+  // server.js parses the body to read `.model`, then extractProject re-parsed the same bytes to
+  // look for a project field. On a 340 KB agent transcript that is ~280 µs of duplicate work, and
+  // it fires on the NORMAL path: with key-based auth a well-behaved client sends no X-Project
+  // header, so the lookup always falls through to the body. The optional third argument shares the
+  // parse. These pin the equivalence — including the case that would bite, a non-JSON body where
+  // server.js passes null and `null` must not be read as an object nor trigger a re-parse.
+  const { createRequire: cr } = await import("node:module");
+  const rq2 = cr(import.meta.url);
+  const { extractProject: ep } = rq2(join(ROOT, "src/identity.js"));
+  const hdrs = (h) => ({ headers: h });
+  const bUser = Buffer.from(JSON.stringify({ model: "m", user: "promopilot", messages: [] }));
+  const bMeta = Buffer.from(JSON.stringify({ metadata: { project: "redbut" } }));
+  check("body `user` fallback (buffer only)", ep(hdrs({}), bUser), "promopilot");
+  check("body `user` fallback (pre-parsed)", ep(hdrs({}), bUser, JSON.parse(bUser)), "promopilot");
+  check("metadata.project (buffer only)", ep(hdrs({}), bMeta), "redbut");
+  check("metadata.project (pre-parsed)", ep(hdrs({}), bMeta, JSON.parse(bMeta)), "redbut");
+  check("an X-Project header still beats the body", ep(hdrs({ "x-project": "acme" }), bUser, JSON.parse(bUser)), "acme");
+  // Proves the shared parse is actually USED, not just accepted: hand it a parsed object that
+  // disagrees with the buffer. If the buffer were re-parsed anyway the answer would be "fromBuffer".
+  check("the pre-parsed body is used, the buffer is not re-parsed",
+    ep(hdrs({}), Buffer.from(JSON.stringify({ user: "fromBuffer" })), { user: "fromParsed" }), "fromparsed");
+  check("a non-JSON body with parsed=null is no project", ep(hdrs({}), Buffer.from("not json"), null), "");
+  check("a non-JSON body with no parsed arg is no project", ep(hdrs({}), Buffer.from("not json")), "");
+  check("an empty body is no project", ep(hdrs({}), Buffer.alloc(0), null), "");
+}
+
+{
   // ── usage limits resolve like every other per-project rule: exact path, then consumer ────────
   // A cap is a property of WHO calls, not of which workload they run. limitFor matched the literal
   // string only, so a cap on `promopilot` never touched `promopilot:generatetext` — and the jobs are
