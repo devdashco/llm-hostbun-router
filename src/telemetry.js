@@ -207,8 +207,44 @@ function extractResponseBody(buf, isStream) {
 
 // One OTLP log record → HyperDX. Fire-and-forget; a no-op when no ingest key is configured, so it
 // never blocks or fails a request. `severityNumber` follows the OTLP scale (ERROR=17, WARN=13, INFO=9).
+// Repeat collapse. Every occurrence used to ship, so ONE persistently broken upstream buries
+// everything else: measured 2026-07-26, the dead image ingress had put 601 copies of
+// "upstream 504 POST /v1/images/generations" into HyperDX against ~529 rows of all other signals
+// combined — more than half the router's error volume was a single fault repeating.
+//
+// The rule is never to drop a DISTINCT signal, only repeats of one already reported. A signature is
+// the severity + message (attrs vary per call: ip, model, project), so the first occurrence ships
+// immediately and further identical ones are summarised once a minute carrying how many were seen.
+// A new fault is therefore never delayed — only a fault you have already been told about.
+// Env-tunable only so the suppressed-COUNT path is testable without a 60s sleep; production never
+// sets it. An untestable branch is one that rots, and the count is the part that makes suppression
+// honest rather than lossy.
+const SHIP_WINDOW_MS = parseInt(process.env.SHIP_WINDOW_MS || "60000", 10);
+const _shipSeen = new Map();   // signature -> { at, suppressed }
+function shipThrottle(sig, now) {
+  const e = _shipSeen.get(sig);
+  if (!e || now - e.at >= SHIP_WINDOW_MS) {
+    const suppressed = e ? e.suppressed : 0;
+    _shipSeen.set(sig, { at: now, suppressed: 0 });
+    // Prune opportunistically: an unbounded map keyed by message text is a slow leak on a router
+    // that runs for weeks. Anything untouched for 10 windows cannot be mid-suppression.
+    if (_shipSeen.size > 500) {
+      for (const [k, v] of _shipSeen) if (now - v.at > SHIP_WINDOW_MS * 10) _shipSeen.delete(k);
+    }
+    return { send: true, suppressed };
+  }
+  e.suppressed++;
+  return { send: false, suppressed: 0 };
+}
+
 function shipLog(severityText, severityNumber, message, attrs) {
   if (!HDX_KEY) return;
+  const gate = shipThrottle(severityText + "\u0000" + message, Date.now());
+  if (!gate.send) return;
+  if (gate.suppressed > 0) {
+    attrs = { ...(attrs || {}), repeats_suppressed: gate.suppressed, repeat_window_s: SHIP_WINDOW_MS / 1000 };
+    message = `${message} (+${gate.suppressed} more in the last ${SHIP_WINDOW_MS / 1000}s)`;
+  }
   const payload = { resourceLogs: [{
     resource: { attributes: [
       { key: "service.name", value: { stringValue: "llm.hostbun.cc" } },

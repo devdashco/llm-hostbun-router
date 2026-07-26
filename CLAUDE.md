@@ -65,9 +65,9 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (255 checks, ~25s)
+## Tests — `npm test` (264 checks, ~25s)
 
-Seven suites, no network beyond loopback, no database, zero deps. Run before every push.
+Eight suites, no network beyond loopback, no database, zero deps. Run before every push.
 
 - `test/imports.test.mjs` — static check that every cross-module call is actually bound in the file
   making it. The `src/` split left twelve module-level identifiers unimported; `require` doesn't
@@ -148,6 +148,14 @@ anchor — one of these first read as UNCAUGHT because the patch landed on a com
 `max_tokens` rather than the assignment — and this was a one-off measurement, not a harness. A
 brittle mutation harness that silently stops matching is the `imports.test.mjs` failure mode again,
 so this is recorded as a fact with a date rather than automated.
+
+- `test/telemetry-throttle.test.mjs` — `shipError`/`shipEvent` collapse REPEATS and nothing else. A
+  distinct signal must never be delayed by a noisy one: the signature is severity + message, so a
+  first occurrence always ships immediately and further identical ones are summarised once a minute
+  carrying `repeats_suppressed`. Measured cause (2026-07-26): the dead image ingress had put **601**
+  copies of `upstream 504 POST /v1/images/generations` into HyperDX against ~529 rows of every other
+  signal combined. `SHIP_WINDOW_MS` is env-tunable **only so the count path is testable** without a
+  60s sleep — production never sets it.
 
 Two more are **not** in `npm test` because they need `panel/out` or the docs build:
 
