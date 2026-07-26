@@ -275,10 +275,12 @@ key and `X-Project: victim` logs as `acme`.
 - **`auth.mode`** (`off` | `optional` | `required`) — the lock.
   `optional` is migration mode: a valid key wins, no key falls back to the header, and a key that is
   *presented and bad* is always a 401 (otherwise a revoked key silently keeps working under its old
-  name). `required` is the only mode that closes the hole. **Ships `optional`.**
+  name). `required` is the only mode that closes the hole. **Ships `optional`; prod is `required`
+  (verified 2026-07-26) — the migration is done.**
 - **`requireRegisteredConsumer`** — a spelling check, not a lock. Only applies to calls with no key;
   refuses an unknown consumer with `403 unknown_consumer` so a typo can't become a new consumer with
-  its own bill. Redundant once auth is `required`. **Ships off**; currently **on** in prod.
+  its own bill. Redundant once auth is `required`. **Ships off, and is off in prod (verified
+  2026-07-26)** — correctly, since auth is `required` and this only ever applied to keyless calls.
 
 Both are flipped through their own logged endpoints (`POST /admin/api/auth`,
 `POST /admin/api/consumers/enforce`), never through `POST config`, because turning either one on with
@@ -429,11 +431,14 @@ a crontab — control-plane policy), against the LAN MinIO endpoint, beacon-moni
   `/var/lib/docker/volumes/d11s05nc130l2kjzr6anpebr-config-data/_data/calls.db` on hostbun (64,208
   rows). It is the only backup of the pre-cutover log. Read it with
   `docker exec <container> node -e '…require("node:sqlite")…'` — the host has no `sqlite3`.
-- **Auth is staged, and until `auth.mode = "required"` the inference endpoints are still open.**
-  Anyone who can reach `llm.hostbun.cc` and names a registered consumer can spend the Max
-  subscriptions. `X-Project` is **attribution, not authentication** — a self-asserted string, and
-  `extractProject()` also accepts the OpenAI `user` field. An API key is what makes the name mean
-  something. See "Identity" below.
+- **Auth is CLOSED. `authMode = "required"` in prod — verified against the live router 2026-07-26**
+  (no key → 401, bad key → 401, native `/v1/messages` with no key → 401). This entry used to say the
+  endpoints were "still open" and that anyone naming a registered consumer could spend the Max
+  subscriptions; that was true during the migration and is not true now. A stale security warning is
+  not free — it invites re-fixing something already fixed and drowns out the warnings that still
+  bite. The reasoning behind it stands: `X-Project` is **attribution, not authentication** — a
+  self-asserted string, and `extractProject()` also accepts the OpenAI `user` field. An API key is
+  what makes the name mean something. See "Identity" below.
 - **`local` is a reasoning model.** `qwen3.5-9b` returns its thinking in `reasoning_content` and
   leaves `content` empty until it finishes. With a normal token budget it never finishes → callers get
   `''` and `finish_reason: length`, having paid for every token. The router now defaults it off
