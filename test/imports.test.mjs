@@ -30,12 +30,22 @@ for (const m of MODULES) {
 
 // Strip comments and string/template literals so a name inside a SQL string or a doc comment is not
 // mistaken for a call.
+//
+// The quoted-string classes are NEWLINE-BOUNDED (`[^"\\\n]`), and that is load-bearing rather than
+// tidiness. A JS string literal cannot contain a raw newline, but the old `[^"\\]*` could, so a
+// single unpaired quote anywhere — one apostrophe in a regex, one lone `"` — matched on to the next
+// quote far below and blanked everything in between. The test then scanned the wreckage and found
+// nothing to complain about. Measured before this fix: it was inspecting 11% of telemetry.js, 31% of
+// db.js, 32% of config.js, 57% of registry.js, 58% of server.js. That is how `clip` sat unimported
+// in telemetry.js from the 2026-07-10 split until 2026-07-26 — the one bug this file exists to
+// catch, invisible to it for sixteen days. Bounding each class to a line caps the damage of a
+// mispaired quote at that line. Template literals legitimately span lines and stay unbounded.
 const strip = (s) => s
   .replace(/\/\/.*$/gm, "")
   .replace(/\/\*[\s\S]*?\*\//g, "")
   .replace(/`(?:\\[\s\S]|[^`\\])*`/g, "``")
-  .replace(/"(?:\\.|[^"\\])*"/g, '""')
-  .replace(/'(?:\\.|[^'\\])*'/g, "''");
+  .replace(/"(?:\\.|[^"\\\n])*"/g, '""')
+  .replace(/'(?:\\.|[^'\\\n])*'/g, "''");
 
 const files = ["server.js", ...fs.readdirSync(path.join(root, "src")).filter((f) => f.endsWith(".js")).map((f) => `src/${f}`)];
 
