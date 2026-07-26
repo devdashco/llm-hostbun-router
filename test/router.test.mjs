@@ -19,6 +19,7 @@ import { createServer } from "node:net";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TMP = mkdtempSync(join(tmpdir(), "llm-router-test-"));
 const CFG = join(TMP, "config.json");
+const CFG_PATH = CFG;   // alias: `CFG` is shadowed inside the in-process blocks below
 // Ask the OS for a free port rather than picking one: a hardcoded port silently collided with an
 // unrelated local service and every assertion "failed" against its 404s.
 const PORT = await new Promise((resolve) => {
@@ -570,6 +571,33 @@ const rawPost = (path, raw) => {
   const { shipEvent, shipError } = req(join(ROOT, "src/telemetry.js"));
   check("shipEvent/shipError never throw (fire-and-forget)",
     (() => { try { shipEvent("premium", { event: "premium_usage" }); shipError("err", {}); return "ok"; } catch { return "threw"; } })(), "ok");
+}
+
+// ── POST /api/reset — LAST, because it destroys the fixture everything above reads ──────────────
+// It unlinks CONFIG_FILE and replaces CFG with envDefaults(). Nothing covered it, and it is the one
+// remaining route that can undo the whole control plane in a single call: a reset that quietly did
+// not reset would leave an operator believing they had cleared a bad pin.
+//
+// Placed after every other assertion on purpose. Restoring the seed afterwards would mean rebuilding
+// it through the API and asserting against a fixture the test itself wrote — running it last costs
+// nothing and keeps the fixture honest for everyone above.
+console.log("admin — reset, run last because it wipes the fixture:");
+{
+  // `z` is what the POST-config-replaces block above left behind — the only file-backed rule still
+  // standing by the time we get here. Asserting on it rather than on the seed keeps this test
+  // truthful about the state the suite actually arrives in; my first version assumed the seeded
+  // rules survived and failed, which is the assertion doing its job.
+  check("a file-backed project rule exists before the reset", Object.keys(api("state").projectRoutes || {}), ["z"]);
+  const r = api("reset", {});
+  check("reset reports ok", r.ok, true);
+  check("...and returns the fresh state inline", typeof r.state, "object");
+  const after = api("state");
+  check("the file-backed project rules are gone", Object.keys(after.projectRoutes || {}).length, 0);
+  // What must SURVIVE: the pool comes from ANTHROPIC_POOL in the env, not the config file, so a
+  // reset must not strand every project by emptying it. envDefaults() is a re-read of the
+  // environment, not a blank slate.
+  check("the env-provided account pool survives", (after.claudecodeAccountPool || []).map((a) => a.name), ["acctA", "acctB"]);
+  check("the config file was actually unlinked", existsSync(CFG_PATH), false);
 }
 
 server.kill();

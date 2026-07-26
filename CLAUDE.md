@@ -65,7 +65,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (230 checks, ~25s)
+## Tests — `npm test` (237 checks, ~25s)
 
 Seven suites, no network beyond loopback, no database, zero deps. Run before every push.
 
@@ -103,9 +103,11 @@ test at all, and they cluster at the dangerous end — `auth` (the switch that d
 needs a key), `reset` (restores config defaults), `calls/clear` and `consumers/purge` (destructive),
 `registry/keys` + both `keys/revoke` (mint and revoke credentials), plus `reveal`. `reveal`, `auth`,
 `calls/clear`, `consumers/purge`, `registry/keys` and both `keys/revoke` were covered that day;
-**the rest are still uncovered** — `reset`, `claudecode/models`, `models`, `limits`, `logout`,
-`crazyrouter/test`, `consumers/alias`, `registry/alias`. What remains is the read-mostly tail; the
-destructive and credential-handling routes are now watched. When adding a control-plane route,
+`reset` too — **the rest are still uncovered** — `claudecode/models`, `models`, `limits`, `logout`,
+`crazyrouter/test`, `consumers/alias`, `registry/alias`. Everything destructive, credential-handling
+or state-destroying is now watched; what remains is read-mostly. **`reset`'s test runs LAST in
+`router.test.mjs` by necessity** — it unlinks the config file and reverts `CFG` to `envDefaults()`,
+so it destroys the fixture every assertion above depends on. Add new cases before it, not after. When adding a control-plane route,
 assume nothing is watching it unless you wrote the test — the read-only routes are the well-covered
 ones because they were the easy ones.
 
