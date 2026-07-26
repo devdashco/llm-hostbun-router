@@ -119,6 +119,15 @@ so it destroys the fixture every assertion above depends on. Add new cases befor
 assume nothing is watching it unless you wrote the test — the read-only routes are the well-covered
 ones because they were the easy ones.
 
+**Do not "tidy up" the exports that look unused.** Seventeen names in `src/` are exported and
+referenced only inside their own file — `providerRoute`, `enforceAllow`, `projectRuleFor`,
+`hasImageContent`, `dbWrite` and friends. They look like dead surface and are not: `imports.test.mjs`
+pass 2 keys on the export list, so an exported lowercase helper misused as an object in another file
+is CAUGHT, and the same helper un-exported is invisible to it (measured both ways, 2026-07-26 — only
+SCREAMING_CASE names are covered without being exported). Trimming them shrinks the guard. A name
+that is genuinely dead — no caller anywhere, internal or external — is a different thing and should
+go: `extractReqMeta` and `extractReqParams` were removed on that basis the same day.
+
 **The suite has teeth — probed, not assumed (2026-07-26).** Deliberately breaking each of the five
 load-bearing invariants turns the gate red: an allowlist that substitutes instead of refusing
 (invariant 2), a disabled account served anyway, an image id allowed on a text endpoint, the

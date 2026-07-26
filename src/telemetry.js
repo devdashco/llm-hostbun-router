@@ -71,7 +71,6 @@ function reqMetaFrom(j) {
   if (j.system != null) out.systemKb = Math.round(JSON.stringify(j.system).length / 1024);
   return out;
 }
-function extractReqMeta(bodyBuf) { return reqMetaFrom(parseReq(bodyBuf)); }
 
 function reqContentFrom(j, full) {
   if (!CFG.logging.content || !j) return null;
@@ -82,6 +81,9 @@ function reqContentFrom(j, full) {
   if (typeof j.prompt === "string") return clip(j.prompt);
   return null;
 }
+// Kept as a buffer wrapper because server.js's refusal paths (401/400) genuinely have only the
+// raw body — they run before anything has parsed it. Its two siblings had no such caller and
+// were removed; "each is still correct alone" is not a reason to export a function nobody calls.
 function extractRequestContent(bodyBuf, full) { return reqContentFrom(parseReq(bodyBuf), full); }
 
 // Which project a call belongs to. Apps declare it via the `X-Project` header (preferred);
@@ -113,7 +115,6 @@ function reqParamsFrom(j) {
   out.userId = (j.metadata && (j.metadata.user_id || j.metadata.userId)) || (typeof j.user === "string" ? j.user : null) || null;
   return out;
 }
-function extractReqParams(bodyBuf) { return reqParamsFrom(parseReq(bodyBuf)); }
 
 // Everything proxy() needs off the request body, from ONE parse. The three single-purpose
 // extractors above stay exported: they are the readable unit, and each is still correct alone.
@@ -247,6 +248,6 @@ function applyLocalThinkingDefault(j) {
 const isChatCompletions = (url) => typeof url === "string" && url.split("?")[0].endsWith("/chat/completions");
 
 module.exports = {
-  keyLabel, toolsSummary, extractReqMeta, extractRequestContent, extractReqParams, extractReqAll,
+  keyLabel, toolsSummary, extractRequestContent, extractReqAll,
   normalizeUsage, extractResponseBody, shipError, shipEvent, applyLocalThinkingDefault, isChatCompletions,
 };
