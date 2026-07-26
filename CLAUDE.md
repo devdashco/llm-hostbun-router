@@ -65,14 +65,19 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (253 checks, ~25s)
+## Tests — `npm test` (255 checks, ~25s)
 
 Seven suites, no network beyond loopback, no database, zero deps. Run before every push.
 
 - `test/imports.test.mjs` — static check that every cross-module call is actually bound in the file
   making it. The `src/` split left twelve module-level identifiers unimported; `require` doesn't
   complain until the line runs.
-- `translate.test.js` — the seven translation traps.
+- `translate.test.js` — the seven translation traps, plus the tool-argument degradations: malformed
+  `arguments` become `{}` rather than throwing, and the tool's NAME and ID still reach the model so
+  the result can be paired back. That is the substitute-a-plausible-default shape this codebase keeps
+  producing, and here it is the right trade-off — translate.js is pure and cannot report, the
+  alternative is failing an inference over a caller's formatting, and Anthropic rejects a genuinely
+  invalid block itself. Pinned so changing it is a decision rather than a drift.
 - `test/wire.test.mjs` — boots the real server against a fake upstream and drives every route, for
   the same class of bug as `imports` but on the paths only a request reaches.
 - `test/router.test.mjs` — boots a real server on an OS-assigned port: pins, allowlists, job

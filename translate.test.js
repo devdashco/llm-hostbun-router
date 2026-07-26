@@ -226,4 +226,31 @@ t("caching never changes what is actually being asked", () => {
   assert.deepStrictEqual(c, p, "a breakpoint is metadata — model, messages and tools must be untouched");
 });
 
+// Malformed tool `arguments` become {} rather than failing the request. Pinned because it is the
+// substitute-a-plausible-default shape this codebase keeps producing (an unpriced model costing $0,
+// an unknown window becoming 24h): the caller's broken JSON reaches the model as "no arguments"
+// instead of an error, and the model then runs the tool on nothing and answers confidently.
+//
+// It is nonetheless the RIGHT trade-off here, which is why this pins rather than changes it:
+// translate.js is pure and has no way to report, the alternative is failing an inference on a
+// caller's formatting, and Anthropic rejects a genuinely invalid block itself. Asserted so that
+// changing it is a decision someone makes, not something that drifts.
+t("malformed tool arguments degrade to {} — deliberate, not accidental", () => {
+  const a = T.openaiToAnthropic({ messages: [
+    { role: "user", content: "go" },
+    { role: "assistant", tool_calls: [{ id: "c1", function: { name: "f", arguments: "{not json" } }] }] });
+  const use = a.messages[1].content.find((b) => b.type === "tool_use");
+  assert.deepStrictEqual(use.input, {}, "unparseable arguments must not throw and must not be forwarded raw");
+  assert.strictEqual(use.name, "f", "the tool NAME still reaches the model — only its arguments were lost");
+  assert.strictEqual(use.id, "c1", "and the id, so the result can still be paired back");
+});
+
+// Absent `arguments` is the ordinary no-arg tool call and must be indistinguishable from `{}`.
+t("a tool call with no arguments field is an empty input, not a failure", () => {
+  const a = T.openaiToAnthropic({ messages: [
+    { role: "user", content: "go" },
+    { role: "assistant", tool_calls: [{ id: "c2", function: { name: "g" } }] }] });
+  assert.deepStrictEqual(a.messages[1].content.find((b) => b.type === "tool_use").input, {});
+});
+
 console.log(`\n${pass} passed${process.exitCode ? ", SOME FAILED" : ", all green"}`);
