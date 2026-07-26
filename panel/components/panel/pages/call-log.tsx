@@ -387,10 +387,23 @@ export function CallLog() {
         <CardHeader>
           <CardTitle>Logging</CardTitle>
           <CardDescription>
-            {state.loggingDbReady ? "Postgres is reachable. Writes are fire-and-forget: a failed insert never fails an inference request." : "Call DB unavailable — logging is off."}
+            {!state.loggingDbReady
+              ? "No DATABASE_URL — logging is off."
+              : state.loggingWrites?.failures
+                ? `${state.loggingWrites.failures.toLocaleString()} write${state.loggingWrites.failures === 1 ? " has" : "s have"} failed since boot — the log below is INCOMPLETE.`
+                : "Writes are landing. They are fire-and-forget: a failed insert never fails an inference request."}
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* The old copy read "Postgres is reachable" off `!!pool`, which pg sets without ever
+              connecting — so during an outage this card asserted the database was fine while every
+              row was dropped, and the empty table below looked like a quiet hour. */}
+          {!!state.loggingWrites?.failures && (
+            <div className="mb-4 rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-ui text-danger">
+              last error: {state.loggingWrites.lastError}
+              {state.loggingWrites.lastErrorAt ? ` · ${new Date(state.loggingWrites.lastErrorAt).toLocaleString()}` : ""}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-4">
             <label className="flex items-center gap-2 text-body">
               <Checkbox checked={!!lg.enabled} onCheckedChange={(v) => setLg({ ...lg, enabled: !!v })} /> log calls
