@@ -108,8 +108,10 @@ only `logout` is left. Covering the "read-mostly tail" was not cosmetic: it foun
 `GET /api/claudecode/models` throwing `ReferenceError: claudecodeCatalog is not defined` on every
 call, live. `imports.test.mjs` could not catch that class at the time — it flagged a bare `name(` CALL, and this
 was an unbound identifier read as an OBJECT (`claudecodeCatalog.source`). **A second pass now covers
-it** (2026-07-26): an export of another `src/` module, used as `X.…` and never bound in the file.
-158 references checked, up from 135. It is deliberately narrow — a general "any dotted name not
+it** (2026-07-26): a name from another `src/` module — its exports **and its module-scope
+SCREAMING_CASE consts** — used as `X.…` and never bound in the file. 170 references checked, up from
+135. The consts half is load-bearing: `HOP_RES` was un-exported when the `jsonenforce` split dropped
+its import, and an exports-only pass is green on that exact state (reproduced to confirm). It is deliberately narrow — a general "any dotted name not
 bound here" version was tried and flagged eleven things on a clean tree, and a check that cries wolf
 gets switched off. **`reset`'s test runs LAST in
 `router.test.mjs` by necessity** — it unlinks the config file and reverts `CFG` to `envDefaults()`,

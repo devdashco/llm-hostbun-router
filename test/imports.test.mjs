@@ -128,17 +128,31 @@ for (const rel of files) {
 // `bound` requires the name on the LEFT of an `=`. The first version accepted
 // `const cat = claudecodeCatalog;` as a binding of claudecodeCatalog — the value, not the binding —
 // so it could never fail. Verified both ways: zero hits clean, one hit with the bug reintroduced.
+// The names pass 2 looks for: every module's EXPORTS, plus its module-scope SCREAMING_CASE consts.
+// The second half is not decoration — HOP_RES was exactly that when it broke: defined at the top of
+// http.js, NOT exported, and read as `HOP_RES.has(...)` in jsonenforce.js after the 8dc6ca3 split.
+// With exports alone this file passes on that state; verified by reproducing it.
+//
+// SCREAMING_CASE is what keeps the widening free of noise. A lowercase set would collide with the
+// `out` / `params` / `models` locals that live in half these files; measured on the clean tree, this
+// adds 35 checks and zero false positives.
+const scopeConsts = Object.fromEntries(MODULES.map((m) => [m,
+  new Set([...fs.readFileSync(path.join(root, "src", `${m}.js`), "utf8")
+    .matchAll(/^const\s+([A-Z][A-Z0-9_]*)\s*=/gm)].map((x) => x[1]))]));
+
 for (const rel of files) {
   const src = strip(fs.readFileSync(path.join(root, rel), "utf8"));
   for (const [mod, exp] of Object.entries(exportsOf)) {
     if (rel === `src/${mod}.js`) continue;
-    for (const name of Object.keys(exp)) {
+    for (const name of new Set([...Object.keys(exp), ...(scopeConsts[mod] || [])])) {
       if (!new RegExp(`(^|[^.\\w$])${name}\\s*\\.`).test(src)) continue;   // used as an object
       if (new RegExp(`(^|[^.\\w$])${name}\\s*\\(`).test(src)) continue;    // a call — pass 1 owns it
       checked++;
       const bound = new RegExp(`(?:const|let|var|function|class)\\s+${name}\\b`).test(src)
                  || new RegExp(`(?:const|let|var)\\s[^;\\n]*?\\b${name}\\s*=`).test(src)
-                 || new RegExp(`\\{[^{}]*\\b${name}\\b[^{}]*\\}\\s*=`).test(src);
+                 // BOTH destructuring forms. Object-only missed `const [sub, usage, models] = ...`,
+                 // which is how three of the first version's false positives arose.
+                 || new RegExp(`[\\{\\[][^{}\\[\\]]*\\b${name}\\b[^{}\\[\\]]*[\\}\\]]\\s*=`).test(src);
       if (!bound) {
         console.log(`  FAIL  ${rel}: ${name}.… read as an object but never bound — lives in src/${mod}.js`);
         failures++;
