@@ -389,7 +389,7 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (sub === "auth" && req.method === "POST") {
     const p = await readJson(req, res);
     if (!p) return;
-    if (!["off", "optional", "required"].includes(p.mode)) return sendJson(res, 400, { error: "mode must be off | optional | required" });
+    if (!C.AUTH_MODES.includes(p.mode)) return sendJson(res, 400, { error: `mode must be ${C.AUTH_MODES.join(" | ")}` });
     CFG.auth = { mode: p.mode };
     const persisted = persistConfig();
     console.warn(`[admin] auth.mode=${p.mode} ip=${ip} persisted=${persisted}`);

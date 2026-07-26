@@ -132,7 +132,7 @@ if (!process.exitCode) ok(`all ${UI_ROUTES.size} served slugs have a page`);
 console.log("\nlimit windows:");
 {
   const req_ = createRequire(import.meta.url);
-  const { LIMIT_WINDOWS } = req_(join(ROOT, "src", "config.js"));
+  const { LIMIT_WINDOWS, LIMIT_HARD, PROVIDERS } = req_(join(ROOT, "src", "config.js"));
   const helpers = read(join(PANEL, "lib", "routing-helpers.ts"));
   const m = helpers.match(/export const LIM_WINDOWS\s*=\s*\[([^\]]*)\]/);
   if (!m) fail("could not find LIM_WINDOWS in panel/lib/routing-helpers.ts");
@@ -141,6 +141,27 @@ console.log("\nlimit windows:");
     if (JSON.stringify(panelWins) === JSON.stringify(LIMIT_WINDOWS))
       ok(`panel LIM_WINDOWS matches the server (${panelWins.join(", ")})`);
     else fail(`panel offers ${JSON.stringify(panelWins)} but the server accepts ${JSON.stringify(LIMIT_WINDOWS)} — a cap saved on a window the server rejects silently becomes 24h`);
+  }
+
+  // Same hazard, same fallback: sanitizeLimit() rewrites an unknown `hard` to "block", so a panel
+  // offering an action the server does not know turns "warn only" into a 429 without saying so.
+  const hardM = helpers.match(/export const LIM_HARD[^=]*=\s*\[([\s\S]*?)\];/);
+  if (!hardM) fail("could not find LIM_HARD in panel/lib/routing-helpers.ts");
+  else {
+    const panelHard = [...hardM[1].matchAll(/\[\s*"([^"]+)"/g)].map((x) => x[1]);
+    if (JSON.stringify(panelHard) === JSON.stringify(LIMIT_HARD))
+      ok(`panel LIM_HARD matches the server (${panelHard.join(", ")})`);
+    else fail(`panel offers hard actions ${JSON.stringify(panelHard)} but the server accepts ${JSON.stringify(LIMIT_HARD)} — an unknown one silently becomes "block"`);
+  }
+
+  // Providers: compared as a SET, because the panel deliberately orders them for display.
+  const provM = read(join(PAGES_DIR, "rules-controls.tsx")).match(/export const PROVS\s*=\s*\[([^\]]*)\]/);
+  if (!provM) fail("could not find PROVS in rules-controls.tsx");
+  else {
+    const panelProvs = [...provM[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort();
+    if (JSON.stringify(panelProvs) === JSON.stringify([...PROVIDERS].sort()))
+      ok(`panel PROVS is the same set as the server's PROVIDERS (${panelProvs.join(", ")})`);
+    else fail(`panel PROVS ${JSON.stringify(panelProvs)} != server PROVIDERS ${JSON.stringify([...PROVIDERS].sort())}`);
   }
 }
 

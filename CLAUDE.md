@@ -65,7 +65,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (251 checks, ~25s)
+## Tests — `npm test` (253 checks, ~25s)
 
 Seven suites, no network beyond loopback, no database, zero deps. Run before every push.
 
@@ -89,10 +89,12 @@ Seven suites, no network beyond loopback, no database, zero deps. Run before eve
   mismatch is silent. Fails on a nav slug missing from `UI_ROUTES` (hard-refresh 404), a legacy
   redirect pointing at a dead page/tab or missing its `ALIAS` entry (the bookmark it exists for
   lands nowhere), a redirect chain, and a nav label that doesn't match its landing tab and heading.
-  Also pins the **limit-window list across the server/panel boundary**: `LIMIT_WINDOWS` is derived
-  from `WINDOW_MS` in `src/config.js`, but the panel keeps its own `LIM_WINDOWS` (separate static
-  build, no server import). Offer a window `sanitizeLimit()` rejects and the operator's saved cap
-  silently becomes `24h` with no error anywhere — so the two lists are compared, both directions.
+  Also pins **every vocabulary the panel offers and the server validates**, because the panel is a
+  separate static build with no way to import `src/config.js` and each mismatch fails silently by
+  rewriting the operator's choice: `LIM_WINDOWS` vs `LIMIT_WINDOWS` (an unknown window becomes
+  `24h`), `LIM_HARD` vs `LIMIT_HARD` (an unknown action becomes `block`, so "warn only" turns into a
+  429), and `PROVS` vs `PROVIDERS` (compared as a SET — the panel orders them for display). Add a
+  value on one side only and the gate goes red.
 
 - `test/proxy-log.test.mjs` — `proxy()`'s EARLY-RETURN branches still write a call-log row. Stubs
   `recordCall` on the db module *before* requiring `http.js` (it destructures at require time, so a

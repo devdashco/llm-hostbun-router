@@ -120,6 +120,15 @@ const WINDOW_MS = { "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800
 // import; test/panel-nav.test.mjs fails if the two drift, which is the pairing that would actually
 // bite — an offered window the server does not accept.
 const LIMIT_WINDOWS = Object.keys(WINDOW_MS);
+// What a cap does when it is hit. The panel offers these in a dropdown (LIM_HARD in
+// panel/lib/routing-helpers.ts) and test/panel-nav.test.mjs fails if the two disagree — offer one
+// this list rejects and sanitizeLimit() quietly rewrites the operator's choice to "block".
+const LIMIT_HARD = ["block", "slow", "warn"];
+// The three auth modes, in ONE place. This list was written out twice — once in the POST /api/auth
+// validator and once in the config loader — so a fourth mode added to the endpoint would be accepted
+// by the API and then silently dropped the next time /data/config.json was read. The gate that
+// decides whether anyone needs a key is not a good place for two lists to disagree.
+const AUTH_MODES = ["off", "optional", "required"];
 // Sanitize a usage-limit object from untrusted config. Returns a normalized limit or null.
 function sanitizeLimit(v) {
   if (!v || typeof v !== "object") return null;
@@ -132,7 +141,7 @@ function sanitizeLimit(v) {
     warnPct: clampPct(v.warnPct, 80),
     slowPct: clampPct(v.slowPct, 95),
     slowMs: Math.min(60000, Math.round(num(v.slowMs, 1500))),
-    hard: ["block", "slow", "warn"].includes(v.hard) ? v.hard : "block",
+    hard: LIMIT_HARD.includes(v.hard) ? v.hard : "block",
   };
 }
 
@@ -350,7 +359,7 @@ function mergeConfig(base, saved) {
     c.jsonMaxRetries = saved.jsonMaxRetries;
   if (typeof saved.requireProject === "boolean") c.requireProject = saved.requireProject;
   if (typeof saved.requireRegisteredConsumer === "boolean") c.requireRegisteredConsumer = saved.requireRegisteredConsumer;
-  if (saved.auth && typeof saved.auth === "object" && ["off", "optional", "required"].includes(saved.auth.mode))
+  if (saved.auth && typeof saved.auth === "object" && AUTH_MODES.includes(saved.auth.mode))
     c.auth = { mode: saved.auth.mode };
   if (saved.consumerAliases && typeof saved.consumerAliases === "object" && !Array.isArray(saved.consumerAliases)) {
     c.consumerAliases = {};
@@ -507,7 +516,7 @@ const keyIndex = () => KEY_INDEX;
 module.exports = {
   CFG, setCFG, loadConfig, persistConfig, mergeConfig, envDefaults,
   PROVIDERS, PROVIDER_SET, normProvider, providerOf, sanitizeRule, sanitizeLimit,
-  IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel, LIMIT_WINDOWS, WINDOW_MS,
+  IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES, WINDOW_MS,
   CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS,
   CONFIG_FILE, UI_ROUTES, reindexKeys, keyIndex, CANON, OBLIT, E4B,
 };
