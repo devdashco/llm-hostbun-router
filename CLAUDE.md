@@ -511,8 +511,13 @@ a crontab — control-plane policy), against the LAN MinIO endpoint, beacon-moni
   `isInference` (line 240) matches only the text paths — so anyone who can reach the host can spend
   GPU seconds on the image service, unattributed. Live traffic proves it is reachable: 32 of the
   newest 40 image rows come from a `Bun/1.1.45` caller with `project=(none)` and no key.
-  **Closing it is a deliberate act, not a tidy-up** — that caller sends no key, so gating the path
-  401s it the moment you do. Issue it a key first, then move the route below the gate.
+  **Callers identified 2026-07-26** (24h: 678 calls, 2 IPs — surfaced on the Health tab):
+  `135.125.243.62` = **ovh-promopilot** (Bun/1.1.45, the bulk of it) and `80.217.106.60` = **pbox**
+  (a `node` process; the `curl/8.x` rows there were verification probes). **promopilot already holds
+  a key** — keyvault `llm/promopilot/API_KEY`, which it uses for text — so its image path simply is
+  not sending it. **Closing the gate is still a deliberate act, not a tidy-up**: gating the route
+  401s both callers the moment you do. Wire the existing key into promopilot's image client and find
+  what on pbox is calling it, THEN move `/v1/images/*` below the auth gate.
   An earlier version of this entry said flatly "Auth is CLOSED", generalising from three text-path
   probes. It was wrong about the image paths; do not trust a posture claim that does not name the
   paths it tested. and that anyone naming a registered consumer could spend the Max
