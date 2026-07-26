@@ -7,7 +7,7 @@
 // back for sendJson/resolveRoute cannot cycle. The auth gate stays in the dispatcher, as with every
 // other route module: a route may move, the lock that guards it may not.
 const { CFG } = require("./config");
-const { dbRows } = require("./db");
+const { dbRows, ACCT_DEAD } = require("./db");
 const { sendJson, readBody, readJson, mask } = require("./http");
 const { resolveRoute, isGated } = require("./routing");
 const { upstreamCatalogs, localModelEntries } = require("./claudecode");
@@ -73,11 +73,28 @@ async function health(req, res) {
   const [local, crazyrouter] = await Promise.all([
     probe(CFG.bases.local), probe(CFG.bases.crazyrouter, CFG.crazyrouterKey),
   ]);
-  const accounts = (CFG.claudecodeAccountPool || []).length;
+  // claudecode is deliberately NOT probed: the only unauthenticated request we could make to
+  // api.anthropic.com reads as down, so a probe here would report a permanent outage. Its health is
+  // therefore "do we hold a usable login" — but that has to actually mean usable. It used to be
+  // `pool.length > 0`, which counts accounts the router itself has auto-disabled after a 403
+  // permission_error (a cancelled or refunded subscription). With every login dead the endpoint
+  // still answered up:true, and the Health tab rendered "All healthy — providers up".
+  //
+  // NOT acctUsable(): that also excludes cooling and quota-spent accounts, and a 429 is a usage
+  // WINDOW, not a capability — the per-model probe was deleted in 2026-07-11 for exactly that
+  // confusion. Only the permanent conditions belong in a health verdict.
+  const pool = CFG.claudecodeAccountPool || [];
+  const alive = pool.filter((a) => !a.disabled && !ACCT_DEAD.has(a.name));
   const claudecode = {
-    up: accounts > 0, status: accounts > 0 ? 200 : 0, ms: 0,
-    count: (CFG.claudecodeModels || []).length, accounts,
-    note: accounts > 0 ? undefined : "no accounts in the pool",
+    up: alive.length > 0,
+    // Not 200. Nothing was requested, so there is no status to report, and synthesizing one made
+    // this entry indistinguishable on the wire from the two beside it that really were measured.
+    status: null, probed: false, ms: 0,
+    count: (CFG.claudecodeModels || []).length,
+    accounts: pool.length, alive: alive.length,
+    note: pool.length === 0 ? "no accounts in the pool"
+      : alive.length === 0 ? `all ${pool.length} accounts are disabled or OAuth-dead`
+      : undefined,
   };
   return sendJson(res, 200, { local, crazyrouter, claudecode });
 }

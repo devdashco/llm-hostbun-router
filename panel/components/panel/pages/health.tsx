@@ -19,7 +19,12 @@ function Issues({ health, st, state, pool }: any) {
   const probs: [string, string][] = [];
   ["local", "claudecode", "crazyrouter"].forEach((l) => {
     const r = health[l];
-    if (r && !r.up) probs.push(["down", `Provider ${l} is DOWN (status ${r.status || "—"}). Traffic to it will fail.`]);
+    // `note` is the only thing that distinguishes "we hold no accounts" from "we hold eight and all
+    // of them are dead" — and claudecode reports no HTTP status at all, because it is not probed.
+    // Rendering "status —" as though a request had failed invented a symptom for the wrong cause.
+    if (r && !r.up) probs.push(["down", r.note
+      ? `Provider ${l} is DOWN — ${r.note}. Traffic to it will fail.`
+      : `Provider ${l} is DOWN (status ${r.status || "—"}). Traffic to it will fail.`]);
   });
   if (pool && pool.summary && (pool.orphanPins || []).length)
     probs.push(["err", `${pool.orphanPins.length} project pin(s) name an account that is not in the pool — those calls 403.`]);
