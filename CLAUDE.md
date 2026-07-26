@@ -25,6 +25,7 @@ refs may still linger in sibling repos.
   | `calllog.js` | the call log — `/api/calls`, `calls/facets`, `call`, `export`, `calls/clear` |
   | `accounts.js` | the Claude Max pool and its project pins — `/api/accounts*`, `/api/pins` |
   | `consumers.js` | the registry's HTTP face — `/api/consumers*`, key issue/revoke |
+  | `diagnostics.js` | questions ABOUT the router — `/api/health`, `models`, `limits`, `crazyrouter[/test]`, `test`, `resolve`. Routes nothing, mutates nothing |
   | `registry.js` | the only writer of the consumer registry to Postgres |
   | `telemetry.js` | call-log row shaping, HyperDX error shipping |
   | `pricing.js` | USD estimates (crazyrouter only) |
