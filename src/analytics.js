@@ -218,6 +218,14 @@ async function statsSummary(req, res) {
         tier: modelTier(r.sent_model), calls: r.n, tokens: r.tok,
         list_usd: premListUsd == null ? null : +premListUsd.toFixed(4), last: r.last });
     }
+    // Unattributed image traffic. /v1/images/* is dispatched in server.js BEFORE the auth gate and is
+    // absent from `isInference`, so none of the usual controls reach it: no key is required,
+    // throttleDelay("") is 0 and limitFor("") is null. It bills GPU seconds to nobody. Enforcing any
+    // of that would 401 whoever is calling it today, which is an operator's decision — so the panel
+    // at least says out loud that it is happening, beside the other things worth knowing on Health.
+    const unattrImg = await dbRow(
+      `SELECT COUNT(*)::int AS n, COUNT(DISTINCT ip)::int AS ips FROM calls
+       WHERE ${W} AND provider = 'images' AND (project IS NULL OR project = '')`, P);
     const oldestRow = await dbRow("SELECT MIN(ts) AS t FROM calls");
     return sendJson(res, 200, { dbReady: true, window: winKey, total: totalRow ? totalRow.n : 0,
       windowCalls: agg.calls || 0, windowErrors: agg.errors || 0, windowTokens: agg.tokens || 0,
@@ -225,6 +233,7 @@ async function statsSummary(req, res) {
       windowCacheRead: agg.cache_read || 0, windowCacheWrite: agg.cache_write || 0,
       windowCost: +windowCost.toFixed(4),
       pricedProviders: ["crazyrouter"], byProvider, byKey, byClient, byModel, byProject, premiumUsage,
+      unattributedImages: unattrImg ? { calls: unattrImg.n || 0, ips: unattrImg.ips || 0 } : null,
       oldest: oldestRow ? oldestRow.t : null, retain: CFG.logging.retain });
   } catch (e) { return sendJson(res, 500, { error: e.message }); }
 }

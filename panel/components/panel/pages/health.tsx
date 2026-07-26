@@ -45,6 +45,12 @@ function Issues({ health, st, state, pool }: any) {
     const cost = p.list_usd == null ? "cost unknown — model has no price defined" : `~$${p.list_usd.toFixed(2)} list`;
     probs.push(["premium", `App "${p.project}" is using ${p.model} (${p.tier}) — ${nfmt(p.calls)} call(s), ${cost}. Premium model on the shared Max pool.`]);
   });
+  // /v1/images/* sits ABOVE the auth gate in server.js and is absent from `isInference`, so it takes
+  // no key, no throttle and no cap. Surfaced rather than blocked: closing it 401s whoever is calling
+  // it today, which is an operator's call — but it should not be invisible while it happens.
+  const ui = st?.unattributedImages;
+  if (ui && ui.calls > 0)
+    probs.push(["err", `${nfmt(ui.calls)} image call(s) from ${ui.ips} IP(s) with no consumer and no API key — /v1/images/* is not behind the auth gate, so this GPU time bills to nobody.`]);
   if ((state.unpricedModels || []).length)
     probs.push(["premium", `${state.unpricedModels.length} advertised model(s) have no token cost defined: ${state.unpricedModels.join(", ")}. Their list cost reads as unknown, not $0.`]);
   if (!probs.length)
