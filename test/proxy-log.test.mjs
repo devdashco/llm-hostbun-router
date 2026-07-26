@@ -13,6 +13,7 @@
 // captured too late to see.
 import { createRequire } from "node:module";
 import http from "node:http";
+import { PassThrough } from "node:stream";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -47,12 +48,15 @@ const fakeReq = (url, method = "POST") => ({
   socket: { remoteAddress: "127.0.0.1" },
   on() { /* body is supplied via bodyBuf, never read off the stream here */ },
 });
+// A REAL Writable, not an object with write/end stubs. proxy()'s success path does `r.pipe(res)`,
+// and pipe() calls dest.once/emit — a hand-rolled fake blows up with "dest.once is not a function"
+// the moment a test stops exercising only the early-return branches. The first version of this file
+// only ever drove a 504, so the omission was invisible until a 200 was tested.
 const fakeRes = () => {
-  const r = { status: 0, body: "", headers: null };
+  const r = new PassThrough();
+  r.status = 0; r.headers = null; r.body = "";
+  r.on("data", (c) => { r.body += c; });
   r.writeHead = (s, h) => { r.status = s; r.headers = h; return r; };
-  r.write = (c) => { r.body += c; return true; };
-  r.end = (c) => { if (c) r.body += c; r.ended = true; return r; };
-  r.on = () => r;
   return r;
 };
 
@@ -77,6 +81,37 @@ console.log("proxy() early returns still record:");
     check("...and to the project that asked", row.project, "someapp");
     check("...carrying the upstream's own message", /504/.test(row.error || "") && /timed out/.test(row.error || ""), true);
   }
+}
+
+// A GET through the image provider — /v1/templates and /v1/loras proxy to the same upstream as
+// generations and sit above the auth gate, but they are GETs and match no path in the record regex,
+// so nothing was ever written for them. In prod that showed as 200 of 200 image rows being
+// `generations`: the other two could not be recorded, so an anonymous caller reaching an upstream we
+// do not own left no durable trace and did not appear in the Health tab's unattributed-image count.
+{
+  rows.length = 0;
+  const res = fakeRes();
+  await proxy(fakeReq("/v1/templates", "GET"), res, BASE, { bodyBuf: Buffer.alloc(0), provider: "images" });
+  if (rows.length !== 1) bad("a GET through the image provider is recorded", `got ${rows.length} rows`);
+  else {
+    ok("a GET through the image provider is recorded");
+    check("...with its own path, not folded into generations", rows[0].path, "/v1/templates");
+    check("...and the image provider", rows[0].provider, "images");
+  }
+}
+
+// A local read must STAY unlogged — it costs an upstream nothing and would drown the log.
+//
+// proxy() RETURNS BEFORE the response stream finishes: on the streaming path it calls r.pipe(res)
+// and the row is written from the "end" handler. So asserting straight after the await checks
+// nothing — the first version of this case passed identically with recordThis forced to `true`,
+// which is a test that cannot fail. Wait for the response to actually end first.
+{
+  rows.length = 0;
+  const res = fakeRes();
+  await proxy(fakeReq("/v1/models", "GET"), res, BASE, { bodyBuf: Buffer.alloc(0), provider: "local" });
+  await new Promise((r) => { res.on("end", r); res.on("finish", r); setTimeout(r, 250); });
+  check("a local /v1/models GET is still not recorded", rows.length, 0);
 }
 
 upstream.close();

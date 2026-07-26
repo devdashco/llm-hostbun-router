@@ -65,7 +65,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (264 checks, ~25s)
+## Tests — `npm test` (268 checks, ~25s)
 
 Eight suites, no network beyond loopback, no database, zero deps. Run before every push.
 

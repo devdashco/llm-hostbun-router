@@ -245,7 +245,15 @@ async function proxy(req, res, base, opts = {}) {
   // body (capped) to pull tokens + reply. /v1/models etc. are skipped to keep the log signal high.
   // Image generation is billed in GPU time, not tokens, so it carries no `usage` — but an unlogged
   // call is an unattributable one, and `imagegen` went 100% invisible in the call log until 2026-07-09.
-  const recordThis = CFG.logging.enabled && req.method === "POST" && /\/(chat\/completions|responses|completions|messages|chat|images\/(generations|edits|variations))$/.test(base_rec.path);
+  // EVERY image-provider request is recorded, whatever its method or path — not just the POSTs that
+  // match the regex below. /v1/templates and /v1/loras are GETs proxied to the same upstream, and
+  // they sit above the auth gate like the rest of /v1/images/*, so an anonymous caller could reach
+  // an upstream we do not own and leave no durable trace at all: 200 of 200 image rows in prod were
+  // `generations`, because the other two paths could never be written. That also made them invisible
+  // to the unattributed-image count on the Health tab, which is the thing meant to reveal exactly
+  // this traffic. A local read like /v1/models stays unlogged — it costs an upstream nothing.
+  const recordThis = CFG.logging.enabled && (provider === "images"
+    || (req.method === "POST" && /\/(chat\/completions|responses|completions|messages|chat|images\/(generations|edits|variations))$/.test(base_rec.path)));
 
   // Image provider: upstream errors arrive as bare text; convert to OpenAI JSON error envelope.
   //
