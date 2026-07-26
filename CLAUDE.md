@@ -518,6 +518,15 @@ a crontab — control-plane policy), against the LAN MinIO endpoint, beacon-moni
   not sending it. **Closing the gate is still a deliberate act, not a tidy-up**: gating the route
   401s both callers the moment you do. Wire the existing key into promopilot's image client and find
   what on pbox is calling it, THEN move `/v1/images/*` below the auth gate.
+  **The pbox `node` caller is almost certainly `seoul/lib/imagegen-client.ts`** (traced 2026-07-26):
+  it POSTs `https://llm.hostbun.cc/v1/images/generations` with `headers: { 'Content-Type':
+  'application/json' }` and nothing else — no key, no `X-Project`, exactly the observed signature.
+  Not proven to be the process that emitted those specific rows (it was not running when I looked),
+  but the missing header is certain. `seoul` has **no valid key to send**: keyvault
+  `llm/seoul/API_KEY` is a `REVOKED-…` tombstone from the 2026-07-10 registry wipe, so it needs
+  minting before that client can authenticate. `funnel-sites/scripts/article-images.ts` is the
+  counter-example — same endpoint, but it sends `Authorization: Bearer` + `X-Project:
+  funnel-articles` and would survive the gate closing untouched.
   An earlier version of this entry said flatly "Auth is CLOSED", generalising from three text-path
   probes. It was wrong about the image paths; do not trust a posture claim that does not name the
   paths it tested. and that anyone naming a registered consumer could spend the Max
