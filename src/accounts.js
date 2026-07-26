@@ -189,4 +189,21 @@ async function removeAccount(req, res, ip) {
 // Alias a legacy caller name onto a canonical <consumer>[:<job>] path. Writes the DB, like every
 // other registry mutation — CFG is only its projection.
 
-module.exports = { listAccounts, setPin, setAccountToken, setAccountDisabled, removeAccount };
+// Reveal the FULL setup-token for one account. The admin gate is NOT here — handleAdminApi in
+// admin.js checks isAuthed before dispatching, as it does for every route in this file. That is the
+// split's rule (a route may move; the lock that guards it may not), and it is worth restating on
+// this one because it is the only endpoint in the process that returns a live secret. Every
+// other Accounts response masks the token (tokenMasked); this is the ONE endpoint
+// that returns the raw sk-ant-oat, so a direct-mode box can resync its stale local
+// ~/.claude-accounts/<name>.token to the live pool token after a rotation (else the
+// old local copy 401s on direct while the gateway still works on the fresh one).
+async function revealToken(req, res) {
+  const p = await readJson(req, res);
+  if (!p) return;
+  const pool = CFG.claudecodeAccountPool || [];
+  const acct = pool.find((a) => a.name.toLowerCase() === String(p.account || "").trim().toLowerCase());
+  if (!acct) return sendJson(res, 400, { error: "no such account", accounts: pool.map((a) => a.name) });
+  return sendJson(res, 200, { name: acct.name, org: acct.org || "", token: acct.token || "" });
+}
+
+module.exports = { listAccounts, setPin, setAccountToken, setAccountDisabled, removeAccount, revealToken };

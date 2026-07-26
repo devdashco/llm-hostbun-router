@@ -94,6 +94,26 @@ console.log("routing — the paid door stays shut:");
 check("imagegen refused on a text endpoint", route("imagegen", "x"), { blocked: true });
 check("sd-turbo refused too", route("sd-turbo", "x"), { blocked: true });
 
+console.log("admin — the one endpoint that returns a live secret:")
+// /api/reveal hands back a raw sk-ant-oat so a direct-mode box can resync after a rotation. It had
+// NO coverage until 2026-07-26, and it moved to src/accounts.js that day — a broken dispatch
+// binding or a slipped auth gate on this route leaks a Max subscription token, silently.
+{
+  const raw = (path, body, withCookie) => {
+    const a = [`${BASE}/api/${path}`, "-X", "POST", "-d", JSON.stringify(body)];
+    if (withCookie) a.push("-H", `cookie: hb_admin=${cookie}`);
+    const out = curl(a);
+    const [text, code] = out.split("\n<");
+    return { code: (code || "").replace(/[<>]/g, ""), text };
+  };
+  const authed = raw("reveal", { account: "acctA" }, true);
+  check("an authed reveal returns the account's real token", JSON.parse(authed.text).token, "sk-ant-oat-fake-a");
+  const anon = raw("reveal", { account: "acctA" }, false);
+  check("an UNAUTHENTICATED reveal is refused", anon.code, "401");
+  check("...and leaks no token in the body", /sk-ant-oat/.test(anon.text), false);
+  check("an unknown account is a 400, not a 500", raw("reveal", { account: "nope" }, true).code, "400");
+}
+
 console.log("admin — merge endpoints never clobber siblings:");
 const before = Object.keys(api("state").projectRoutes).sort();
 api("routes", { project: "acme", allowProviders: ["local"] });
