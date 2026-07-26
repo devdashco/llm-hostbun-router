@@ -15,7 +15,7 @@ import { ago, nfmt, fmtMs, fmtTime, SLOW_MS, WARN, DANGER } from "@/lib/format";
 
 const SEV: Record<string, string> = { down: DANGER, dry: DANGER, err: DANGER, slow: WARN, refusal: WARN, force: WARN, premium: WARN };
 
-function Issues({ health, st, state, pool }: any) {
+function Issues({ health, st, state, pool, stFailed }: any) {
   const probs: [string, string][] = [];
   ["local", "claudecode", "crazyrouter"].forEach((l) => {
     const r = health[l];
@@ -58,6 +58,15 @@ function Issues({ health, st, state, pool }: any) {
     probs.push(["err", `${nfmt(ui.calls)} image call(s) from ${ui.ips} IP(s) with no consumer and no API key — /v1/images/* is not behind the auth gate, so this GPU time bills to nobody.`]);
   if ((state.unpricedModels || []).length)
     probs.push(["premium", `${state.unpricedModels.length} advertised model(s) have no token cost defined: ${state.unpricedModels.join(", ")}. Their list cost reads as unknown, not $0.`]);
+  // Six of the checks above are gated on `st`, which is fetched with `.catch(() => null)`. So a
+  // failed /api/stats produced no findings and fell straight through to the "All healthy" banner —
+  // a sentence that names slow providers and error rates it had just failed to look at. That is the
+  // worst possible default for this screen: the observability page reporting all-clear precisely
+  // when its observability broke. A null `st` cannot distinguish "clean" from "never arrived", so
+  // the fetch has to say which.
+  if (stFailed)
+    probs.push(["err", "Traffic stats unavailable (/api/stats failed) — provider reachability is all that was checked. "
+      + "Slow-provider, error-rate, JSON-refusal, premium-spend and unattributed-image checks did NOT run."]);
   if (!probs.length)
     return (
       <div className="mb-4.5 rounded-xl border border-ok/35 bg-ok/[0.07] px-4 py-3 text-body">
@@ -153,6 +162,7 @@ export function Health() {
   const { state, openCall } = useApp();
   const [health, setHealth] = useState<any>(null);
   const [st1h, setSt1h] = useState<any>(null);
+  const [stFailed, setStFailed] = useState(false);
   const [recent, setRecent] = useState<any[] | null>(null);
   const [series, setSeries] = useState<any>(null);
   const [ovWin, setOvWin] = useState("6h");
@@ -160,9 +170,14 @@ export function Health() {
   const [pool, setPool] = useState<any>(null);
   const load = useCallback(async () => {
     try {
-      const [h, s] = await Promise.all([api("health"), api("stats?window=1h").catch(() => null)]);
+      const [h, s] = await Promise.all([
+        api("health"),
+        api("stats?window=1h").catch(() => null),
+      ]);
       setHealth(h);
       setSt1h(s);
+      // Reset on success too: a transient failure must not leave the warning up forever.
+      setStFailed(s == null);
     } catch {
       /* ignore */
     }
@@ -221,7 +236,7 @@ export function Health() {
   return (
     <>
       {head}
-      <Issues health={health} st={st1h} state={state} pool={pool} />
+      <Issues health={health} st={st1h} state={state} pool={pool} stFailed={stFailed} />
       <StatGrid>
         <Stat label="Providers up">{up < 3 ? <span className="text-danger">{up} / 3</span> : up + " / 3"}</Stat>
         <Stat label="Pool">{poolN ? `${poolN} account${poolN === 1 ? "" : "s"}` : <span className="text-danger">none</span>}</Stat>

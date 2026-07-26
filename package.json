@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/imports.test.mjs && node translate.test.js && node test/wire.test.mjs && node test/router.test.mjs && node test/panel-tokens.test.mjs && node test/panel-nav.test.mjs && node test/proxy-log.test.mjs && node test/telemetry-throttle.test.mjs && node test/db-writehealth.test.mjs && node test/health-verdict.test.mjs",
+    "test": "node test/imports.test.mjs && node translate.test.js && node test/wire.test.mjs && node test/router.test.mjs && node test/panel-tokens.test.mjs && node test/panel-nav.test.mjs && node test/proxy-log.test.mjs && node test/telemetry-throttle.test.mjs && node test/db-writehealth.test.mjs && node test/health-verdict.test.mjs && node test/panel-health-claims.test.mjs",
     "test:translate": "node translate.test.js",
     "test:router": "node test/router.test.mjs",
     "test:docs": "node test/docs.test.mjs",
@@ -21,7 +21,8 @@
     "dev:prod": "bash scripts/dev-prod.sh",
     "test:telemetry": "node test/telemetry-throttle.test.mjs",
     "test:dbhealth": "node test/db-writehealth.test.mjs",
-    "test:health": "node test/health-verdict.test.mjs"
+    "test:health": "node test/health-verdict.test.mjs",
+    "test:panel-health": "node test/panel-health-claims.test.mjs"
   },
   "dependencies": {
     "pg": "^8.13.1"
