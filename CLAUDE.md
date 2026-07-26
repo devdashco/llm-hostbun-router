@@ -490,9 +490,18 @@ a crontab — control-plane policy), against the LAN MinIO endpoint, beacon-moni
   `/var/lib/docker/volumes/d11s05nc130l2kjzr6anpebr-config-data/_data/calls.db` on hostbun (64,208
   rows). It is the only backup of the pre-cutover log. Read it with
   `docker exec <container> node -e '…require("node:sqlite")…'` — the host has no `sqlite3`.
-- **Auth is CLOSED. `authMode = "required"` in prod — verified against the live router 2026-07-26**
-  (no key → 401, bad key → 401, native `/v1/messages` with no key → 401). This entry used to say the
-  endpoints were "still open" and that anyone naming a registered consumer could spend the Max
+- **Auth is closed on the TEXT paths and OPEN on the image ones. Both measured 2026-07-26.**
+  `authMode = "required"`, and `/v1/chat/completions`, `/v1/messages` and a bad `sk-llm-` key all
+  answer 401. **`POST /v1/images/generations`, `GET /v1/templates` and `GET /v1/loras` do not.** They
+  are dispatched in server.js at ~line 210, fifty-odd lines *before* the auth gate at ~268, and
+  `isInference` (line 240) matches only the text paths — so anyone who can reach the host can spend
+  GPU seconds on the image service, unattributed. Live traffic proves it is reachable: 32 of the
+  newest 40 image rows come from a `Bun/1.1.45` caller with `project=(none)` and no key.
+  **Closing it is a deliberate act, not a tidy-up** — that caller sends no key, so gating the path
+  401s it the moment you do. Issue it a key first, then move the route below the gate.
+  An earlier version of this entry said flatly "Auth is CLOSED", generalising from three text-path
+  probes. It was wrong about the image paths; do not trust a posture claim that does not name the
+  paths it tested. and that anyone naming a registered consumer could spend the Max
   subscriptions; that was true during the migration and is not true now. A stale security warning is
   not free — it invites re-fixing something already fixed and drowns out the warnings that still
   bite. The reasoning behind it stands: `X-Project` is **attribution, not authentication** — a
