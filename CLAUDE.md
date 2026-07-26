@@ -65,7 +65,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (211 checks, ~25s)
+## Tests — `npm test` (221 checks, ~25s)
 
 Seven suites, no network beyond loopback, no database, zero deps. Run before every push.
 
@@ -97,6 +97,14 @@ Seven suites, no network beyond loopback, no database, zero deps. Run before eve
   silently. The image-error branch did: a successful image call was logged and a failed one was not,
   so during the 2026-07-26 ingress outage the log read "no image traffic" instead of "image traffic
   failing" — while a *refused* connection, handled higher up, recorded normally and hid the gap.
+
+**Coverage is skewed toward the safe routes. Audited 2026-07-26:** fourteen admin routes had no
+test at all, and they cluster at the dangerous end — `auth` (the switch that decides whether anyone
+needs a key), `reset` (restores config defaults), `calls/clear` and `consumers/purge` (destructive),
+`registry/keys` + both `keys/revoke` (mint and revoke credentials), plus `reveal`. `reveal` and
+`auth` were covered that day; **the rest are still uncovered.** When adding a control-plane route,
+assume nothing is watching it unless you wrote the test — the read-only routes are the well-covered
+ones because they were the easy ones.
 
 **The suite has teeth — probed, not assumed (2026-07-26).** Deliberately breaking each of the five
 load-bearing invariants turns the gate red: an allowlist that substitutes instead of refusing

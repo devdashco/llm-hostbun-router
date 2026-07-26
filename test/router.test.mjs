@@ -94,6 +94,25 @@ console.log("routing — the paid door stays shut:");
 check("imagegen refused on a text endpoint", route("imagegen", "x"), { blocked: true });
 check("sd-turbo refused too", route("sd-turbo", "x"), { blocked: true });
 
+console.log("admin — the switch that decides whether anyone needs a key:");
+// POST /api/auth flips auth.mode. It is the single most consequential toggle in the control plane —
+// `required` is what makes an API key mean anything, and `off` opens every inference endpoint to
+// whoever can reach the host — and it had NO test until 2026-07-26. It is deliberately separate
+// from POST /api/config so the change is an explicit, logged act; nothing checked that separation
+// held, or that a nonsense mode was refused rather than stored.
+{
+  const before = api("state").authMode;
+  check("a nonsense mode is refused", api("auth", { mode: "sometimes" }).error, "mode must be off | optional | required");
+  check("...and the live mode is unchanged by the refusal", api("state").authMode, before);
+  check("a valid mode is accepted", api("auth", { mode: "required" }).mode, "required");
+  check("...and is what the router now reports", api("state").authMode, "required");
+  // `off` must remain reachable: it is the documented escape hatch when the registry is unseeded,
+  // and a gate you cannot open is as much an outage as one you cannot close.
+  check("`off` is still settable", api("auth", { mode: "off" }).ok, true);
+  api("auth", { mode: before || "optional" });                 // leave the harness as we found it
+  check("the mode was restored for the rest of this suite", api("state").authMode, before);
+}
+
 console.log("admin — the one endpoint that returns a live secret:")
 // /api/reveal hands back a raw sk-ant-oat so a direct-mode box can resync after a rotation. It had
 // NO coverage until 2026-07-26, and it moved to src/accounts.js that day — a broken dispatch
