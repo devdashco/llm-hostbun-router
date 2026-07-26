@@ -112,8 +112,14 @@ function sanitizeRule(v) {
   };
 }
 
-const LIMIT_WINDOWS =["1h", "6h", "24h", "7d", "30d"];
 const WINDOW_MS = { "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000 };
+// DERIVED, not a second literal. These were two adjacent lists of the same five strings: add a
+// window to WINDOW_MS, forget this one, and sanitizeLimit() silently rejects the new value back to
+// "24h" — the operator saves a 6h cap and gets a 24h one with no error. The panel keeps its own copy
+// (LIM_WINDOWS in panel/lib/routing-helpers.ts) because it is a separate static build with no server
+// import; test/panel-nav.test.mjs fails if the two drift, which is the pairing that would actually
+// bite — an offered window the server does not accept.
+const LIMIT_WINDOWS = Object.keys(WINDOW_MS);
 // Sanitize a usage-limit object from untrusted config. Returns a normalized limit or null.
 function sanitizeLimit(v) {
   if (!v || typeof v !== "object") return null;

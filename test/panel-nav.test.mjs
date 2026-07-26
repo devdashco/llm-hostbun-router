@@ -15,6 +15,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PANEL = join(ROOT, "panel");
@@ -121,5 +122,26 @@ for (const slug of UI_ROUTES) {
   if (!routes.has(slug)) fail(`UI_ROUTES has "/${slug}" but there is no app/(panel)/${slug}/page.tsx to serve`);
 }
 if (!process.exitCode) ok(`all ${UI_ROUTES.size} served slugs have a page`);
+
+// ── the panel's window list must match the server's ─────────────────────────────────────────────
+// panel/lib/routing-helpers.ts carries its own LIM_WINDOWS because the panel is a separate static
+// build with no way to import src/config.js. That copy is the one that bites: offer a window the
+// server's sanitizeLimit() does not accept and the operator saves a cap that silently becomes
+// "24h", with no error anywhere. The server side is derived from WINDOW_MS, so this pins the only
+// remaining hand-kept copy.
+console.log("\nlimit windows:");
+{
+  const req_ = createRequire(import.meta.url);
+  const { LIMIT_WINDOWS } = req_(join(ROOT, "src", "config.js"));
+  const helpers = read(join(PANEL, "lib", "routing-helpers.ts"));
+  const m = helpers.match(/export const LIM_WINDOWS\s*=\s*\[([^\]]*)\]/);
+  if (!m) fail("could not find LIM_WINDOWS in panel/lib/routing-helpers.ts");
+  else {
+    const panelWins = [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+    if (JSON.stringify(panelWins) === JSON.stringify(LIMIT_WINDOWS))
+      ok(`panel LIM_WINDOWS matches the server (${panelWins.join(", ")})`);
+    else fail(`panel offers ${JSON.stringify(panelWins)} but the server accepts ${JSON.stringify(LIMIT_WINDOWS)} — a cap saved on a window the server rejects silently becomes 24h`);
+  }
+}
 
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
