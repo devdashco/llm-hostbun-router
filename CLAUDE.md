@@ -13,7 +13,8 @@ refs may still linger in sibling repos.
 - `src/` — the router proper. No cycles; each module is a leaf or near-leaf.
   | file | owns |
   |---|---|
-  | `config.js` | live `CFG`, env + `/data/config.json`, sanitizers, key index |
+  | `config.js` | live `CFG`, env defaults + `/data/config.json` merge, key index |
+  | `config-schema.js` | the vocabularies and their validators — providers, image ids, limit windows/actions, auth modes. Depends on nothing but `path`; `config.js` **re-exports every name**, so callers and the import guard still resolve them there |
   | `identity.js` | consumer/job paths, API keys, `authenticate()` |
   | `routing.js` | pins, allowlists, usage limits, account pinning |
   | `http.js` | `readBody`/`readJson`, `buildHeaders`, `proxy()`, JSON enforcement — **536 lines, over the 500 budget** |
