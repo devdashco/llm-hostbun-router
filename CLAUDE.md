@@ -126,7 +126,12 @@ its import, and an exports-only pass is green on that exact state (reproduced to
 bound here" version was tried and flagged eleven things on a clean tree, and a check that cries wolf
 gets switched off. **`reset`'s test runs LAST in
 `router.test.mjs` by necessity** — it unlinks the config file and reverts `CFG` to `envDefaults()`,
-so it destroys the fixture every assertion above depends on. Add new cases before it, not after. When adding a control-plane route,
+so it destroys the fixture every assertion above depends on. Add new cases before it, not after —
+**enforced since 2026-07-26**, not merely asked: the reset block sets a flag and `check()` fails any
+assertion made after it, naming the fix. The file is 646 lines and deliberately NOT split — it boots
+one server and its ordering is load-bearing (reset last, the auth-mode block restores what it
+changed, the POST-config block wipes `projectRoutes` on purpose). Splitting it across files would
+hide the very constraints that make the length matter. When adding a control-plane route,
 assume nothing is watching it unless you wrote the test — the read-only routes are the well-covered
 ones because they were the easy ones.
 
