@@ -29,9 +29,15 @@ const bad = (name, why) => { console.log(`  FAIL  ${name}\n        ${why}`); fai
 
 // A stand-in for llama.cpp / api.anthropic.com / crazyrouter. Answers everything with a valid,
 // OpenAI-shaped body so the router's own code — not the upstream — is what is under test.
+// `?fail=1` on the inbound path makes the stub answer 4xx. Every route below used to meet a stub
+// that ALWAYS returned 200, so no error branch in the router was ever executed — and the json-enforce
+// upstream-error branch was throwing ReferenceError on HOP_RES from 2026-07-26 (introduced by the
+// jsonenforce split in 8dc6ca3) until this made it reachable.
+let failNext = false;
 const upstream = http.createServer((req, res) => {
   let b = ""; req.on("data", (c) => (b += c));
   req.on("end", () => {
+    if (failNext) { failNext = false; res.writeHead(429, { "content-type": "application/json" }); return res.end('{"error":{"message":"rate limited"}}'); }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl-test", object: "chat.completion", model: "fake",
@@ -144,6 +150,13 @@ routes.push(
   // The read-mostly tail of the control plane, uncovered until 2026-07-26. Low blast radius each,
   // but they are the routes that read a query string or call a provider, which is precisely the
   // shape that hung the whole panel when the src/ split dropped a require (see this file's header).
+  // The json-enforce path when the UPSTREAM fails. Distinct from the happy path above: it builds its
+  // own response headers, and it did that with an unimported HOP_RES — a ReferenceError thrown after
+  // the row was logged, so the caller got nothing and the log said the upstream 429'd.
+  ["POST /v1/chat/completions (json_object, upstream 429)", async () => {
+    failNext = true;
+    return call("/v1/chat/completions", J({ ...CHAT, response_format: { type: "json_object" } }));
+  }],
   ["GET  /api/models", () => adminGet("/api/models")],
   ["GET  /api/limits", () => adminGet("/api/limits")],
   ["GET  /api/claudecode/models", () => adminGet("/api/claudecode/models")],

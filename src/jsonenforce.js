@@ -12,7 +12,7 @@ const TR = require("../translate");
 const { CFG } = require("./config");
 const { recordCall, recordLimits } = require("./db");
 const { noteAcctCooldown, clearAcctCooldown } = require("./routing");
-const { buildHeaders } = require("./http");
+const { buildHeaders, HOP_RES } = require("./http");
 const { keyLabel, extractReqAll, applyLocalThinkingDefault, shipError } = require("./telemetry");
 
 // True when the request asks the model to emit JSON (OpenAI `response_format`).

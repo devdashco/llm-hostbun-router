@@ -357,4 +357,7 @@ const mask = (s) => { const t = String(s || ""); return !t ? "" : t.length <= 6 
 module.exports = {
   readBody, readJson, sendFile, sendJson, mask, buildHeaders, proxy,
   hasImageContent, headroomCompress, HEADROOM_URL,
+  // Exported for jsonenforce.js, which strips the same hop-by-hop headers on its own error path.
+  // One definition: two copies of this list drift, and the one that drifts is the one nobody reads.
+  HOP_RES,
 };
