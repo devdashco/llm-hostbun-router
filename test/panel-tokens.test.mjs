@@ -105,4 +105,15 @@ const scan = (re) => {
     : fail(`type scale drifted — expected ${want.join(" · ")}, got ${steps.join(" · ") || "(none)"}`);
 }
 
+// Money formatters must distinguish UNKNOWN from ZERO. `usd(null)` returning "$0" is the coercion
+// that made the premium-burn banner report an unpriceable model as costing nothing; `list_usd` is
+// nullable as of 2026-07-26, so anything rendering it through a formatter without a null guard
+// reintroduces that silently. fmtMs already gets this right — this keeps usd in step.
+{
+  const fmt = readFileSync(join(PANEL, "lib", "format.ts"), "utf8");
+  const usdBody = (fmt.match(/export const usd =[\s\S]*?\n\};/) || [""])[0];
+  if (/n == null|n === null|n === undefined/.test(usdBody)) ok("usd() distinguishes unknown from zero");
+  else fail("usd() coerces null to 0 — an unknown cost would render as $0 (see listCostUsd, 6132786)");
+}
+
 console.log(`\n${pass} passed${process.exitCode ? ", FAILURES above" : ", 0 failed"}`);

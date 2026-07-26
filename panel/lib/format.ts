@@ -13,7 +13,14 @@ export const nfmt = (n: number | string): string => {
   return "" + Math.round(v);
 };
 
-export const usd = (n: number | string): string => {
+// null/undefined is UNKNOWN, and renders as "—" like fmtMs below. `+n || 0` turned it into 0, and
+// 0 here reads as "this cost nothing" — the same coercion that had the premium-burn banner
+// announcing "~$0.00 list" for the one model we could not price (6132786 fixed that at the source,
+// in listCostUsd). No caller passes null today: usd() is only fed `usd`/`windowCost`, which come
+// from costUsd() and are a real 0 for the flat-rate providers. This is here so the next person who
+// renders the NULLABLE `list_usd` through it gets "—" instead of a silent $0.
+export const usd = (n: number | string | null | undefined): string => {
+  if (n == null) return "—";
   const v = +n || 0;
   if (v === 0) return "$0";
   if (v < 0.01) return "<$0.01";
