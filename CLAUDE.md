@@ -533,6 +533,16 @@ a crontab — control-plane policy), against the LAN MinIO endpoint, beacon-moni
   touching the token. `GET /api/accounts` surfaces `email`, `disabled`, and runtime `dead` (ACCT_DEAD).
   Seen live 2026-07-24: william went OAuth-disabled → auto-disabled; `pbox`/`pbox-claude` re-pinned to
   the fresh **`claude2mejlto`** (`claude2@mejl.to`).
+- **`list_usd` is NULLABLE as of 2026-07-26, and null means "unknown", not zero.** It appears on
+  `GET /api/stats` — on every `byX` row and on each `premiumUsage` entry — and is the notional
+  Anthropic list cost of claudecode traffic. `listCostUsd()` returns **null** for a model with no
+  `MODEL_COST` entry, because 0 is the specific claim "this traffic was free" and the ids missing
+  from that table are the newest, i.e. the dearest (`claude-opus-5` today). **Never `|| 0` it** — the
+  panel renders "cost unknown — model has no price defined", and any other consumer must do the same
+  or it will report a premium burn as nothing. A non-claudecode row keeps a real 0: the sub is flat
+  and local is free, so there "no list cost" is the true answer. `cccc` forwards `premiumUsage`
+  verbatim and does no arithmetic on it, so it is unaffected (checked 2026-07-26) — but that is the
+  check to repeat for any new consumer.
 - **`acct_limits` is keyed by Anthropic org-id, which says nothing about which login it is.** The
   `account` column (added 2026-07-09 by an idempotent `ALTER` in `initDb`) fixes that, but it is only
   stamped by live traffic. A cold-started router learns org→account from the
