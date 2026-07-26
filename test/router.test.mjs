@@ -63,7 +63,18 @@ const api = (path, body) => {
 const status = (path) => curl(["-o", "/dev/null", `${BASE}${path}`]).trim().replace(/[<>]/g, "");
 
 let pass = 0, fail = 0;
+// Set by the reset block at the bottom of this file, which unlinks CONFIG_FILE and reverts CFG to
+// envDefaults(). Every assertion above it reads a fixture that no longer exists afterwards, so a
+// case appended below would run against a blank router and either pass vacuously or fail for a
+// reason that has nothing to do with what it is testing. The ordering was a comment; now it trips.
+let fixtureDestroyed = false;
 function check(label, actual, expected) {
+  if (fixtureDestroyed) {
+    fail++;
+    console.log(`  FAIL  ${label}\n        this ran AFTER the reset block, which wipes the fixture.` +
+                "\n        Move it above `POST /api/reset` — everything below that point sees a blank config.");
+    return;
+  }
   const ok = JSON.stringify(actual) === JSON.stringify(expected);
   if (ok) { pass++; console.log(`  ok    ${label}`); }
   else { fail++; console.log(`  FAIL  ${label}\n        expected ${JSON.stringify(expected)}\n        actual   ${JSON.stringify(actual)}`); }
@@ -640,6 +651,8 @@ console.log("admin — reset, run last because it wipes the fixture:");
   check("the env-provided account pool survives", (after.claudecodeAccountPool || []).map((a) => a.name), ["acctA", "acctB"]);
   check("the config file was actually unlinked", existsSync(CFG_PATH), false);
 }
+
+fixtureDestroyed = true;   // anything asserting past this point is in the wrong place — see check()
 
 server.kill();
 console.log(`\n${pass} passed, ${fail} failed`);
