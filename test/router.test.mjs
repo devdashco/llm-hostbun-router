@@ -94,6 +94,27 @@ console.log("routing — the paid door stays shut:");
 check("imagegen refused on a text endpoint", route("imagegen", "x"), { blocked: true });
 check("sd-turbo refused too", route("sd-turbo", "x"), { blocked: true });
 
+console.log("admin — the destructive routes, with no database to destroy:");
+// calls/clear wipes the call log; consumers/purge deletes an unregistered caller's history. Neither
+// had a test until 2026-07-26, which is the wrong way round — the read-only routes were covered
+// because they were the easy ones. This harness runs with DATABASE_URL="", so driving them destroys
+// nothing; what that exercises is the more interesting half anyway, which is how each behaves when
+// it CANNOT do the thing it was asked to do.
+{
+  // clear must not answer a bare {ok:true}. With no DB it wiped nothing, and an operator reading
+  // "ok" would believe otherwise — the same "report the no-op as success" failure as an unpriced
+  // model costing $0. dbReady:false is the part that makes `ok` honest.
+  const cleared = api("calls/clear", {});
+  check("clear with no DB still says ok", cleared.ok, true);
+  check("...but declares it cleared nothing", cleared.dbReady, false);
+
+  // purge must REFUSE, not report `deleted: 0`. "I deleted nothing" and "I could not reach the
+  // database" are different answers and the caller has to be able to tell them apart.
+  const purged = api("consumers/purge", { name: "some-unregistered-name" });
+  check("purge with no DB refuses", purged.error, "registry unavailable: no database connection");
+  check("...and does not claim a deletion count", purged.deleted, undefined);
+}
+
 console.log("admin — the switch that decides whether anyone needs a key:");
 // POST /api/auth flips auth.mode. It is the single most consequential toggle in the control plane —
 // `required` is what makes an API key mean anything, and `off` opens every inference endpoint to

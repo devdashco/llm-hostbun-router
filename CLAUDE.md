@@ -65,7 +65,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (221 checks, ~25s)
+## Tests — `npm test` (225 checks, ~25s)
 
 Seven suites, no network beyond loopback, no database, zero deps. Run before every push.
 
@@ -101,8 +101,10 @@ Seven suites, no network beyond loopback, no database, zero deps. Run before eve
 **Coverage is skewed toward the safe routes. Audited 2026-07-26:** fourteen admin routes had no
 test at all, and they cluster at the dangerous end — `auth` (the switch that decides whether anyone
 needs a key), `reset` (restores config defaults), `calls/clear` and `consumers/purge` (destructive),
-`registry/keys` + both `keys/revoke` (mint and revoke credentials), plus `reveal`. `reveal` and
-`auth` were covered that day; **the rest are still uncovered.** When adding a control-plane route,
+`registry/keys` + both `keys/revoke` (mint and revoke credentials), plus `reveal`. `reveal`, `auth`,
+`calls/clear` and `consumers/purge` were covered that day; **the rest are still uncovered** —
+`reset`, `registry/keys`, both `keys/revoke`, `claudecode/models`, `models`, `limits`, `logout`,
+`crazyrouter/test`, `consumers/alias`, `registry/alias`. When adding a control-plane route,
 assume nothing is watching it unless you wrote the test — the read-only routes are the well-covered
 ones because they were the easy ones.
 
