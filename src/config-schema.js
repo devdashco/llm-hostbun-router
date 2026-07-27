@@ -24,13 +24,21 @@ const PROVIDERS = ["local", "crazyrouter", "claudecode"];
 // The image provider is deliberately absent from PROVIDERS: it is not a routing target. It is picked
 // by path (`/v1/images/*`), it speaks its own shape, and it bills GPU seconds rather than tokens.
 //
-// The upstream answers to TWO ids — `imagegen` and `sd-turbo` — and every one of them must be barred
-// from the text endpoints, or it drops through the whole resolver into crazyrouter, the only provider
-// that bills per token. Listing just the first one is how `sd-turbo` kept knocking on the paid door.
-// (The service's own /health reports `stabilityai/stable-diffusion-xl-base-1.0`: the name is a
-// historical label, not the weights. Ask the upstream, don't infer from the id.)
+// The upstream answers to THREE ids and every one of them must be barred from the text endpoints,
+// or it drops through the whole resolver into crazyrouter, the only provider that bills per token.
+// Listing just the first one is how `sd-turbo` kept knocking on the paid door — so this list has to
+// gain an entry the same day the image service serves a new id, never later.
+//
+// What actually runs, as of 2026-07-27, is SDXL 1.0 + ByteDance's SDXL-Lightning 8-step LoRA:
+//   · `imagegen`       — the canonical public id. Deliberately generic; the checkpoint behind it is
+//                        ours to swap without every caller editing a string.
+//   · `sdxl-lightning` — the honest id for what is loaded today, for callers that want to pin it.
+//   · `sd-turbo`       — a legacy alias, and a lie: this service has never run SD-Turbo. Kept only
+//                        so pre-rename callers don't break.
+// The service's own /health names both halves (`model` + `speed_lora`). Ask the upstream what it is
+// running; never infer the weights from the id.
 const IMAGE_MODEL_ID = "imagegen";
-const IMAGE_MODEL_IDS = [IMAGE_MODEL_ID, "sd-turbo"];
+const IMAGE_MODEL_IDS = [IMAGE_MODEL_ID, "sdxl-lightning", "sd-turbo"];
 const isImageModel = (m) => IMAGE_MODEL_IDS.includes(String(m || "").toLowerCase());
 const PROVIDER_SET = new Set(PROVIDERS);
 // Legacy ids → canonical. The retired wrapper's id and `anthropic` named one thing:

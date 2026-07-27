@@ -105,6 +105,10 @@ console.log("routing — the paid door stays shut:");
 // back as their 404 — on our bill.
 check("imagegen refused on a text endpoint", route("imagegen", "x"), { blocked: true });
 check("sd-turbo refused too", route("sd-turbo", "x"), { blocked: true });
+// Every id the image service advertises has to be here, or the one that is missing is the one that
+// reaches crazyrouter. `sdxl-lightning` is what it actually loads (SDXL 1.0 + the 8-step Lightning
+// LoRA); it was added to /v1/models on 2026-07-27 and must stay barred alongside the other two.
+check("sdxl-lightning refused too", route("sdxl-lightning", "x"), { blocked: true });
 
 console.log("admin — the alias routes:");
 // consumers/alias and registry/alias fold a legacy caller name onto its canonical consumer. Both

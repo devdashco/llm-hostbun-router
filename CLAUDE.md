@@ -224,13 +224,33 @@ Three **routing** providers — the whole of `PROVIDERS`, i.e. everything a mode
 | `crazyrouter` | `crazyrouter.com` cloud relay (gemini etc), key injected | OpenAI | **per token** |
 
 **There is a fourth upstream, and it is deliberately not in `PROVIDERS`: `images`.**
-`CFG.bases.images` (`IMAGE_BASE`, default `https://sdturbo.bofrid.dev`) with its own `CFG.imageToken`,
-serving `POST /v1/images/generations` plus `GET /v1/templates` and `GET /v1/loras`. It is left out of
-`PROVIDERS` on purpose — it is **not a routing target**: it is picked by PATH, never by model id, it
-speaks its own request shape, and it bills GPU seconds rather than tokens. That is also why
-`imagegen`/`sd-turbo` on a *text* endpoint is a refusal (invariant: never let an image id fall
+`CFG.bases.images` (`IMAGE_BASE`, code default `https://sdturbo.bofrid.dev`) with its own
+`CFG.imageToken`, serving `POST /v1/images/generations` plus `GET /v1/templates` and `GET /v1/loras`.
+**Prod points at `https://sdturbo-ww.blpk.cc` (verified 2026-07-27) — the service moved off pbox and
+the code default is dead, answering 503.** Read `bases.images` from `/api/state`; do not trust the
+default in `config.js`. Repo: `devdashco/sd-turbo-service` (github only, no GitLab project), and it
+is **not in the fleet Coolify** — `coolify_find` returns nothing for it, and pbox has no such
+container, so its logs are only reachable from the box that serves it.
+
+**The name is a lie and the ids are three.** It has never run SD-Turbo: it is SDXL 1.0 + ByteDance's
+SDXL-Lightning 8-step LoRA. `imagegen` is the canonical public id (generic on purpose — the
+checkpoint behind it is ours to swap), `sdxl-lightning` is the honest id for what is loaded, and
+`sd-turbo` is a legacy alias. All three live in `IMAGE_MODEL_IDS`; the service's `/health` names the
+base checkpoint AND the speed LoRA, so ask it rather than inferring weights from an id.
+
+It is left out of `PROVIDERS` on purpose — it is **not a routing target**: it is picked by PATH,
+never by model id, it speaks its own request shape, and it bills GPU seconds rather than tokens.
+That is also why an image id on a *text* endpoint is a refusal (invariant: never let an image id fall
 through to crazyrouter and come back as their 404, on our bill) while the same ids are legitimate on
-the image path. It still writes `provider='images'` rows to the call log, so it IS subject to the
+the image path. **`IMAGE_MODEL_IDS` must gain an entry the same day the service serves a new id** —
+the one that is missing is the one that reaches crazyrouter, per token, for a 404.
+
+**One request at a time, upstream.** One GPU, one `diffusers` pipeline, and sync `def` handlers in
+FastAPI's threadpool: concurrent calls were swapping each other's LoRA adapters mid-render and
+raising from inside CUDA. Measured 2026-07-27 on `/v1/images/generations`: 94×200, 47×500, 145×502
+in one hour, the 500s arriving ~18s in (after real GPU work) and the 502s in ~66ms (origin simply
+gone). A `GPU_LOCK` around select+render is committed in that repo but **not deployed** — no ssh to
+the box from pbox, so someone with access has to ship it. It still writes `provider='images'` rows to the call log, so it IS subject to the
 retention prune (`NOT IN ('anthropic','claudecode')`) — that is intended; only Claude Code chats are
 exempt. Don't "fix" the taxonomy by folding it into `PROVIDERS`; the exclusion is the design.
 
