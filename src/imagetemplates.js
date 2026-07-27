@@ -318,6 +318,39 @@ async function saveTemplate(req, res, ip) {
   return sendJson(res, 200, { ok: true, persisted, template: publicView(tpl) });
 }
 
+// Render one template from the panel, so "did this template come out right" is answerable where the
+// template is edited. It spends the same money the public route does — the difference is who is
+// asking (the admin cookie, not an API key), which is why it is a separate route and not a flag on
+// the public one. Kept OUT of proxy(): there is no caller request to forward, only a form submit.
+async function renderTemplate(req, res, ip) {
+  const p = await readJson(req, res);
+  if (!p) return;
+  const tpl = templateFor(p.slug);
+  if (!tpl) return sendJson(res, 400, { error: `no template '${p.slug}'` });
+  const prompt = String(p.prompt || "").trim();
+  if (!prompt) return sendJson(res, 400, { error: "prompt required — a template is a style, not a scene" });
+  const allowed = CFG.imageTemplateModels || IMAGE_TEMPLATE_MODELS;
+  const model = allowed.includes(String(p.model || "").toLowerCase()) ? String(p.model).toLowerCase() : (tpl.model || allowed[0]);
+  console.log(`[imgtpl] render ${tpl.slug} model=${model} ip=${ip} (panel)`);
+  try {
+    const r = await fetch(`${CFG.bases.crazyrouter}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${CFG.crazyrouterKey}` },
+      body: JSON.stringify(chatBody(tpl, model, prompt)),
+      signal: AbortSignal.timeout(180000),
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) return sendJson(res, 502, { error: `upstream ${r.status}`, upstream: j });
+    const url = j && j.data && j.data[0] && (j.data[0].url || (j.data[0].b64_json ? `data:image/png;base64,${j.data[0].b64_json}` : ""));
+    // No image in a 200 means the id is not actually an image model — say that, rather than handing
+    // the panel an empty <img> and letting it read as "the template is broken".
+    if (!url) return sendJson(res, 502, { error: `'${model}' answered without an image — is it an image model?`, upstream: j });
+    return sendJson(res, 200, { ok: true, model, url });
+  } catch (e) {
+    return sendJson(res, 502, { error: `render failed: ${e.message}` });
+  }
+}
+
 async function removeTemplate(req, res, ip) {
   const p = await readJson(req, res);
   if (!p) return;
@@ -332,5 +365,5 @@ async function removeTemplate(req, res, ip) {
 
 module.exports = {
   TPL_DIR, templateFor, templateForSite, seedImageTemplates, listPublic, serveReference, generate,
-  listAdmin, saveTemplate, removeTemplate, storeReference, readReference, composePrompt, chatBody,
+  listAdmin, saveTemplate, removeTemplate, renderTemplate, storeReference, readReference, composePrompt, chatBody,
 };

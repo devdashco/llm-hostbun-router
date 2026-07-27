@@ -327,6 +327,9 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (sub === "image-templates" && req.method === "GET") return IT.listAdmin(res);
   if (sub === "image-templates" && req.method === "POST") return IT.saveTemplate(req, res, ip);
   if (sub === "image-templates/remove" && req.method === "POST") return IT.removeTemplate(req, res, ip);
+  // Render one, from the panel, on the router's own crazyrouter key. Same spend as the public
+  // route; different asker (the admin cookie), which is why it is its own route.
+  if (sub === "image-templates/render" && req.method === "POST") return IT.renderTemplate(req, res, ip);
   // ── the consumer registry ── (src/consumers.js)
   if (sub === "consumers/alias" && req.method === "POST") return CO.setAlias(req, res, ip);
   if (sub === "consumers" && req.method === "GET") return CO.listConsumers(req, res);
