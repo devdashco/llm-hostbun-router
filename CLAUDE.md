@@ -51,14 +51,26 @@ refs may still linger in sibling repos.
   carve-outs are load-bearing: `/api/v1/*` is real inference (`base_url=…/api`) and `/api/pricing` is
   public — routing either into the cookie-gated handler 401s callers that never had a cookie. Build
   locally: `npm run build:panel`; preview against prod's API: `node panel/scripts/preview.mjs`.
-  **Five pages, named for the direction of the wire** (renamed 2026-07-26): `overview` (Health ·
-  Usage), `calls`, `routing` (Rules · Models), **`consumers`** (Consumers · Access — everything
-  inbound: who may call, and the auth gate) and **`providers`** (Accounts · Crazyrouter — every
-  upstream we spend against). They replace `identity`/`settings`, which filed the outbound Max
-  account pool under "Identity" and a provider's API key under "Settings". **Nav label == landing
-  tab == page heading**, verbatim; three different words for one page is what made the old nav
-  unreadable. Old slugs stay as client-side redirects and stay in `UI_ROUTES` — drop one and a
-  bookmark 404s instead of landing where it used to.
+  **Five pages, ordered as the path a request takes** — `overview` (Health · Usage), `calls`, then
+  **`consumers`** (Callers · Secrets — who may call in, and the locks), **`routing`** (Rules ·
+  Models) and **`providers`** (Accounts · Crazyrouter · Image templates — every upstream we spend
+  against). They replace `identity`/`settings`, which filed the outbound Max account pool under
+  "Identity" and a provider's API key under "Settings". **Nav label == landing tab == page
+  heading**, verbatim; three different words for one page is what made the old nav unreadable.
+  Old slugs stay as client-side redirects and stay in `UI_ROUTES` — drop one and a bookmark 404s
+  instead of landing where it used to.
+
+  **The nav carries three signals, not one (2026-07-27).** The 2026-07-26 pass named each page for
+  the direction of the wire, which is the right story and one an abstract noun cannot tell: in a
+  list, "Consumers" and "Providers" are nine-letter latinate twins ending in -ers, and neither says
+  which way it points. So the sidebar now also renders a one-line **`hint`** of what the page holds
+  (this panel is visited occasionally — every visit starts from a cold memory), splits into
+  **Watch** (nothing you click changes behaviour) and **Change** (it does), and orders the second
+  group as Callers → Routing → Upstreams so the nav teaches the router. The labels **`Callers`** and
+  **`Upstreams`** are exactly that: labels. The page bodies still say `consumer` and `provider`,
+  because those are the registry entity and the call-log column — a prettier synonym there would be
+  a translation step on every table, filter and error string. Same reason the `Secrets` tab kept
+  the id `access`: an id is a URL, and the legacy redirects point at it.
 
 - `docs/` — **docsify** site: `index.html` shell + markdown pages + `_sidebar.md`, docsify vendored in
   `docs/vendor/` (no CDN, `noEmoji: true` because emoji shortcodes fetch images from githubassets).

@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 
 // A reference picture + a standing style instruction, rendered by an image-capable model on
-// crazyrouter. It lives under Providers because that is the upstream it spends against — the same
+// crazyrouter. It lives under Upstreams because that is the upstream it spends against — the same
 // reason the crazyrouter key does. SD-Turbo's own prompt templates are a different thing on the same
 // field name and are not editable here; see src/imagetemplates.js.
 

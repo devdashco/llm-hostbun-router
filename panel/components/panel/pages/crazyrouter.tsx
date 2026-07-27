@@ -8,7 +8,7 @@ import { useApp } from "@/components/panel/context";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 
-// The cloud relay's key + spend. An upstream we call, so it lives under Providers next to the
+// The cloud relay's key + spend. An upstream we call, so it lives under Upstreams next to the
 // claudecode account pool — not under a generic "settings" page.
 export function Crazyrouter() {
   const { reload } = useApp();

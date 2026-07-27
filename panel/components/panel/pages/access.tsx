@@ -9,7 +9,9 @@ import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 
 // The inbound gate: the admin password, the obliterated-model token, and where the account tokens
-// actually live. Sits beside Consumers because both answer "who may call this router".
+// actually live. Sits beside Callers because both answer "who may call this router". Labelled
+// "Secrets", not "Access": every control on it is a password or a token, and the legacy /secrets
+// bookmark that redirects here has said so all along.
 export function Access() {
   const { state, reload } = useApp();
   const [v, setV] = useState({ oblit: "", admin: "" });
@@ -47,7 +49,7 @@ export function Access() {
   return (
     <div className="space-y-4.5">
       <PageHead
-        title="Access"
+        title="Secrets"
         desc={
           <>
             Live, file-backed overrides in <span className="font-mono">{state.configFile}</span>. Leaving a field blank keeps the current value.

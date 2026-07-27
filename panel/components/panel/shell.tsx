@@ -12,38 +12,69 @@ import { ErrorBoundary } from "@/components/panel/error-boundary";
 import { api, setOnUnauth } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-// Named for the direction of the wire, because that is what the router actually is: callers come
-// IN (consumers), a rule picks WHERE (routing), an upstream is billed OUT (providers). The old
-// names lied — "Identity" held the outbound Claude Max pool and "Settings" opened on a provider's
-// API key. Each label is repeated verbatim as its landing tab and page heading; three different
-// words for one page is how a nav stops being readable.
+// Three things carry the meaning here, and the label is only one of them.
+//
+// The 2026-07-26 pass named every page for the direction of the wire — Consumers in, Routing in the
+// middle, Providers out — and that story is right but a single abstract noun cannot tell it. In a
+// list, "Consumers" and "Providers" are two nine-letter latinate twins ending in -ers: you have to
+// read to the third syllable to tell them apart, and neither says which way it points. So:
+//
+//   · `hint` — one line of what the page actually holds. This panel is used occasionally, not all
+//     day, so every visit starts from a cold memory. The hint is what removes the guess.
+//   · `group` — READ (nothing you click changes behaviour) vs CONFIGURE (it does). Answers "is it
+//     safe to poke this" before you poke it.
+//   · order — Callers → Routing → Upstreams is the path a request takes, so the sidebar itself
+//     teaches the router.
+//
+// "Callers"/"Upstreams" replace Consumers/Providers as LABELS only: plain, opposite in shape, and
+// already the words the code's own prose uses to explain the abstract ones. The bodies keep saying
+// `consumer` and `provider`, because those are the registry entity and the call-log column — a
+// synonym there would be a translation step on every table and error string.
 export const NAV = [
-  { name: "Overview", slug: "overview", Icon: LayoutGrid },
-  { name: "Call log", slug: "calls", Icon: List },
-  { name: "Routing", slug: "routing", Icon: Route },
-  { name: "Consumers", slug: "consumers", Icon: Users },
-  { name: "Providers", slug: "providers", Icon: Server },
+  { name: "Overview", slug: "overview", Icon: LayoutGrid, group: "read", hint: "is it up, and what it cost" },
+  { name: "Call log", slug: "calls", Icon: List, group: "read", hint: "every request, prompt and reply" },
+  { name: "Callers", slug: "consumers", Icon: Users, group: "configure", hint: "who may call in, and their keys" },
+  { name: "Routing", slug: "routing", Icon: Route, group: "configure", hint: "which model a project gets" },
+  { name: "Upstreams", slug: "providers", Icon: Server, group: "configure", hint: "the accounts we spend against" },
+];
+
+const GROUPS: [string, string][] = [
+  ["read", "Watch"],
+  ["configure", "Change"],
 ];
 
 function Sidebar({ active }: { active: string }) {
   return (
-    <nav className="flex flex-1 flex-col gap-px">
-      {NAV.map(({ name, slug, Icon }) => (
-        <Link
-          key={slug}
-          href={`/${slug}/`}
-          className={cn(
-            "flex items-center gap-2.5 rounded-md px-2 py-1.5 text-body font-medium transition-colors",
-            active === slug
-              ? "bg-secondary text-foreground"
-              : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-          )}
-        >
-          <Icon
-            className={cn("size-4 shrink-0", active === slug ? "text-p-crazyrouter" : "text-muted-foreground/70")}
-          />
-          <span>{name}</span>
-        </Link>
+    <nav className="flex flex-1 flex-col gap-3.5">
+      {GROUPS.map(([id, label]) => (
+        <div key={id} className="flex flex-col gap-px">
+          <div className="px-2 pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground/60">
+            {label}
+          </div>
+          {NAV.filter((n) => n.group === id).map(({ name, slug, Icon, hint }) => (
+            <Link
+              key={slug}
+              href={`/${slug}/`}
+              className={cn(
+                "flex items-start gap-2.5 rounded-md px-2 py-1.5 transition-colors",
+                active === slug
+                  ? "bg-secondary text-foreground"
+                  : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+              )}
+            >
+              <Icon
+                className={cn(
+                  "mt-0.5 size-4 shrink-0",
+                  active === slug ? "text-p-crazyrouter" : "text-muted-foreground/70",
+                )}
+              />
+              <span className="min-w-0">
+                <span className="block text-body font-medium leading-tight">{name}</span>
+                <span className="mt-0.5 block text-meta leading-snug text-muted-foreground/70">{hint}</span>
+              </span>
+            </Link>
+          ))}
+        </div>
       ))}
     </nav>
   );
