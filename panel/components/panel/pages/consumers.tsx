@@ -135,7 +135,7 @@ export function Consumers() {
     <div className="space-y-4.5">
       <PageHead
         title="Callers"
-        desc="Register who may call the router and issue their keys. A caller is a consumer everywhere else — the API, the registry, the call log.Spend lives on the Usage tab."
+        desc="Register who may call the router and issue their keys. A caller is a consumer everywhere else — the API, the registry, the call log. Spend lives on the Usage tab."
         actions={
           <>
             <Button variant="outline" size="sm" onClick={load}>
