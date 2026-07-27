@@ -26,6 +26,7 @@ refs may still linger in sibling repos.
   | `accounts.js` | the Claude Max pool and its project pins — `/api/accounts*`, `/api/pins` |
   | `consumers.js` | the registry's HTTP face — `/api/consumers*`, key issue/revoke |
   | `diagnostics.js` | questions ABOUT the router — `/api/health`, `models`, `limits`, `crazyrouter[/test]`, `test`, `resolve`. Routes nothing, mutates nothing |
+  | `imagetemplates.js` | the SECOND image path — a reference picture + a style instruction, rendered by an image-capable crazyrouter model. The store, its CRUD, and the one paid route under `/v1/images/*` |
   | `registry.js` | the only writer of the consumer registry to Postgres |
   | `telemetry.js` | call-log row shaping, HyperDX error shipping |
   | `pricing.js` | USD estimates (crazyrouter only) |
@@ -67,9 +68,9 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (268 checks, ~25s)
+## Tests — `npm test` (302 checks, ~30s)
 
-Eight suites, no network beyond loopback, no database, zero deps. Run before every push.
+Nine suites, no network beyond loopback, no database, zero deps. Run before every push.
 
 - `test/imports.test.mjs` — static check that every cross-module call is actually bound in the file
   making it. The `src/` split left twelve module-level identifiers unimported; `require` doesn't
@@ -102,6 +103,13 @@ Eight suites, no network beyond loopback, no database, zero deps. Run before eve
   `24h`), `LIM_HARD` vs `LIMIT_HARD` (an unknown action becomes `block`, so "warn only" turns into a
   429), and `PROVS` vs `PROVIDERS` (compared as a SET — the panel orders them for display). Add a
   value on one side only and the gate goes red.
+
+- `test/imagetemplates.test.mjs` — the image-template path, against TWO fake upstreams so "which
+  upstream answered" is an assertion rather than an inference. Pins the three things that fail
+  silently: a generation that reaches the model WITHOUT the reference image (it still returns a fine,
+  off-brand picture — nothing errors), an SD-Turbo template name that stops falling through, and the
+  paid route answering without a key. Probed by mutation: dropping the reference part turns one check
+  red, hardcoding the auth mode to `off` turns three red.
 
 - `test/proxy-log.test.mjs` — `proxy()`'s EARLY-RETURN branches still write a call-log row. Stubs
   `recordCall` on the db module *before* requiring `http.js` (it destructures at require time, so a
@@ -213,6 +221,30 @@ through to crazyrouter and come back as their 404, on our bill) while the same i
 the image path. It still writes `provider='images'` rows to the call log, so it IS subject to the
 retention prune (`NOT IN ('anthropic','claudecode')`) — that is intended; only Claude Code chats are
 exempt. Don't "fix" the taxonomy by folding it into `PROVIDERS`; the exclusion is the design.
+
+**And a fifth thing sharing that path: image TEMPLATES (2026-07-27).** A template here is a
+reference *picture* plus a standing style instruction, rendered by an image-capable model on
+crazyrouter (`imageTemplateModels`, seeded `nano-banana*`) — SDXL cannot do it because it never sees
+a picture. `POST /v1/images/generations` with a `template` this router knows is rewritten into a
+multimodal `/v1/chat/completions` against crazyrouter (`targetPath` on `proxy()`, so the call-log row
+still carries the path the CALLER used) and the reply is forwarded verbatim: an image model already
+answers in the OpenAI images envelope. **Three things here are load-bearing, not preferences:**
+
+1. **`template` picks the upstream, and an unknown name falls THROUGH to SD-Turbo untouched.**
+   SD-Turbo has its own `template` vocabulary on the same field and the same path. Route on "is this
+   one of ours", never on "is this field present", or every SD prompt template 404s the day this ships.
+2. **This is the ONLY route under `/v1/images/*` that authenticates**, because it is the only one
+   that spends money — the rest are our own GPU and are anonymous on purpose. Invariant 3 in image
+   form. A caller's model id is checked against `imageTemplateModels` for the same reason: without it
+   `{"template":"bobbo","model":"claude-opus-5"}` bills per token and answers an images endpoint with
+   a chat completion.
+3. **The picture lives on OUR volume** (`/data/image-templates/<slug>.<ext>`), fetched once at create
+   time. The seven templates came out of the ecosystem CMS's `sanity.image_templates` — the point of
+   moving them was to stop every image call depending on that Supabase bucket, so storing the URL
+   would have moved nothing. `assets/image-templates/` is the committed copy and re-seeds an EMPTY
+   store only (a fresh volume), so a deliberate delete stays deleted. Re-sync from the CMS with
+   `node scripts/import-cms-image-templates.mjs`; it also shrinks references to 1280px/JPEG, because
+   the reference is base64'd into every request and the CMS held a 4.7 MB PNG.
 
 Legacy ids still migrate on read: `cloud`→`crazyrouter`; `claude`/`anthropic`/`wrappy`→`claudecode`.
 The old subprocess wrapper is **deleted** — the router now calls the real Anthropic API with a pinned

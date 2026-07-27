@@ -37,6 +37,8 @@ const AC = require("./accounts");
 const CO = require("./consumers");
 // Provider health, catalogs, resolve tracer, one-shot test call. Split out 2026-07-26.
 const DX = require("./diagnostics");
+// The image-template store — see src/imagetemplates.js. The admin GATE stays in this dispatcher.
+const IT = require("./imagetemplates");
 
 // ─────────────────────────────────────────────────────────────────────────────
 const COOKIE = "hb_admin";
@@ -319,6 +321,12 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (sub === "accounts/token" && req.method === "POST") return AC.setAccountToken(req, res, ip);
   if (sub === "accounts/disable" && req.method === "POST") return AC.setAccountDisabled(req, res, ip);
   if (sub === "accounts/remove" && req.method === "POST") return AC.removeAccount(req, res, ip);
+  // ── image templates ── (src/imagetemplates.js). The store behind `template` on
+  // POST /v1/images/generations: a reference picture plus a style instruction. Editing one is a
+  // config write like any other; the pictures live beside config.json on the same volume.
+  if (sub === "image-templates" && req.method === "GET") return IT.listAdmin(res);
+  if (sub === "image-templates" && req.method === "POST") return IT.saveTemplate(req, res, ip);
+  if (sub === "image-templates/remove" && req.method === "POST") return IT.removeTemplate(req, res, ip);
   // ── the consumer registry ── (src/consumers.js)
   if (sub === "consumers/alias" && req.method === "POST") return CO.setAlias(req, res, ip);
   if (sub === "consumers" && req.method === "GET") return CO.listConsumers(req, res);

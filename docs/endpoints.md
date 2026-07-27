@@ -5,7 +5,9 @@
 | POST | `/v1/chat/completions` | all three | Chat, routed by model. Streaming, tools, structured output, vision. Needs identity. |
 | POST | `/v1/messages` | `claudecode` | Anthropic-native shape, forwarded byte-for-byte. Needs identity. |
 | POST | `/v1/images/generations` | image | Text-to-image on the pbox GPU. No identity required. |
-| GET | `/v1/templates`, `/v1/loras` | image | Image templates and named-LoRA catalog |
+| GET | `/v1/templates`, `/v1/loras` | image | SD-Turbo prompt templates and named-LoRA catalog |
+| POST | `/v1/images/generations` + `template` | `crazyrouter` | Reference-picture templates. Paid, **needs a key**. |
+| GET | `/v1/image-templates` | meta | The reference-picture templates and their pictures |
 | POST | `/v1/completions`, `/v1/embeddings`, `/v1/audio/*`, `/v1/rerank` | `crazyrouter` | Rest of the OpenAI-compatible surface, key injected |
 | GET | `/v1/models` | merged | What each provider currently advertises. Not the priced list; see `/prices.json`. |
 | POST | `/local/v1/chat/completions` | `local` | Legacy explicit local path |
@@ -64,3 +66,53 @@ curl https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/
 ```
 
 Asking for `imagegen` on a chat endpoint is refused with a 400 that tells you to POST it here instead.
+
+## Image templates — a reference picture + a style instruction
+
+The same path serves a **second** kind of image. A template registered on this router carries a
+reference picture and a standing style instruction, and renders through an image-capable cloud model
+(`nano-banana` and friends) that can actually *see* the reference. That is what keeps a recurring
+character or house style consistent across articles — SDXL above cannot do it, because it never sees
+a picture.
+
+```bash
+curl https://llm.hostbun.cc/v1/images/generations \
+  -H "Authorization: Bearer sk-llm-…" -H "Content-Type: application/json" \
+  -d '{"model":"nano-banana","template":"bobbo","prompt":"handing over the keys to a new tenant"}'
+# → {"created":…,"data":[{"url":"https://media.crazyrouter.com/…png"}]}
+```
+
+| Field | Meaning |
+|---|---|
+| `template` | A slug from `GET /v1/image-templates`. **This field is what picks the upstream.** |
+| `prompt` | The scene. Required — a template is a style, not a subject. |
+| `model` | Optional; defaults to the template's own. Must be an image model this router knows. |
+
+**This is the one image route that needs a key.** Everything else under `/v1/images/*` runs on our own
+GPU and is free, so it is deliberately anonymous; this one spends real money per picture, and an
+unauthenticated paid route is a bill nobody can attribute.
+
+A `template` value this router does not know **falls through untouched** to the SD-Turbo prompt
+templates above — the two vocabularies share the field, and ours wins a name collision.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/v1/image-templates` | Every template: instruction, aspect ratio, sites, reference URL |
+| GET | `/v1/image-templates?site=bofrid.se` | The template that dresses one site (404 if none does) |
+| GET | `/v1/image-templates/<slug>/reference` | The reference picture itself |
+| GET/POST | `/api/image-templates` | List / create / edit (panel cookie) |
+| POST | `/api/image-templates/remove` | Delete, picture and all (panel cookie) |
+
+Create one with the picture inline — a URL, a `data:` URI, or bare base64. It is fetched **once** and
+stored on the router's volume, so a template never depends on someone else's bucket staying up:
+
+```bash
+curl https://llm.hostbun.cc/api/image-templates -b hb_admin=… -H "Content-Type: application/json" \
+  -d '{"slug":"bobbo","name":"Bobbo","aspectRatio":"1:1","sites":["bofrid.se"],
+       "systemInstruction":"Follow the reference character and style. NO TEXT IN THE IMAGE.",
+       "referenceImage":"https://example.com/bobbo.jpg"}'
+```
+
+Editing merges: omit `referenceImage` and the stored picture stays. The templates shipped in
+`assets/image-templates/` are restored automatically when the store is empty (a fresh volume) — and
+only then, so a deliberate deletion sticks.

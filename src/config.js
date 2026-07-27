@@ -53,6 +53,7 @@ const SCHEMA = require("./config-schema");
 const {
   PROVIDERS, PROVIDER_SET, LEGACY_PROVIDER, normProvider, providerOf,
   IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel,
+  IMAGE_TEMPLATE_MODELS, IMAGE_TEMPLATE_SLUG, sanitizeImageTemplate,
   WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES,
   sanitizeRule, sanitizeLimit,
 } = SCHEMA;
@@ -82,6 +83,19 @@ function envDefaults() {
     claudecodeAccountPool: (() => { try { return JSON.parse(process.env.ANTHROPIC_POOL || "[]"); } catch { return []; } })(),
     // bearer injected toward the image upstream (SD-Turbo API_TOKEN). Empty = send nothing.
     imageToken: process.env.IMAGE_TOKEN || "",
+    // imageTemplates: slug → {name, systemInstruction, model, aspectRatio, reference, …}. A reference
+    // picture plus a style instruction, rendered by an image-capable crazyrouter model — the SECOND
+    // image path, and the only one that costs money (see src/imagetemplates.js). The picture itself
+    // is a file on the same volume, named here by filename only. Seeded from assets/image-templates
+    // when this is empty, so a fresh volume still ships the templates the repo carries.
+    imageTemplates: {},
+    // Which model ids that path will render with. Config, never code (invariant 6) — crazyrouter adds
+    // image models without asking, and this list is what keeps a TEXT id from reaching a paid upstream
+    // through an images endpoint.
+    imageTemplateModels: (() => {
+      const env = (process.env.IMAGE_TEMPLATE_MODELS || "").split(",").map((x) => x.trim()).filter(Boolean);
+      return env.length ? env : [...IMAGE_TEMPLATE_MODELS];
+    })(),
     // models starting with this prefix (lowercased) are served by the claudecode provider.
     claudePrefix: process.env.CLAUDE_PREFIX || process.env.WRAPPY_PREFIX || "claude",
     // claudecodeModels: the ids /v1/models advertises for the claudecode provider. Anthropic ships
@@ -234,6 +248,22 @@ function mergeConfig(base, saved) {
   }
   if (Array.isArray(saved.gatedModels))
     c.gatedModels = saved.gatedModels.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
+  // Image templates. Validated per entry and keyed on the SANITIZED slug, not on the object key: a
+  // saved file whose key and `slug` disagree would otherwise be addressable under one name and
+  // rendered under the other. An entry that says nothing (no instruction, no picture) is dropped.
+  if (saved.imageTemplates && typeof saved.imageTemplates === "object" && !Array.isArray(saved.imageTemplates)) {
+    c.imageTemplates = {};
+    for (const [k, v] of Object.entries(saved.imageTemplates)) {
+      const t = sanitizeImageTemplate({ slug: k, ...(v && typeof v === "object" ? v : {}) });
+      if (t && (t.systemInstruction || t.reference)) c.imageTemplates[t.slug] = t;
+    }
+  }
+  if (Array.isArray(saved.imageTemplateModels)) {
+    const ids = saved.imageTemplateModels.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().toLowerCase());
+    // An explicit empty list would disable templated generation entirely with no error anywhere —
+    // read it as "unset" and keep the seed. Removing a model is a rewrite of the list, not a wipe.
+    if (ids.length) c.imageTemplateModels = [...new Set(ids)];
+  }
   // Secrets / scalars, with legacy aliases.
   if (typeof saved.crazyrouterKey === "string") c.crazyrouterKey = saved.crazyrouterKey;
   else if (typeof saved.crazyKey === "string") c.crazyrouterKey = saved.crazyKey;

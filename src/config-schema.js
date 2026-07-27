@@ -74,6 +74,51 @@ function sanitizeRule(v) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Image templates — a reference picture + a style instruction, rendered by an image-capable model
+// on crazyrouter. See src/imagetemplates.js for the path itself; this is only the vocabulary.
+// ─────────────────────────────────────────────────────────────────────────────
+// The ids this router will render a template with. Config, never code (invariant 6): crazyrouter
+// ships image models without asking us, so `imageTemplateModels` in /data/config.json is the live
+// list and this is the seed. It exists to stop a text model id reaching the paid upstream through
+// an images endpoint — the caller would be billed per token and handed a chat completion.
+const IMAGE_TEMPLATE_MODELS = ["nano-banana", "nano-banana-pro", "nano-banana-2"];
+// A slug is a URL path segment (/v1/image-templates/<slug>/reference) AND a filename stem on the
+// volume, so it is restricted to what is safe in both. No dots: `..` is the traversal that matters.
+const IMAGE_TEMPLATE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// Normalize one template from untrusted input (admin POST, config.json, the repo seed). Returns null
+// when the slug is unusable — the caller answers 400 rather than writing a key nobody can address.
+// Accepts snake_case as well as camelCase: the CMS rows these came from spell it `system_instruction`.
+function sanitizeImageTemplate(v) {
+  if (!v || typeof v !== "object") return null;
+  const slug = String(v.slug || "").trim().toLowerCase();
+  if (!IMAGE_TEMPLATE_SLUG.test(slug)) return null;
+  const str = (x, max) => (typeof x === "string" ? x.trim().slice(0, max) : "");
+  const ratio = str(v.aspectRatio ?? v.aspect_ratio, 12);
+  const ref = str(v.reference, 96);
+  return {
+    slug,
+    name: str(v.name, 80) || slug,
+    description: str(v.description, 400),
+    systemInstruction: str(v.systemInstruction ?? v.system_instruction, 8000),
+    // "" = fall back to the first entry of imageTemplateModels at render time, so a template written
+    // before an id existed does not pin itself to a model that has since been retired.
+    model: str(v.model, 80).toLowerCase(),
+    aspectRatio: /^\d{1,2}:\d{1,2}$/.test(ratio) ? ratio : "",
+    // Filename only — never a path. storeReference() is the only writer and always names it <slug>.<ext>.
+    reference: /^[a-z0-9][a-z0-9-]{0,79}\.(jpg|jpeg|png|webp|gif)$/.test(ref) ? ref : "",
+    // Which of our sites this template dresses, as bare hostnames. It is what lets a caller ask for
+    // "the template for bofrid.se" without a second system knowing the answer — the association used
+    // to live only in the CMS, which made every image call a CMS call.
+    sites: Array.isArray(v.sites)
+      ? [...new Set(v.sites.filter((s) => typeof s === "string" && s.trim())
+          .map((s) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "")))].sort()
+      : [],
+    created: Number(v.created) || 0,
+    updated: Number(v.updated) || 0,
+  };
+}
+
 const WINDOW_MS = { "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000 };
 // DERIVED, not a second literal. These were two adjacent lists of the same five strings: add a
 // window to WINDOW_MS, forget this one, and sanitizeLimit() silently rejects the new value back to
@@ -110,6 +155,7 @@ function sanitizeLimit(v) {
 module.exports = {
   PROVIDERS, PROVIDER_SET, LEGACY_PROVIDER, normProvider, providerOf,
   IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel,
+  IMAGE_TEMPLATE_MODELS, IMAGE_TEMPLATE_SLUG, sanitizeImageTemplate,
   WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES,
   sanitizeRule, sanitizeLimit,
 };

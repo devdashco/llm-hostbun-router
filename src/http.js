@@ -145,7 +145,11 @@ async function headroomCompress(bodyBuf, model, provider) {
 
 async function proxy(req, res, base, opts = {}) {
   const { bodyBuf, injectKey, authToken, rewriteModel, model, provider, project } = opts;
-  let target = base + req.url;
+  // `targetPath` overrides the path upstream while the call-log row keeps the path the CALLER used.
+  // Image templates need exactly that: the caller POSTs /v1/images/generations, and the request goes
+  // out as a multimodal /v1/chat/completions. Logging it under the rewritten path would make the
+  // image traffic unfindable in the very log that exists to attribute it.
+  let target = base + (opts.targetPath || req.url);
   const ip = opts.ip || req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
   const t0 = Date.now();
   let stream = false;

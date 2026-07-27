@@ -9,6 +9,10 @@
 //   model "claude*" (e.g. claude-sonnet-4-6)    -> claudecode, the pinned account's token injected
 //   any other model                             -> crazyrouter, key injected
 //   model "imagegen"  +  POST /v1/images/*      -> image generation (SD-Turbo on the pbox GPU)
+//   `template` naming one of ours + same path  -> image templates: a reference picture + a style
+//                                                 instruction, rendered by a crazyrouter image
+//                                                 model. PAID, so this one route needs a key.
+//   /v1/image-templates[/<slug>/reference]     -> that store, public reads
 //   GET /v1/models                              -> local + claudecode + crazyrouter (merged)
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
@@ -33,6 +37,7 @@
 //   src/db.js          the call log (Postgres) and harvested account headroom
 //   src/claudecode.js  the Anthropic model catalog
 //   src/admin.js       the control-plane API (/api/*) behind the password cookie
+//   src/imagetemplates.js  reference picture + style instruction -> a crazyrouter image model
 //   src/telemetry.js   call-log row shaping + HyperDX error shipping
 //   src/pricing.js     USD estimates (crazyrouter only; the rest are flat or free)
 //   translate.js       OpenAI <-> Anthropic, pure functions, unit-tested
@@ -47,6 +52,8 @@ const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL } = require(".
 const { jsonEnforce, wantsJsonFormat } = require("./src/jsonenforce");
 const { mergedModels, refreshClaudecodeModels, refreshAccountLimits, CLAUDECODE_MODEL_REFRESH_MS } = require("./src/claudecode");
 const { handleAdminApi } = require("./src/admin");
+// Image templates: a reference picture + a style instruction, rendered by a crazyrouter image model.
+const IT = require("./src/imagetemplates");
 const { PRICES_FILE, isPremiumModel, modelTier } = require("./src/pricing");
 // Used on every refusal path (missing project, unknown consumer, bad key, unpinned account) and by
 // the upstream-error shipper. Unbound since the split, so each gate 502'd instead of refusing.
@@ -96,6 +103,14 @@ require("./src/registry").initRegistry()
   .catch((e) => console.error(`[registry] init failed, serving the config mirror: ${e.message}`));
 primeAcctCacheSoon();
 startKeyUseFlush();
+// Restore the repo's image templates when the store is empty (a fresh /data volume). No-op otherwise.
+IT.seedImageTemplates();
+
+// The caller's real address behind Cloudflare and the Coolify proxy. Written out three times in
+// three files before this; the image branch needed a fourth and that is one too many.
+const clientIp = (req) =>
+  req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim()
+  || req.socket.remoteAddress || "?";
 
 // ─────────────────────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
@@ -191,27 +206,43 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && (path === "/v1/models" || path === "/api/v1/models"))
     return mergedModels(res);
 
-  // Image generation → SD-Turbo (pbox GPU). Routed by path, not model name; the upstream bearer
-  // is injected server-side. No project gate / model routing applies.
+  // Image generation. TWO upstreams share this path and the `template` field is what picks between
+  // them: a name registered in our own image-template store (a reference picture + a style
+  // instruction, rendered by an image-capable crazyrouter model, PAID and therefore key-gated) wins;
+  // anything else — including SD-Turbo's own prompt-template names — falls through to SD-Turbo on
+  // the pbox GPU, free, anonymous, exactly as before. See src/imagetemplates.js.
   if (req.method === "POST" && /\/images\/(generations|edits|variations)$/.test(path)) {
     let imgBody = await readBody(req);
+    let imgJson = null;
+    try { imgJson = JSON.parse(imgBody.toString()); } catch { /* not JSON — SD-Turbo can say so */ }
+    const tpl = imgJson && IT.templateFor(imgJson.template);
+    if (tpl) return IT.generate(req, res, { tpl, body: imgJson, ip: clientIp(req), docsUrl: DOCS_URL });
     // SDXL VAE downsamples ×8 to latent space; non-multiples of 8 crash upstream with bare 500.
-    try {
-      const j = JSON.parse(imgBody.toString());
-      if (j.size && typeof j.size === "string") {
-        const m = j.size.match(/^(\d+)x(\d+)$/i);
-        if (m) {
-          const w = Math.floor(+m[1] / 8) * 8;
-          const h = Math.floor(+m[2] / 8) * 8;
-          if (+m[1] !== w || +m[2] !== h) { j.size = `${w}x${h}`; imgBody = Buffer.from(JSON.stringify(j)); }
-        }
+    if (imgJson && typeof imgJson.size === "string") {
+      const m = imgJson.size.match(/^(\d+)x(\d+)$/i);
+      if (m) {
+        const w = Math.floor(+m[1] / 8) * 8;
+        const h = Math.floor(+m[2] / 8) * 8;
+        if (+m[1] !== w || +m[2] !== h) { imgJson.size = `${w}x${h}`; imgBody = Buffer.from(JSON.stringify(imgJson)); }
       }
-    } catch { /* leave body as-is */ }
+    }
     return proxy(req, res, CFG.bases.images, { bodyBuf: imgBody, provider: "images", authToken: CFG.imageToken, project: extractProject(req, imgBody) });
   }
-  // Image-service catalog endpoints (templates + LoRAs) — proxy GETs straight through.
+  // Image-service catalog endpoints (templates + LoRAs) — proxy GETs straight through. These are
+  // SD-TURBO's prompt templates, a different thing from /v1/image-templates below; see the header
+  // of src/imagetemplates.js for why the two are not merged behind one name.
   if (req.method === "GET" && (path === "/v1/templates" || path === "/v1/loras")) {
     return proxy(req, res, CFG.bases.images, { bodyBuf: Buffer.alloc(0), provider: "images", authToken: CFG.imageToken });
+  }
+  // Our own image templates. Public reads: the list (optionally "which one dresses this site?") and
+  // the reference picture itself. The reference path carries NO file extension on purpose — the
+  // panel-asset rule above serves any GET with an extension out of /srv/panel, so `/reference.jpg`
+  // would 404 there before reaching this handler.
+  if (req.method === "GET" && (path === "/v1/image-templates" || path === "/api/v1/image-templates"))
+    return IT.listPublic(res, new URL(req.url, "http://x").searchParams.get("site") || "");
+  {
+    const ref = path.match(/^\/(?:api\/)?v1\/image-templates\/([a-z0-9-]+)\/reference$/);
+    if (req.method === "GET" && ref) return IT.serveReference(res, ref[1]);
   }
 
   let bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
@@ -220,7 +251,7 @@ const server = http.createServer(async (req, res) => {
   let reqJson = null;
   if (bodyBuf.length) { try { reqJson = JSON.parse(bodyBuf.toString()); } catch { /* not json */ } }
   const model = reqJson && reqJson.model != null ? reqJson.model : null;
-  const ip = req.headers["cf-connecting-ip"] || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
+  const ip = clientIp(req);
   // Identity. A valid key OUTRANKS anything the caller says about itself: the consumer comes from
   // the key, and only the job half of X-Project (or an X-Job header) is still taken on trust — a job
   // is a label inside an already-authenticated consumer, so it cannot be used to bill someone else.

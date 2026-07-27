@@ -21,6 +21,10 @@ COPY translate.js /app/translate.js
 # The whole router lives in src/. A directory COPY, not a file list: the old per-file list is why a
 # new require'd file crash-looped the container on boot.
 COPY src /app/src
+# The image templates the router re-seeds an EMPTY /data store from — metadata plus the reference
+# pictures themselves. Without this the container boots with no templates on a fresh volume and every
+# `template` a caller names 404s, silently, forever (seeding only ever runs when the store is empty).
+COPY assets /app/assets
 COPY docs /srv/docs
 # The built Next export → /srv/panel, which server.js serves (PANEL_DIR). ADD A COPY like this for
 # any new required path, or the container is missing it at runtime.
