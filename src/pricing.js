@@ -50,6 +50,7 @@ const MODEL_COST = {
   "claude-opus-4-6":            { in: 5,  out: 25, tier: "opus" },
   "claude-opus-4-7":            { in: 5,  out: 25, tier: "opus" },
   "claude-opus-4-8":            { in: 5,  out: 25, tier: "opus" },
+  "claude-opus-5":              { in: 5,  out: 25, tier: "opus" },
   // fable — flagship (Claude 5 family), the most expensive per token: $10/$50
   "claude-fable-5":             { in: 10, out: 50, tier: "fable" },
 };
