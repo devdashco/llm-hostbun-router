@@ -62,7 +62,8 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "imgtpl-test-"));
 const cfgPath = path.join(TMP, "config.json");
 fs.writeFileSync(cfgPath, JSON.stringify({
   bases: { local: `http://127.0.0.1:${CRAZY}`, crazyrouter: `http://127.0.0.1:${CRAZY}`, claudecode: `http://127.0.0.1:${CRAZY}` },
-  crazyrouterKey: "crazy-test-key", requireProject: false, requireRegisteredConsumer: false,
+  crazyrouterKey: "crazy-test-key", imageTemplateKey: "image-only-key",
+  requireProject: false, requireRegisteredConsumer: false,
   auth: { mode: "required" }, logging: { enabled: false, content: false },
   consumers: { tester: { kind: "app", keys: [{ id: "testkey1", hash: sha256("s3cret"), created: 1 }] } },
   consumerAliases: {},
@@ -149,8 +150,11 @@ check("...answered with the upstream's images envelope, unwrapped",
 const sent = seen.crazy[0] || { path: "", body: {}, headers: {} };
 check("...sent to chat/completions, where a reference image can travel", sent.path === "/v1/chat/completions", `path ${sent.path}`);
 check("...to the paid upstream only", seen.sd.length === 0, `sd got ${seen.sd.length}`);
-check("...with OUR key injected, never the caller's",
-  sent.headers.authorization === "Bearer crazy-test-key", `auth ${sent.headers.authorization}`);
+// Not just "a key of ours" — the IMAGE one. Access to the image models is granted per token, so the
+// router carries a second key for this path; falling back to the main key here would look identical
+// in the log and fail upstream with "this token does not have access to model …".
+check("...with the image-template key, not the caller's and not the main one",
+  sent.headers.authorization === "Bearer image-only-key", `auth ${sent.headers.authorization}`);
 const parts = (((sent.body || {}).messages || [])[0] || {}).content || [];
 check("...carrying the reference image as a data: URI",
   parts.some((p) => p.type === "image_url" && /^data:image\/[a-z]+;base64,\S+/.test(p.image_url?.url || "")),

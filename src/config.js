@@ -76,6 +76,11 @@ function envDefaults() {
       images: (process.env.IMAGE_BASE || "https://sdturbo.bofrid.dev").replace(/\/$/, ""),
     },
     crazyrouterKey: process.env.CRAZYROUTER_KEY || "",
+    // A SEPARATE crazyrouter key for image templates, because access to the image models is granted
+    // per token: the router's own key is valid and still answers "this token does not have access to
+    // model gemini-2.5-flash-image". Empty = fall back to crazyrouterKey. Kept apart rather than
+    // swapping the main key, which would move every text call onto another account's bill.
+    imageTemplateKey: process.env.IMAGE_TEMPLATE_KEY || "",
     // claudecodeAccountPool: our Claude Max logins, [{name, org, token}] with token = sk-ant-oat…
     // (setup-tokens, ~1yr, no refresh). A project is PINNED to one of these (projectAccounts); the
     // gateway never rotates between them. Seed via ANTHROPIC_POOL env or the admin config; tokens
@@ -295,6 +300,7 @@ function mergeConfig(base, saved) {
   }
   if (typeof saved.claudePrefix === "string") c.claudePrefix = saved.claudePrefix;
   else if (typeof saved.wrappyPrefix === "string") c.claudePrefix = saved.wrappyPrefix;
+  if (typeof saved.imageTemplateKey === "string") c.imageTemplateKey = saved.imageTemplateKey;
   for (const k of ["oblitToken", "adminPassword"])
     if (typeof saved[k] === "string") c[k] = saved[k];
   if (typeof saved.jsonEnforce === "boolean") c.jsonEnforce = saved.jsonEnforce;

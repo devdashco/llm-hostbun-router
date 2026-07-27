@@ -134,6 +134,7 @@ function adminState() {
 
     // secrets — never returned in clear
     crazyrouterKeySet: !!CFG.crazyrouterKey, crazyrouterKeyMasked: mask(CFG.crazyrouterKey),
+    imageTemplateKeySet: !!CFG.imageTemplateKey, imageTemplateKeyMasked: mask(CFG.imageTemplateKey),
     // Each account carries its harvested headroom AND the age of that reading, so any consumer
     // (admin UI, statusline) can render "hot/cool" together with "as of when" — never a stale
     // number presented as fresh. `stale:true` = no reading in 6h; show it as unknown, not cool.
@@ -216,6 +217,7 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     if (typeof patch.requireProject === "boolean") next.requireProject = patch.requireProject;
     if (patch.logging && typeof patch.logging === "object") Object.assign(next.logging, patch.logging);
     if (typeof (patch.crazyrouterKey ?? patch.crazyKey) === "string") next.crazyrouterKey = patch.crazyrouterKey ?? patch.crazyKey;
+    if (typeof patch.imageTemplateKey === "string") next.imageTemplateKey = patch.imageTemplateKey;
     for (const k of ["oblitToken", "adminPassword"])
       if (typeof patch[k] === "string") next[k] = patch[k];
     const merged = mergeConfig(envDefaults(), next);

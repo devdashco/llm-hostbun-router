@@ -49,6 +49,10 @@ function sniffMime(buf) {
 }
 
 const templates = () => CFG.imageTemplates || (CFG.imageTemplates = {});
+// Which crazyrouter token pays for a rendered template. Access to the image models is granted PER
+// TOKEN — the router's main key is perfectly valid and still refuses `gemini-2.5-flash-image` — so
+// this can be a different account without moving every text call onto that account's bill.
+const imageKey = () => CFG.imageTemplateKey || CFG.crazyrouterKey;
 // Look up by name. Returns null for anything not registered here, which is what makes an SD-Turbo
 // template name fall through instead of erroring.
 function templateFor(name) {
@@ -278,7 +282,7 @@ async function generate(req, res, { tpl, body, ip, docsUrl }) {
   return proxy(req, res, CFG.bases.crazyrouter, {
     bodyBuf: Buffer.from(JSON.stringify(chat)),
     targetPath: "/v1/chat/completions",
-    injectKey: true, provider: "crazyrouter", model, project, ip,
+    authToken: imageKey(), provider: "crazyrouter", model, project, ip,
   });
 }
 
@@ -335,7 +339,7 @@ async function renderTemplate(req, res, ip) {
   try {
     const r = await fetch(`${CFG.bases.crazyrouter}/v1/chat/completions`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${CFG.crazyrouterKey}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${imageKey()}` },
       body: JSON.stringify(chatBody(tpl, model, prompt)),
       signal: AbortSignal.timeout(180000),
     });
