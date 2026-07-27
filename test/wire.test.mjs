@@ -58,9 +58,18 @@ fs.writeFileSync(cfgPath, JSON.stringify({
   consumers: {}, consumerAliases: {},
 }));
 
+// A stand-in for the exported panel, so the panel branches can be driven without a `panel/` build.
+// Two files is all they need: the root shell and one UI_ROUTES slug.
+const panelDir = path.join(os.tmpdir(), `wire-panel-${process.pid}`);
+fs.mkdirSync(path.join(panelDir, "calls"), { recursive: true });
+fs.mkdirSync(path.join(panelDir, "_next", "static", "chunks"), { recursive: true });
+fs.writeFileSync(path.join(panelDir, "index.html"), "<!doctype html><title>panel</title>");
+fs.writeFileSync(path.join(panelDir, "calls", "index.html"), "<!doctype html><title>calls</title>");
+fs.writeFileSync(path.join(panelDir, "_next", "static", "chunks", "x.js"), "export const a=1;");
+
 const srv = spawn(process.execPath, ["server.js"], {
   env: { ...process.env, PORT: String(PORT), CONFIG_FILE: cfgPath, PRICES_FILE: "/nonexistent.json",
-    ADMIN_PASSWORD: "ddash", SESSION_INSECURE: "1", DATABASE_URL: "" },
+    ADMIN_PASSWORD: "ddash", SESSION_INSECURE: "1", DATABASE_URL: "", PANEL_DIR: panelDir },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";
@@ -183,6 +192,17 @@ await expect("GET  /admin is GONE", "/admin", 404);
 await expect("GET  /api/v1/models still routes to the catalog", "/api/v1/models", 200);
 await expect("POST /api/v1/chat/completions still proxies", "/api/v1/chat/completions", 200, J(CHAT));
 
+// The panel is READ-ONLY, so HEAD has to reach it exactly like GET. Both panel branches used to
+// test `req.method === "GET"` and nothing else, so a HEAD fell past them into the model router and
+// came back `400 blocked (no model specified)` — prod's log carried a steady drip of
+// `HEAD /calls/ -> blocked` from browser link prefetching. 400 is the tell: a genuine miss is 404.
+const HEAD = { method: "HEAD" };
+await expect("GET  / serves the panel shell", "/", 200);
+await expect("HEAD / serves the panel shell", "/", 200, HEAD);
+await expect("HEAD /calls/ serves its slug", "/calls/", 200, HEAD);
+await expect("HEAD an asset serves it", "/_next/static/chunks/x.js", 200, HEAD);
+await expect("HEAD a missing asset is 404, not blocked", "/_next/static/chunks/nope.js", 404, HEAD);
+
 for (const [name, run] of routes) {
   const before = log.length;
   const status = await run();
@@ -206,5 +226,6 @@ else ok("no fatal-guard trips");
 srv.kill("SIGKILL");
 upstream.close();
 fs.rmSync(cfgPath, { force: true });
+fs.rmSync(panelDir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -90,6 +90,12 @@ const PANEL_TYPES = {
   ".png": "image/png", ".webp": "image/webp", ".woff": "font/woff", ".woff2": "font/woff2",
   ".map": "application/json; charset=utf-8",
 };
+// A panel path is READ-ONLY, so HEAD belongs on it as much as GET. Without this, a HEAD falls past
+// both panel branches into the model router and comes back `400 blocked (no model specified)` —
+// which is what browsers actually do: prod's log carries a steady drip of `HEAD /calls/ -> blocked`
+// from link prefetching. Node suppresses the body on a HEAD response itself, so sendFile needs no
+// change; the headers (type, cache-control) are exactly what the caller asked for.
+const isRead = (req) => req.method === "GET" || req.method === "HEAD";
 
 // Config first: every module below reads CFG, and the key index must exist before the first request.
 loadConfig();
@@ -148,7 +154,7 @@ const server = http.createServer(async (req, res) => {
     // at llm.hostbun.cc/docs/*.md (below) and /prices.json is the public price file — a bare
     // "any extension → PANEL_DIR" rule shadowed both (they 404'd out of /srv/panel). Bug shipped in
     // f60abb8, fixed here.
-    if (req.method === "GET" && /\.[a-z0-9]+$/i.test(path) && !path.includes("..")
+    if (isRead(req) && /\.[a-z0-9]+$/i.test(path) && !path.includes("..")
         && !path.startsWith("/docs/") && path !== "/prices.json") {
       const abs = nodePath.normalize(nodePath.join(PANEL_DIR, decodeURIComponent(path)));
       if (!abs.startsWith(PANEL_DIR + nodePath.sep)) {
@@ -163,7 +169,7 @@ const server = http.createServer(async (req, res) => {
     // Enumerated (UI_ROUTES), never a catch-all: a catch-all at the root would shadow /v1/*, /local/*,
     // and every future inference path, turning a routing bug into "the model endpoint returns HTML".
     // trailingSlash export puts each route at `<slug>/index.html`; root is `index.html`.
-    if (req.method === "GET" && (path === "/" || UI_ROUTES.has(path.replace(/\/$/, "")))) {
+    if (isRead(req) && (path === "/" || UI_ROUTES.has(path.replace(/\/$/, "")))) {
       const slug = path.replace(/^\/+|\/+$/g, "");
       const file = slug ? nodePath.join(PANEL_DIR, slug, "index.html") : nodePath.join(PANEL_DIR, "index.html");
       return sendFile(res, file, "text/html; charset=utf-8", false, "no-cache");
