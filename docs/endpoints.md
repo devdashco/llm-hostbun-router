@@ -88,6 +88,11 @@ curl https://llm.hostbun.cc/v1/images/generations \
 | `prompt` | The scene. Required — a template is a style, not a subject. |
 | `model` | Optional; defaults to the template's own. Must be an image model this router knows. |
 
+It is paid by its own upstream token (`IMAGE_TEMPLATE_KEY`), separate from the router's main
+crazyrouter key: access to the image models is granted **per token**, and the main key — valid, and
+billing fine for text — answers `This token does not have access to model gemini-2.5-flash-image`.
+Unset, it falls back to the main key.
+
 **This is the one image route that needs a key.** Everything else under `/v1/images/*` runs on our own
 GPU and is free, so it is deliberately anonymous; this one spends real money per picture, and an
 unauthenticated paid route is a bill nobody can attribute.

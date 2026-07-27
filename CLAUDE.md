@@ -238,7 +238,13 @@ answers in the OpenAI images envelope. **Three things here are load-bearing, not
    form. A caller's model id is checked against `imageTemplateModels` for the same reason: without it
    `{"template":"bobbo","model":"claude-opus-5"}` bills per token and answers an images endpoint with
    a chat completion.
-3. **The picture lives on OUR volume** (`/data/image-templates/<slug>.<ext>`), fetched once at create
+3. **It is paid by its OWN upstream token, `imageTemplateKey`** (`IMAGE_TEMPLATE_KEY`, empty = fall
+   back to `crazyrouterKey`). Image-model access on crazyrouter is granted per TOKEN, not per
+   account: the router's main key is valid, bills fine for text, and still answers `This token does
+   not have access to model gemini-2.5-flash-image`. Swapping the main key would have moved every
+   text call onto another account's bill to fix an image path. The live value is in keyvault at
+   `crazyrouter/API_KEY`.
+4. **The picture lives on OUR volume** (`/data/image-templates/<slug>.<ext>`), fetched once at create
    time. The seven templates came out of the ecosystem CMS's `sanity.image_templates` — the point of
    moving them was to stop every image call depending on that Supabase bucket, so storing the URL
    would have moved nothing. `assets/image-templates/` is the committed copy and re-seeds an EMPTY
