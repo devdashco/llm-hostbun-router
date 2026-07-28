@@ -232,8 +232,10 @@ default in `config.js`. Repo: `devdashco/sd-turbo-service` (github only, no GitL
 is **not in the fleet Coolify** — `coolify_find` returns nothing for it, and pbox has no such
 container, so its logs are only reachable from the box that serves it.
 
-**The name is a lie and the ids are three.** It has never run SD-Turbo: it is SDXL 1.0 + ByteDance's
-SDXL-Lightning 8-step LoRA. `imagegen` is the canonical public id (generic on purpose — the
+**The name is a lie.** It has never run SD-Turbo. Since 2026-07-28 it serves **NVIDIA SANA-Sprint
+0.6B** (`Efficient-Large-Model/Sana_Sprint_0.6B_1024px_diffusers`), distilled to 2 steps with no
+speed LoRA in the path at all; `MODEL_KIND=sdxl` still selects the old SDXL 1.0 + SDXL-Lightning
+8-step path for a card with the VRAM. Ask `/health` — it names the checkpoint, the kind and the host. `imagegen` is the canonical public id (generic on purpose — the
 checkpoint behind it is ours to swap), `sdxl-lightning` is the honest id for what is loaded, and
 `sd-turbo` is a legacy alias. All three live in `IMAGE_MODEL_IDS`; the service's `/health` names the
 base checkpoint AND the speed LoRA, so ask it rather than inferring weights from an id.

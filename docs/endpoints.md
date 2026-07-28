@@ -45,7 +45,7 @@ applies.
 
 ## Image generation — `model: "imagegen"`
 
-Text-to-image on ww's RTX 3070 (SDXL + Lightning), token injected server-side. OpenAI-compatible
+Text-to-image on ww's GPU (NVIDIA SANA-Sprint 0.6B, 2 steps), token injected server-side. OpenAI-compatible
 `/v1/images/generations`, always base64 (`{"data":[{"b64_json": …}]}`); we host no URLs.
 
 | Field | Meaning |
