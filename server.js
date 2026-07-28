@@ -8,7 +8,7 @@
 //   model "local" / "qwen3.5-9b"                -> local (pbox GPU)
 //   model "claude*" (e.g. claude-sonnet-4-6)    -> claudecode, the pinned account's token injected
 //   any other model                             -> crazyrouter, key injected
-//   model "imagegen"  +  POST /v1/images/*      -> image generation (SD-Turbo on the pbox GPU)
+//   model "imagegen"  +  POST /v1/images/*      -> image generation (SDXL+Lightning on ww's 3070)
 //   `template` naming one of ours + same path  -> image templates: a reference picture + a style
 //                                                 instruction, rendered by a crazyrouter image
 //                                                 model. PAID, so this one route needs a key.
@@ -215,8 +215,8 @@ const server = http.createServer(async (req, res) => {
   // Image generation. TWO upstreams share this path and the `template` field is what picks between
   // them: a name registered in our own image-template store (a reference picture + a style
   // instruction, rendered by an image-capable crazyrouter model, PAID and therefore key-gated) wins;
-  // anything else — including SD-Turbo's own prompt-template names — falls through to SD-Turbo on
-  // the pbox GPU, free, anonymous, exactly as before. See src/imagetemplates.js.
+  // anything else — including the image service's own prompt-template names — falls through to it
+  // (SDXL + Lightning on ww's RTX 3070), free, anonymous, exactly as before. See src/imagetemplates.js.
   if (req.method === "POST" && /\/images\/(generations|edits|variations)$/.test(path)) {
     let imgBody = await readBody(req);
     let imgJson = null;

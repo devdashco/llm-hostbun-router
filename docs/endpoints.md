@@ -4,7 +4,7 @@
 |---|---|---|---|
 | POST | `/v1/chat/completions` | all three | Chat, routed by model. Streaming, tools, structured output, vision. Needs identity. |
 | POST | `/v1/messages` | `claudecode` | Anthropic-native shape, forwarded byte-for-byte. Needs identity. |
-| POST | `/v1/images/generations` | image | Text-to-image on the pbox GPU. No identity required. |
+| POST | `/v1/images/generations` | image | Text-to-image on ww's RTX 3070. No identity required. |
 | GET | `/v1/templates`, `/v1/loras` | image | SD-Turbo prompt templates and named-LoRA catalog |
 | POST | `/v1/images/generations` + `template` | `crazyrouter` | Reference-picture templates. Paid, **needs a key**. |
 | GET | `/v1/image-templates` | meta | The reference-picture templates and their pictures |
@@ -45,7 +45,7 @@ applies.
 
 ## Image generation — `model: "imagegen"`
 
-Text-to-image on the pbox GPU (SDXL + Lightning), token injected server-side. OpenAI-compatible
+Text-to-image on ww's RTX 3070 (SDXL + Lightning), token injected server-side. OpenAI-compatible
 `/v1/images/generations`, always base64 (`{"data":[{"b64_json": …}]}`); we host no URLs.
 
 | Field | Meaning |
