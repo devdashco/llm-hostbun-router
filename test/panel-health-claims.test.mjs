@@ -86,4 +86,17 @@ if (!banner) fail("could not find the All healthy banner", "reword it and update
 else if (/slow providers|error/.test(banner[1])) ok(`the banner names what it checked: "${banner[1].trim().slice(0, 60)}…"`);
 else ok("the banner no longer claims stats-derived facts");
 
+// An error RATE without a reason is not actionable: one caller sending a field the upstream just
+// dropped reads exactly like a dead upstream, and the two need opposite responses. /api/stats now
+// carries `topErrors` (grouped, top 3) and the finding must actually name the first one — measured
+// case: the image path at 24% errors whose cause ("LoRAs are an SDXL feature; this host serves
+// SANA-Sprint") was only visible by opening one call row at a time.
+{
+  const errFinding = src.match(/Non-refusal error rate[^`]*`/);
+  if (!errFinding) fail("the error-rate finding still exists");
+  else if (!/topErrors/.test(src)) fail("the error-rate finding names the dominant reason", "health.tsx never reads st.topErrors");
+  else if (!/\$\{why\}/.test(errFinding[0])) fail("the error-rate finding names the dominant reason", "topErrors is read but not interpolated into the message");
+  else ok("the error-rate finding names the dominant reason from st.topErrors");
+}
+
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);

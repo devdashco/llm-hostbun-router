@@ -36,7 +36,15 @@ function Issues({ health, st, state, pool, unavailable }: any) {
       probs.push(["refusal", `${st.windowJsonFails} JSON-enforce failure(s) in the last hour — usually a prose refusal, surfaced as 422. Not a proxy bug.`]);
     const otherErr = st.windowErrors - (st.windowJsonFails || 0);
     const rate = st.windowCalls > 0 ? otherErr / st.windowCalls : 0;
-    if (rate > 0.05 && st.windowCalls >= 20) probs.push(["err", `Non-refusal error rate ${(rate * 100).toFixed(0)}% over the last hour (${otherErr}/${st.windowCalls}).`]);
+    if (rate > 0.05 && st.windowCalls >= 20) {
+      // Name the dominant reason. A bare rate reads the same whether one caller started sending a
+      // field the upstream dropped or the upstream died — and those need opposite responses. The
+      // image path hit 24% on 2026-07-28 and the cause ("LoRAs are an SDXL feature; this host
+      // serves SANA-Sprint") was reachable only by opening a call row one at a time.
+      const top = (st.topErrors || [])[0];
+      const why = top ? ` Top reason (${top.calls}×): ${String(top.reason).slice(0, 110)}` : "";
+      probs.push(["err", `Non-refusal error rate ${(rate * 100).toFixed(0)}% over the last hour (${otherErr}/${st.windowCalls}).${why}`]);
+    }
   }
   if (state.forceModel && state.forceModel.enabled)
     probs.push(["force", `Force-model is ON → every request rewritten to ${state.forceModel.provider}/${state.forceModel.model}.`]);

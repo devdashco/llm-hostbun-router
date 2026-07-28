@@ -128,6 +128,17 @@ async function statsSummary(req, res) {
         COALESCE(SUM(cache_read),0) AS cache_read,
         COALESCE(SUM(cache_write),0) AS cache_write
       FROM calls WHERE ${W}`, P) || {};
+    // WHY the failures happened, not just how many. An error RATE tells an operator that something
+    // is wrong and nothing about what — on 2026-07-28 the image path went to 24% errors and the
+    // reason ("LoRAs are an SDXL feature; this host serves SANA-Sprint") was only ever visible by
+    // opening an individual call row. One caller sending one now-unsupported field looks identical
+    // to a dead upstream from the Health tab, and they need opposite responses.
+    //
+    // Grouped on the first 120 chars so the same failure with different ids collapses into one line,
+    // and capped at 3 — this is a pointer at the call log, not a replacement for it.
+    const topErrors = await dbRows(`SELECT LEFT(error, 120) AS reason, COUNT(*)::int AS n
+      FROM calls WHERE ${W} AND status >= 400 AND error IS NOT NULL AND error <> ''
+      GROUP BY 1 ORDER BY n DESC LIMIT 3`, P);
     const totalRow = await dbRow("SELECT COUNT(*)::int AS n FROM calls");
     const byProvider = await dbRows(`SELECT provider, COUNT(*)::int AS n, COALESCE(SUM(total_tokens),0) AS tok,
       ROUND(AVG(duration_ms)) AS avg_ms, COUNT(*) FILTER (WHERE status>=400)::int AS errors
@@ -234,6 +245,7 @@ async function statsSummary(req, res) {
       windowCost: +windowCost.toFixed(4),
       pricedProviders: ["crazyrouter"], byProvider, byKey, byClient, byModel, byProject, premiumUsage,
       unattributedImages: unattrImg ? { calls: unattrImg.n || 0, ips: unattrImg.ips || 0 } : null,
+      topErrors: (topErrors || []).map((r) => ({ reason: r.reason, calls: r.n })),
       oldest: oldestRow ? oldestRow.t : null, retain: CFG.logging.retain });
   } catch (e) { return sendJson(res, 500, { error: e.message }); }
 }
