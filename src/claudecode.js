@@ -3,7 +3,7 @@
 // not second-guess per-account model availability (a 429 is a subscription usage window, not a
 // capability, and treating it as one only misled the panel).
 const TR = require("../translate");
-const { CFG, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
+const { CFG, IMAGE_MODEL_ID, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
 const { ORG_OF_ACCOUNT, ACCT_DEAD, recordLimits } = require("./db");
 const { localTarget, autoDisableAccount, clearAcctCooldown } = require("./routing");
 
@@ -120,13 +120,42 @@ async function refreshClaudecodeModels(why) {
   return claudecodeCatalog;
 }
 
+// What checkpoint the image host is ACTUALLY running. Read from its /health
+// rather than kept as a string here: the last two catalogue bugs were both
+// literals that outlived a migration ("pbox" after the move to ww, "SDXL +
+// Lightning" after the move to SANA). Cached for a minute, and simply absent
+// when the host is unreachable — an unknown is better than a stale claim.
+let _ckpt = { at: 0, value: undefined };
+async function imageCheckpoint() {
+  if (Date.now() - _ckpt.at < 60_000) return _ckpt.value;
+  try {
+    const r = await fetch(`${CFG.bases.images}/health`, { signal: AbortSignal.timeout(2500) });
+    const j = r.ok ? await r.json() : null;
+    _ckpt = { at: Date.now(), value: (j && j.model) || undefined };
+  } catch {
+    _ckpt = { at: Date.now(), value: undefined };
+  }
+  return _ckpt.value;
+}
+
 async function mergedModels(res) {
   const local = localModelEntries();
   const { claudecode, crazyrouter } = await upstreamCatalogs();
-  // owned_by was the literal "pbox" for months after the image service moved to
-  // ww — the same class of stale string the upstream now avoids by self-reporting
-  // its host. IMAGE_OWNER tracks it in one place instead.
-  const images = IMAGE_MODEL_IDS.map((id) => ({ id, object: "model", owned_by: CFG.imageOwner || "home-ww" }));
+  // ONE image model, advertised once. Listing every accepted id here made
+  // /v1/models claim five image models when there is a single GPU running a
+  // single checkpoint — and two of those ids (`sdxl-lightning`, `sd-turbo`) named
+  // weights that are not loaded at all. The alias list belongs in `aliases`,
+  // where it reads as "these strings also reach me", not as a menu.
+  //
+  // owned_by was likewise the literal "pbox" for months after the service moved
+  // to ww. Both are the same bug: a catalogue asserting something it never checked.
+  const images = [{
+    id: IMAGE_MODEL_ID,
+    object: "model",
+    owned_by: CFG.imageOwner || "home-ww",
+    root: await imageCheckpoint(),
+    aliases: IMAGE_MODEL_IDS.filter((id) => id !== IMAGE_MODEL_ID),
+  }];
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
   res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter] }));
 }
