@@ -123,7 +123,10 @@ async function refreshClaudecodeModels(why) {
 async function mergedModels(res) {
   const local = localModelEntries();
   const { claudecode, crazyrouter } = await upstreamCatalogs();
-  const images = IMAGE_MODEL_IDS.map((id) => ({ id, object: "model", owned_by: "pbox" }));
+  // owned_by was the literal "pbox" for months after the image service moved to
+  // ww — the same class of stale string the upstream now avoids by self-reporting
+  // its host. IMAGE_OWNER tracks it in one place instead.
+  const images = IMAGE_MODEL_IDS.map((id) => ({ id, object: "model", owned_by: CFG.imageOwner || "home-ww" }));
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
   res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter] }));
 }

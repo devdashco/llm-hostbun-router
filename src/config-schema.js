@@ -29,16 +29,20 @@ const PROVIDERS = ["local", "crazyrouter", "claudecode"];
 // Listing just the first one is how `sd-turbo` kept knocking on the paid door — so this list has to
 // gain an entry the same day the image service serves a new id, never later.
 //
-// What actually runs, as of 2026-07-27, is SDXL 1.0 + ByteDance's SDXL-Lightning 8-step LoRA:
+// What actually runs, as of 2026-07-28, is NVIDIA SANA-Sprint 0.6B on home-ww — 2 steps, no LoRA.
+// It replaced SDXL + the SDXL-Lightning 8-step LoRA, which spilled VRAM on that card (~30 s/image)
+// and whose adapter machinery caused two outages in a week.
 //   · `imagegen`       — the canonical public id. Deliberately generic; the checkpoint behind it is
 //                        ours to swap without every caller editing a string.
-//   · `sdxl-lightning` — the honest id for what is loaded today, for callers that want to pin it.
+//   · `sana-sprint`    — the honest id for what is loaded today, for callers that want to pin it.
+//   · `sdxl-lightning` — what WAS loaded until 2026-07-28. Still barred here so a caller pinning it
+//                        cannot fall through to a per-token provider; it now serves SANA.
 //   · `sd-turbo`       — a legacy alias, and a lie: this service has never run SD-Turbo. Kept only
 //                        so pre-rename callers don't break.
-// The service's own /health names both halves (`model` + `speed_lora`). Ask the upstream what it is
+// The service's own /health names what is loaded (`kind` + `model`). Ask the upstream what it is
 // running; never infer the weights from the id.
 const IMAGE_MODEL_ID = "imagegen";
-const IMAGE_MODEL_IDS = [IMAGE_MODEL_ID, "sdxl-lightning", "sd-turbo"];
+const IMAGE_MODEL_IDS = [IMAGE_MODEL_ID, "sana-sprint", "sana", "sdxl-lightning", "sd-turbo"];
 const isImageModel = (m) => IMAGE_MODEL_IDS.includes(String(m || "").toLowerCase());
 const PROVIDER_SET = new Set(PROVIDERS);
 // Legacy ids → canonical. The retired wrapper's id and `anthropic` named one thing:
