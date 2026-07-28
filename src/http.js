@@ -31,6 +31,17 @@ const {
 const HEADROOM_URL = (process.env.HEADROOM_URL || "").replace(/\/$/, "");
 const HEADROOM_TOKEN = process.env.HEADROOM_TOKEN || "";
 const HEADROOM_TIMEOUT_MS = parseInt(process.env.HEADROOM_TIMEOUT_MS || "4000", 10);
+// How long to wait for an upstream's RESPONSE HEADERS before giving up. Node's fetch has no default
+// timeout, so an upstream that accepts the connection and then stalls held the request open until
+// something else gave up first — measured 2026-07-28 against the image service: 115s+ per call, and
+// the caller saw Cloudflare's 524 rather than anything this router logged. The row is what makes a
+// failure attributable, so a hang has to become OUR 504 rather than someone else's timeout page.
+//
+// It bounds the wait for headers ONLY — the timer is cleared the moment they arrive, so a streaming
+// answer may then run as long as it likes. Bounding the whole exchange would kill exactly the long
+// claudecode streams this router exists to carry. 120s is deliberately generous: a cold SDXL render
+// on ww's 3070 legitimately takes ~20s, and Cloudflare gives up at 100s anyway.
+const UPSTREAM_HEADER_TIMEOUT_MS = parseInt(process.env.UPSTREAM_HEADER_TIMEOUT_MS || "120000", 10);
 const HEADROOM_MIN_CHARS = parseInt(process.env.HEADROOM_MIN_CHARS || "2000", 10);
 const HEADROOM_PROVIDERS = new Set(
   (process.env.HEADROOM_PROVIDERS || "local,crazyrouter").split(",").map((x) => x.trim()).filter(Boolean)
@@ -202,8 +213,15 @@ async function proxy(req, res, base, opts = {}) {
   let curInit = { method: req.method, headers, redirect: "follow" };
   if (!["GET", "HEAD"].includes(req.method) && body && body.length) curInit.body = body;
   let up = null, threw = false, fetchErr = null;
-  try { up = await fetch(curTarget, curInit); }
+  // Abort if the upstream never sends headers. Cleared as soon as they arrive so the body — a
+  // streaming completion — is never cut short. See UPSTREAM_HEADER_TIMEOUT_MS.
+  const upCtrl = new AbortController();
+  const upTimer = setTimeout(() => upCtrl.abort(), UPSTREAM_HEADER_TIMEOUT_MS);
+  let timedOut = false;
+  upCtrl.signal.addEventListener("abort", () => { timedOut = true; }, { once: true });
+  try { up = await fetch(curTarget, { ...curInit, signal: upCtrl.signal }); }
   catch (e) { threw = true; fetchErr = e; }
+  finally { clearTimeout(upTimer); }
 
   // NOTE: there is no failover. Not to another account, not to another provider. A 429 means the
   // project's pinned account is out of quota and the caller is told so; a 5xx means the upstream
@@ -222,11 +240,18 @@ async function proxy(req, res, base, opts = {}) {
   }
 
   if (threw) {
-    console.error(`[err] fetch-failed provider=${curProvider || "?"} model=${model || "-"} ${curTarget}: ${fetchErr.message}`);
-    shipError(`upstream fetch failed: ${fetchErr.message}`, { model: model || "-", provider: curProvider || "?", ip, target: curTarget });
-    recordCall({ ...base_rec, status: 502, ms: Date.now() - t0, error: "upstream fetch failed: " + fetchErr.message });
-    res.writeHead(502, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ error: { message: "upstream fetch failed: " + fetchErr.message } }));
+    // A stall and a refusal are different failures and must not read alike: 504 says the upstream
+    // took the connection and never answered, 502 says it could not be reached at all. Both get a
+    // row — the image outage looked like "no traffic" precisely because a hang wrote nothing.
+    const status = timedOut ? 504 : 502;
+    const msg = timedOut
+      ? `upstream sent no response headers within ${UPSTREAM_HEADER_TIMEOUT_MS}ms`
+      : "upstream fetch failed: " + fetchErr.message;
+    console.error(`[err] ${timedOut ? "upstream-timeout" : "fetch-failed"} provider=${curProvider || "?"} model=${model || "-"} ${curTarget}: ${fetchErr.message}`);
+    shipError(msg, { model: model || "-", provider: curProvider || "?", ip, target: curTarget });
+    recordCall({ ...base_rec, status, ms: Date.now() - t0, error: msg });
+    res.writeHead(status, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: { message: msg } }));
   }
   if (up.status >= 400) {
     console.error(`[err] upstream=${up.status} provider=${curProvider || "?"} model=${model || "-"} ${curTarget}`);

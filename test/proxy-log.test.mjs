@@ -20,6 +20,10 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const req_ = createRequire(import.meta.url);
 
+// Bound the header wait to something a test can sit through. Set BEFORE http.js is required —
+// it reads the env once at module load, exactly like HEADROOM_TIMEOUT_MS.
+process.env.UPSTREAM_HEADER_TIMEOUT_MS = "400";
+
 const rows = [];
 const db = req_(join(ROOT, "src/db.js"));
 db.recordCall = (row) => rows.push(row);          // must precede the http.js require below
@@ -117,6 +121,39 @@ console.log("proxy() early returns still record:");
   await proxy(fakeReq("/v1/models", "GET"), res, BASE, { bodyBuf: Buffer.alloc(0), provider: "local" });
   await new Promise((r) => { res.on("end", r); res.on("finish", r); setTimeout(r, 250); });
   check("a local /v1/models GET is still not recorded", rows.length, 0);
+}
+
+// ── an upstream that accepts the connection and then says NOTHING ──
+//
+// Node's fetch has no default timeout, so this used to hang until the client, Cloudflare or a
+// socket gave up — whichever came first — and the router recorded nothing at all. Measured against
+// the image service on 2026-07-28: 115s+ per call, the caller shown Cloudflare's 524, and the call
+// log silent about traffic that was actively failing. A stall must become OUR 504, with a row.
+{
+  const stall = http.createServer(() => { /* never respond, never close */ });
+  await new Promise((r) => stall.listen(0, "127.0.0.1", r));
+  const STALL = `http://127.0.0.1:${stall.address().port}`;
+  rows.length = 0;
+  const res = fakeRes();
+  const t0 = Date.now();
+  await proxy(fakeReq("/v1/images/generations"), res, STALL, {
+    bodyBuf: Buffer.from(JSON.stringify({ model: "imagegen", prompt: "x" })),
+    provider: "images", model: "imagegen", project: "stalled",
+  });
+  const ms = Date.now() - t0;
+  check("a stalled upstream answers 504, not 502", res.status, 504);
+  // The point of the timeout is that it RETURNS. Without one this line never runs at all, so the
+  // bound is asserted rather than assumed — 5s is ~12x the configured 400ms, i.e. it fails on a
+  // hang and not on a slow machine.
+  check("...within the configured bound", ms < 5000, true);
+  check("...saying the upstream sent no headers", /no response headers/.test(JSON.parse(res.body || "{}").error?.message || ""), true);
+  if (rows.length !== 1) bad("a stalled upstream records exactly one row", `got ${rows.length} rows`);
+  else {
+    ok("a stalled upstream records exactly one row");
+    check("...with 504, distinguishing a stall from an unreachable upstream", rows[0].status, 504);
+    check("...attributed to the project that asked", rows[0].project, "stalled");
+  }
+  stall.close();
 }
 
 upstream.close();
