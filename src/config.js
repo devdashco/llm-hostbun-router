@@ -72,8 +72,12 @@ function envDefaults() {
       // claudecode → the real Anthropic API, called with a pinned account's Max token. The old
       // old subprocess-wrapper base is GONE.
       claudecode: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
-      // image generation provider (SD-Turbo on the pbox GPU). Routed by path, not model name.
-      images: (process.env.IMAGE_BASE || "https://sdturbo.bofrid.dev").replace(/\/$/, ""),
+      // Image generation. Routed by PATH, never by model name. SDXL 1.0 + the 8-step
+      // SDXL-Lightning LoRA, on ww's RTX 3070 (Windows 11 → WSL2 → Docker), fronted by the `ww`
+      // Cloudflare tunnel. NOT pbox: the old `sdturbo.bofrid.dev` default outlived that move and
+      // answers 503, so a boot without IMAGE_BASE aimed every image call at a decommissioned host.
+      // Prod sets IMAGE_BASE explicitly; this default is what a fresh or local boot gets.
+      images: (process.env.IMAGE_BASE || "https://sdturbo-ww.blpk.cc").replace(/\/$/, ""),
     },
     crazyrouterKey: process.env.CRAZYROUTER_KEY || "",
     // A SEPARATE crazyrouter key for image templates, because access to the image models is granted

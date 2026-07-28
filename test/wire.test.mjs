@@ -192,6 +192,20 @@ await expect("GET  /admin is GONE", "/admin", 404);
 await expect("GET  /api/v1/models still routes to the catalog", "/api/v1/models", 200);
 await expect("POST /api/v1/chat/completions still proxies", "/api/v1/chat/completions", 200, J(CHAT));
 
+// A base URL default that outlives the box it named is not a style nit — it is where traffic goes
+// when the env var is missing. `sdturbo.bofrid.dev` stayed the coded default for the image provider
+// after that service moved to ww; it answers 503, so any boot without IMAGE_BASE aimed every image
+// call at a decommissioned host. Read from SOURCE so this needs no server and no network: the point
+// is that a RETIRED host can never sit in a default again, not that today's host is spelled right.
+{
+  const RETIRED_BASES = ["sdturbo.bofrid.dev"];
+  const cfgSrc = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "config.js"), "utf8");
+  const defaults = [...cfgSrc.matchAll(/process\.env\.\w+\s*\|\|\s*"(https?:\/\/[^"]+)"/g)].map((m) => m[1]);
+  const dead = defaults.filter((u) => RETIRED_BASES.some((h) => u.includes(h)));
+  if (dead.length) bad("no retired host survives as a base default", `still defaulted to: ${dead.join(", ")}`);
+  else ok(`no retired host in the ${defaults.length} base defaults (checked: ${RETIRED_BASES.join(", ")})`);
+}
+
 // The panel is READ-ONLY, so HEAD has to reach it exactly like GET. Both panel branches used to
 // test `req.method === "GET"` and nothing else, so a HEAD fell past them into the model router and
 // came back `400 blocked (no model specified)` — prod's log carried a steady drip of
