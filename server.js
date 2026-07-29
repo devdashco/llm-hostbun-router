@@ -544,6 +544,15 @@ server.listen(PORT, () => {
   // Waste watcher: uncached burn, tool-schema bloat, hour-over-week spikes. Reads the call log only
   // — it never touches a request — so a failure here costs a warning, not an inference. Runs on a
   // 15-min tick against a rolling hour; each signal has its own cooldown inside scanWaste().
-  setTimeout(() => scanWaste().catch(() => {}), 60_000).unref();
-  setInterval(() => scanWaste().catch(() => {}), 15 * 60 * 1000).unref();
+  //
+  // The catch REPORTS. Every other .catch(() => {}) on this page guards a task whose silence you
+  // would notice some other way — a stale model list, a frozen limits reading. This one's entire job
+  // is to be the thing that speaks up, so a watcher that dies on a bad query is indistinguishable
+  // from a fleet with nothing to report, and stays that way until someone happens to ask.
+  const waste = () => scanWaste().catch((e) => {
+    console.error(`[waste] scan failed: ${e.message}`);
+    shipError("waste scan failed", { from: "waste", error: e.message });
+  });
+  setTimeout(waste, 60_000).unref();
+  setInterval(waste, 15 * 60 * 1000).unref();
 });
