@@ -174,9 +174,20 @@ async function statsSummary(req, res) {
     // Cost estimate: group by (project, sent_model, provider) to price each cohort, then fold into project/model.
     const prices = priceMap();
     const costRows = await dbRows(`SELECT COALESCE(NULLIF(project,''),'(none)') AS project, req_model, sent_model, provider,
+      COALESCE(SUM(total_tokens),0) AS tok,
       COALESCE(SUM(prompt_tokens),0) AS ptok, COALESCE(SUM(completion_tokens),0) AS ctok
       FROM calls WHERE ${W} GROUP BY 1, sent_model, req_model, provider`, P);
     let windowCost = 0; const costByProject = {}, costByModel = {};
+    // WHICH MODELS each project ran, and how much of its spend went to each. byProject only ever
+    // carried a COUNT of distinct models ("8 models") — which never answers "is this app on opus".
+    // Folded off the cost query rather than a new group-by: it is already grouped per
+    // (project, model) and already scanned the window. Keyed on req_model, the same id byModel and
+    // every model reading on the panel/board uses — `sent_models` there is where a rewrite shows.
+    const modelsByProject = {};
+    for (const r of costRows) {
+      const m = modelsByProject[r.project] || (modelsByProject[r.project] = {});
+      m[r.req_model || "(none)"] = (m[r.req_model || "(none)"] || 0) + Number(r.tok || 0);
+    }
     for (const r of costRows) {
       const c = costUsd(prices, r.sent_model, r.provider, r.ptok, r.ctok);
       windowCost += c;
@@ -188,6 +199,9 @@ async function statsSummary(req, res) {
     }
     for (const r of byProject) {
       r.usd = +(costByProject[r.project] || 0).toFixed(4);
+      // Top 4 by tokens: enough for a table cell, and the tail is already counted in `models`.
+      r.topModels = Object.entries(modelsByProject[r.project] || {})
+        .sort((a, b) => b[1] - a[1]).slice(0, 4).map(([m, tok]) => ({ m, tok }));
       // attach the effective limit + live usage% over the limit's own window (not the stats window)
       const lim = r.project && r.project !== "(none)" ? limitFor(r.project) : null;
       if (lim) {
