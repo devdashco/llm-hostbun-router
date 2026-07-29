@@ -239,6 +239,95 @@ def _box_free():
     return max(0.0, min(100.0, 100.0 - load1 / cores * 100.0))
 
 
+_CMUX_SNAP = f"{HOME}/.cache/cmux-tool/snapshot.json"
+_CMUX_SNAP_STALE = 900          # `cmx save` runs every 5 min; 15 min is three misses
+
+
+def _age(secs: float) -> str:
+    """A duration, shortest useful unit: 40s / 12m / 3h / 2d."""
+    if secs < 60:
+        return f"{int(secs)}s"
+    if secs < 3600:
+        return f"{int(secs / 60)}m"
+    if secs < 86400:
+        return f"{secs / 3600:.0f}h"
+    return f"{secs / 86400:.0f}d"
+
+
+def _link_uptime():
+    """How long the cmux link to this box has been up, in seconds — the age of the
+    OLDEST live `cmuxd-remote`, which is the daemon the Mac's app pushes here and
+    keeps per remote workspace. It is the one clock that answers 'did the terminal
+    come back by itself', because it restarts when the connection does.
+
+    /proc only: `comm` (12 chars, fits) then `stat` on the handful that match, so a
+    render costs ~18ms of small reads and no subprocess. Absent on the Mac (nothing
+    here runs cmuxd-remote) → None, so the segment simply is not drawn there."""
+    try:
+        btime = next(int(l.split()[1]) for l in open("/proc/stat") if l.startswith("btime"))
+        hz = os.sysconf("SC_CLK_TCK")
+        pids = os.listdir("/proc")
+    except (OSError, StopIteration, ValueError):
+        return None
+    oldest = None
+    for pid in pids:
+        if not pid.isdigit():
+            continue
+        try:
+            if open(f"/proc/{pid}/comm").read().strip() != "cmuxd-remote":
+                continue
+            st = open(f"/proc/{pid}/stat").read()
+            # field 22 is starttime, counted AFTER the comm field — which is
+            # parenthesised and may itself contain spaces, so the split has to start
+            # at the LAST ')' or a process called "cmuxd remote" shifts every index.
+            start = btime + int(st[st.rindex(")") + 2:].split()[19]) / hz
+        except (OSError, ValueError, IndexError):
+            continue                      # the process died mid-walk
+        age = time.time() - start
+        if oldest is None or age > oldest:
+            oldest = age
+    return oldest
+
+
+def _cmux_seg():
+    """THE TERMINALS ON THIS BOX: how many of the Mac's workspaces are connected to
+    it right now, and how long that connection has lived.
+
+    Every pane the human watches is a shell HERE reached over a relay from the Mac,
+    and until this segment there was no standing answer to 'are they all still
+    attached, and did they survive the last restart' — you had to go and ask
+    (`cmx status`). It is read from the snapshot `cmx save` already writes every 5
+    min, so a render does no network and cannot hang on a sleeping Mac.
+
+    Honesty, the house rule: a snapshot that is MISSING or STALE renders `?`, never
+    a count — an unread terminal and an empty one look identical, and '0 connected'
+    is the one thing this must never invent. Same reason the workspace count is
+    `connected/total` the moment they disagree: a bare `21` when two are down reads
+    as an all-clear on exactly the screen that should be shouting."""
+    try:
+        with open(_CMUX_SNAP) as f:
+            snap = json.load(f)
+        sec = (snap.get("sections") or {}).get("workspaces") or {}
+        rows = sec.get("data") or []
+        at = float(sec.get("at") or 0)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return ""
+    up = _link_uptime()
+    if up is None:                        # not the box the shells run on
+        return ""
+    life = f"{_DIM}·{_RST}{_age(up)}"
+    if not rows or time.time() - at > _CMUX_SNAP_STALE:
+        # the link is a LIVE read and stands on its own; only the count is stale
+        return f"{_DIM}⧉{_RST}{_YEL}?{_RST}{life}"
+    remote = [r for r in rows if r.get("dest")]
+    ok = [r for r in remote if (r.get("state"), r.get("daemon")) == ("connected", "ready")]
+    if not remote:
+        return ""
+    if len(ok) == len(remote):
+        return f"{_DIM}⧉{_RST}{_GRN}{len(ok)}{_RST}{life}"
+    return f"{_RED}⧉{len(ok)}/{len(remote)}{_RST}{life}"
+
+
 def _ctx_free(d: dict):
     """% of the context window still FREE — 100 (green) on a fresh session, falling
     as the conversation grows. Computed ourselves from token occupancy, NOT read from
@@ -1541,6 +1630,9 @@ def main() -> int:
     box = _box_free()
     if box is not None and box < 60:                    # show box only when it's LOADED —
         line1.append(_gauge_seg("box", box))            # an idle box gauge is noise (compact)
+    cmx = _cmux_seg()                   # ⧉21·3h — the terminals attached to this box,
+    if cmx:                             # and how long the link has been up
+        line1.append(cmx)
     lsp = _lsp_seg(cwd)
     if lsp:
         line1.append(lsp)
@@ -1597,5 +1689,52 @@ def main() -> int:
     return 0
 
 
+def _selftest_cmux():
+    """The ⧉ segment's honesty rules, which are the whole reason it can be trusted:
+    a count is only ever drawn from a snapshot that was actually READ and is fresh."""
+    import re as _re, tempfile as _tmp
+    strip = lambda s: _re.sub(r"\x1b\[[0-9;]*m", "", s)
+    global _CMUX_SNAP, _link_uptime
+    real_snap, real_up = _CMUX_SNAP, _link_uptime
+    d = _tmp.mkdtemp()
+
+    def put(at, rows):
+        global _CMUX_SNAP
+        p = os.path.join(d, "s.json")
+        with open(p, "w") as fh:
+            json.dump({"sections": {"workspaces": {"at": at, "data": rows}}}, fh)
+        _CMUX_SNAP = p
+
+    try:
+        ok = [{"dest": "pbox", "state": "connected", "daemon": "ready"}] * 3
+        _link_uptime = lambda: 4 * 3600
+        put(time.time(), ok)
+        assert strip(_cmux_seg()) == "⧉3·4h"
+        # one workspace down is NEVER a bare count -- that reads as an all-clear
+        put(time.time(), ok + [{"dest": "pbox", "state": "connecting", "daemon": ""}])
+        assert strip(_cmux_seg()) == "⧉3/4·4h"
+        # a stale snapshot renders `?`, never the number it happens to still hold.
+        # The LINK age is a live read and stands
+        put(time.time() - _CMUX_SNAP_STALE - 1, ok)
+        assert strip(_cmux_seg()) == "⧉?·4h"
+        # unread and empty must not look alike: no file, and no remote workspaces,
+        # both draw NOTHING rather than a zero
+        _CMUX_SNAP = os.path.join(d, "nope.json")
+        assert _cmux_seg() == ""
+        put(time.time(), [{"dest": "", "state": "", "daemon": ""}])
+        assert _cmux_seg() == ""
+        # and on a box that runs no cmuxd-remote (the Mac) there is nothing to say
+        put(time.time(), ok)
+        _link_uptime = lambda: None
+        assert _cmux_seg() == ""
+        assert _age(45) == "45s" and _age(700) == "11m" and _age(14400) == "4h"
+        print("cmux statusline segment: selftest ok")
+        return 0
+    finally:
+        _CMUX_SNAP, _link_uptime = real_snap, real_up
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest_cmux())
     raise SystemExit(main())
