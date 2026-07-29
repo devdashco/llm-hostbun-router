@@ -52,6 +52,8 @@ const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL } = require(".
 const { jsonEnforce, wantsJsonFormat } = require("./src/jsonenforce");
 const { mergedModels, refreshClaudecodeModels, refreshAccountLimits, CLAUDECODE_MODEL_REFRESH_MS } = require("./src/claudecode");
 const { handleAdminApi } = require("./src/admin");
+// OTLP ingest — the direct-connect boxes' token usage, which no proxy() call ever sees.
+const OTEL = require("./src/otel");
 // Image templates: a reference picture + a style instruction, rendered by a crazyrouter image model.
 const IT = require("./src/imagetemplates");
 const { PRICES_FILE, isPremiumModel, modelTier } = require("./src/pricing");
@@ -211,6 +213,14 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "GET" && (path === "/v1/models" || path === "/api/v1/models"))
     return mergedModels(res);
+
+  // Claude Code's OWN telemetry, for the calls that never come through here: a cccc box on the
+  // direct fallback (router down, or `.cccc-force-direct`) spends the same Max subscription with no
+  // row to show for it. `/otel/v1/logs` turns each `claude_code.api_request` event back into a
+  // call-log row. Own auth gate (see src/otel.js) — this is not an inference path, so `isInference`
+  // below never matches it. NOT under /v1: that prefix is real inference on a caller's bill.
+  if (req.method === "POST" && path.startsWith("/otel/v1/"))
+    return OTEL.ingest(req, res, { bodyBuf: await readBody(req), ip: clientIp(req), path });
 
   // Image generation. TWO upstreams share this path and the `template` field is what picks between
   // them: a name registered in our own image-template store (a reference picture + a style

@@ -28,6 +28,38 @@
 #   direct box from one that FELL BACK because the router is down, and flags the
 #   latter loudly instead of a silent `·direct`.
 
+# Direct-connect telemetry. On the direct paths `claude` talks to api.anthropic.com and the router
+# logs NOTHING — same Max subscription, same tokens, zero rows, and the panel reads "no traffic"
+# instead of "traffic we cannot see". Claude Code's own OTel stream closes that hole: its
+# `claude_code.api_request` log event carries model + duration + all four token counts, and the
+# router ingests it at /otel/v1/logs (src/otel.js) as a call-log row tagged `<consumer>:direct`.
+#
+#   http/json    — the router is zero-dep and cannot decode protobuf. Wrong protocol → 400.
+#   logs only    — metrics are a counter over an export window; they cannot say which CALL the
+#                  tokens belong to. Rows come from the log events.
+#   *_LOGS_ENDPOINT is the FULL URL: per-signal endpoints are used verbatim, no /v1/logs appended.
+#   the key is the box's own sk-llm-… (the SAME credential the routed path sends) — identity comes
+#   from the key, never from a self-asserted resource attribute.
+# Only ever called from the direct branches; the `up` branch UNSETS all of it, because a routed box
+# that also shipped OTel would have every call counted twice.
+_cctl_otel_direct() {
+  local url="$1" key="$2"
+  [ -n "$key" ] || { _cctl_otel_off; return 0; }   # no key → nothing to authenticate with
+  export CLAUDE_CODE_ENABLE_TELEMETRY=1
+  export OTEL_LOGS_EXPORTER=otlp
+  export OTEL_METRICS_EXPORTER=none
+  export OTEL_TRACES_EXPORTER=none
+  export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+  export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="$url/otel/v1/logs"
+  export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $key"
+  export OTEL_LOGS_EXPORT_INTERVAL=5000
+}
+_cctl_otel_off() {
+  unset CLAUDE_CODE_ENABLE_TELEMETRY OTEL_LOGS_EXPORTER OTEL_METRICS_EXPORTER OTEL_TRACES_EXPORTER \
+        OTEL_EXPORTER_OTLP_PROTOCOL OTEL_EXPORTER_OTLP_LOGS_ENDPOINT OTEL_EXPORTER_OTLP_HEADERS \
+        OTEL_LOGS_EXPORT_INTERVAL 2>/dev/null || true
+}
+
 _cctl_gateway_route() {
   local url="${CCCC_GATEWAY_BASE:-https://llm.hostbun.cc}" acctdir="$HOME/.claude-accounts" \
         marker="$HOME/.claude/.cctl-route" ttl=45 now state="" ts st key consumer
@@ -41,6 +73,11 @@ _cctl_gateway_route() {
   # the loud red router-down fallback tag. `rm` the file (or toggle off) to route again.
   if [ -f "$acctdir/.cccc-force-direct" ]; then
     unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_CUSTOM_HEADERS 2>/dev/null || true
+    # The key is NOT exported as ANTHROPIC_AUTH_TOKEN (a router credential 401s against
+    # api.anthropic.com) — it only authenticates the telemetry push, so the spend still lands in the
+    # call log under this box's name while the inference itself bypasses the router.
+    [ -r "$acctdir/.cccc-key" ] && key=$(cat "$acctdir/.cccc-key" 2>/dev/null | tr -d '[:space:]')
+    _cctl_otel_direct "$url" "$key"
     mkdir -p "$HOME/.claude" 2>/dev/null
     printf '%s\t%s\n' "$now" "direct" > "$marker" 2>/dev/null || true
     return 0
@@ -74,11 +111,18 @@ _cctl_gateway_route() {
       export ANTHROPIC_CUSTOM_HEADERS="X-Consumer: $consumer
 X-Project: $consumer-claude"
     fi
+    # Routed: proxy() already writes the call-log row. Shipping OTel too would log every call twice.
+    _cctl_otel_off
   else
     # gateway unreachable → go direct so claude never breaks. Drop OUR key too: it's a
     # router credential, worthless (401) against api.anthropic.com — unset it so claude
     # uses the keychain OAuth login instead.
     unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_CUSTOM_HEADERS 2>/dev/null || true
+    # …but it still authenticates the telemetry push, so this window is accounted for rather than
+    # invisible. The router is down right now, so the exporter's own POSTs fail and are dropped —
+    # this is set for the moment it comes back, not as a promise that every direct call is captured.
+    [ -r "$acctdir/.cccc-key" ] && key=$(cat "$acctdir/.cccc-key" 2>/dev/null | tr -d '[:space:]')
+    _cctl_otel_direct "$url" "$key"
   fi
 }
 

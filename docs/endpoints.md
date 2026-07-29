@@ -121,3 +121,34 @@ curl https://llm.hostbun.cc/api/image-templates -b hb_admin=… -H "Content-Type
 Editing merges: omit `referenceImage` and the stored picture stays. The templates shipped in
 `assets/image-templates/` are restored automatically when the store is empty (a fresh volume) — and
 only then, so a deliberate deletion sticks.
+
+## Telemetry ingest — `POST /otel/v1/logs`
+
+Calls that **bypass** this router can still be logged. A Claude Code box normally sends its traffic
+through the gateway (`ANTHROPIC_BASE_URL=https://llm.hostbun.cc`), and the router writes a call-log
+row on the way past — but `cccc`'s shell hook falls back to a direct `api.anthropic.com` connection
+whenever the router is unreachable or the operator forced it, and that whole window is otherwise
+invisible: same subscription, same tokens, no rows, and a panel that reads "no traffic" when the
+truth is "traffic we cannot see".
+
+Claude Code's own OpenTelemetry stream closes that gap. Point it here and each
+`claude_code.api_request` event becomes a call-log row — model, duration, and all four token counts:
+
+```bash
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_METRICS_EXPORTER=none
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/json          # the router cannot decode protobuf
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://llm.hostbun.cc/otel/v1/logs
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk-llm-…"
+```
+
+| | |
+|---|---|
+| Auth | the **same** `sk-llm-…` key as the inference paths. The consumer comes from the key; a resource attribute is a self-asserted string |
+| Protocol | **`http/json` only** — the wrong one gets a 400 that says so, never a 500 |
+| Signal | **logs only.** `/otel/v1/metrics` answers 200 and drops the body, purely so a misconfigured exporter doesn't retry forever. A token counter aggregated over an export window cannot say which *call* the tokens belong to |
+| The row | `provider=claudecode`, tagged `<consumer>:direct` — these tokens never passed a pin, an allowlist or a cache breakpoint, so they are not folded in with routed traffic |
+
+Only export this on a box that is talking to Anthropic **directly**. A box routing through the
+gateway is already logged by the proxy; shipping telemetry as well counts every call twice.

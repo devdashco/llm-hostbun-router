@@ -27,6 +27,7 @@ refs may still linger in sibling repos.
   | `consumers.js` | the registry's HTTP face — `/api/consumers*`, key issue/revoke |
   | `diagnostics.js` | questions ABOUT the router — `/api/health`, `models`, `limits`, `crazyrouter[/test]`, `test`, `resolve`. Routes nothing, mutates nothing |
   | `imagetemplates.js` | the SECOND image path — a reference picture + a style instruction, rendered by an image-capable crazyrouter model. The store, its CRUD, and the one paid route under `/v1/images/*` |
+  | `otel.js` | OTLP/JSON ingest — `POST /otel/v1/logs`, the token usage of boxes that bypass this router |
   | `registry.js` | the only writer of the consumer registry to Postgres |
   | `telemetry.js` | call-log row shaping, HyperDX error shipping |
   | `pricing.js` | USD estimates (crazyrouter only) |
@@ -130,6 +131,15 @@ Nine suites, no network beyond loopback, no database, zero deps. Run before ever
   silently. The image-error branch did: a successful image call was logged and a failed one was not,
   so during the 2026-07-26 ingress outage the log read "no image traffic" instead of "image traffic
   failing" — while a *refused* connection, handled higher up, recorded normally and hid the gap.
+
+- `test/otel.test.mjs` — the OTLP ingest, in two halves. The parse (OTLP/JSON puts every int64 in a
+  **string**, the event name arrives either in `event.name` or in the log body, and every other
+  Claude Code event rides the same stream and must produce **no** row) and the gate (this is a write
+  into the call log from outside; it sits above the inference auth gate in server.js, so nothing else
+  is watching it — unauthenticated, anyone could forge spend against any consumer). Probed: faking
+  the auth check green turns 3 checks red. The `Number()` in `anyVal` is NOT what the token-type
+  assertions catch — `num()` on each numeric read is the real guard; the assertions pin the output
+  type, not the line that produces it.
 
 **Coverage is skewed toward the safe routes. Audited 2026-07-26:** fourteen admin routes had no
 test at all, and they cluster at the dangerous end — `auth` (the switch that decides whether anyone
@@ -332,6 +342,31 @@ Edit **one** rule with `POST /admin/api/routes {project, …}` — it merges. `P
 
 **None of this lives in Postgres.** Postgres holds the *call log* and nothing else. Every rule, pin,
 consumer, key hash and account token is a key in `/data/config.json` on the app's volume.
+
+## Direct-connect telemetry — the calls this router never sees
+
+`cccc/shell/gateway-route.sh` is FAIL-OPEN: router unreachable, or `.cccc-force-direct` set, and
+`claude` talks to `api.anthropic.com` straight. Same Max subscription, same tokens, **no call-log
+row** — the panel then reads "no traffic" for a window where the truth is "traffic we cannot see".
+
+Closed on 2026-07-29 by ingesting Claude Code's own OTel stream: the direct branches export
+`CLAUDE_CODE_ENABLE_TELEMETRY=1` + `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=<router>/otel/v1/logs`, and
+`src/otel.js` turns each `claude_code.api_request` event into a row. Four things are load-bearing:
+
+1. **Only the direct branches export it.** The `up` branch calls `_cctl_otel_off`. A routed box that
+   also shipped OTel would have every call logged twice — once by `proxy()`, once by the ingest —
+   and every usage number would be a lie in the safe-looking direction.
+2. **Logs, not metrics.** `claude_code.token.usage` is a counter aggregated over an export window; it
+   can total tokens but cannot say which CALL they belong to. `/otel/v1/metrics` answers 200 and
+   drops the payload, only so a box pointed at a bare `OTEL_EXPORTER_OTLP_ENDPOINT` stops retrying.
+3. **`http/json`, because the router is zero-dep** and cannot decode protobuf. The wrong protocol
+   gets a 400 naming the env var to change, never a 500.
+4. **The row is tagged `<consumer>:direct`** and identity comes from the **key**
+   (`OTEL_EXPORTER_OTLP_HEADERS`), never from a resource attribute. `user.email` is mapped through
+   the pool's `email` field to our account name for `key_label` — no match keeps the raw email
+   rather than inventing an account. These tokens passed no pin, no allowlist and no cache
+   breakpoint; folding them in under the bare consumer name would make half of `pbox` silently stop
+   meaning "went through the router".
 
 ## Invariants — do not "improve" these away
 
