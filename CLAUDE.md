@@ -141,6 +141,13 @@ Nine suites, no network beyond loopback, no database, zero deps. Run before ever
   assertions catch — `num()` on each numeric read is the real guard; the assertions pin the output
   type, not the line that produces it.
 
+- `test/keypolicy.test.mjs` — `allowUa`, the lock that stops a developer's key being used by an app.
+  Pins the three things that turn a mistake into an outage: an EMPTY policy is unrestricted (not a
+  lockout), the refusal is a 403 that names the consumer AND how to mint your own, and a bad secret
+  is still a 401 — ordering the policy check before authentication would answer "wrong client" to
+  someone whose real problem is a dead credential. It already earned its keep: the config sanitizer
+  dropped `allowUa` on load, so the lock existed in Postgres and vanished from the mirror.
+
 **Coverage is skewed toward the safe routes. Audited 2026-07-26:** fourteen admin routes had no
 test at all, and they cluster at the dangerous end — `auth` (the switch that decides whether anyone
 needs a key), `reset` (restores config defaults), `calls/clear` and `consumers/purge` (destructive),
@@ -456,6 +463,36 @@ so the field was free.
 the *job* half of `X-Project` (or an `X-Job` header) is still taken on trust — a job is a label inside
 an already-authenticated consumer, so it cannot bill someone else. Verified: a request bearing acme's
 key and `X-Project: victim` logs as `acme`.
+
+### A key is a bearer credential — `allowUa` is what stops it being shared
+
+Nothing on the wire distinguishes "philip's laptop" from "an app holding philip's key". Measured in
+prod 2026-07-29: **`pmac`'s key ran 11,485 calls / 22.9M tokens in 7 days from `85.194.137.213`
+(hexabyte-bluebut-prod) with a `node` user-agent**, while `bluebut` sat in the registry with a key of
+its own; `pbox`'s key showed the same shape from a `Python-urllib/3.12` client (1,399 calls, 20.7M
+tokens). Nothing was broken — every call authenticated and logged — the spend just landed under a
+person. That is how "what do my developers cost" starts including production traffic.
+
+`consumers[<name>].allowUa` is a list of user-agent PREFIXES that consumer's key may be presented
+with (`uaAllowed()` in `identity.js`, enforced beside the auth gate in `server.js`, stored in the
+`consumers.allow_ua` column and projected into `CFG` by `refresh()`). Load-bearing:
+
+- **Empty or absent = unrestricted**, never "nothing allowed" — same rule as the routing allowlist.
+- **It REFUSES (403 `client_not_allowed_for_key`), never re-attributes.** Billing the call to
+  whichever consumer it "should" have been is the cross-provider substitution of invariant 2 in
+  identity form.
+- **Opt-in per consumer.** A blanket "dev keys are claude-cli only" would 403 the daemons that are
+  legitimately dev-kind (`lprod-autofix`, `pmac-claude`) on the day it shipped.
+- **The sanitizer in `config.js` must keep the field.** The mirror is what a cold boot with the DB
+  down authenticates from; a dropped field takes the lock off every key exactly when nobody is
+  watching. It was dropped in the first cut and `test/keypolicy.test.mjs` caught it.
+- A user-agent is self-asserted: this stops SHARING, not an attacker. The deterministic upgrade is an
+  IP allowlist, which a fixed-address consumer can have and a laptop cannot.
+
+**Read before locking: `GET /api/consumers/clients?days=7`** — every distinct UA + IP per consumer
+with call/token counts and `wouldBlock` (null = *no policy*, which is not the same answer as
+*allowed*). Setting a policy blind 403s a live caller; this endpoint exists so that is a decision.
+Set with `POST /api/consumers/policy {name, allowUa:[…]}` — merge-safe, one consumer per call, logged.
 
 ### Two gates, and what each one is for
 

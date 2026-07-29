@@ -338,6 +338,9 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (sub === "consumers" && req.method === "POST") return CO.addConsumer(req, res, ip);
   if (sub === "consumers/keys" && req.method === "POST") return CO.issueKey(req, res, ip);
   if (sub === "consumers/keys/revoke" && req.method === "POST") return CO.revokeKey(req, res, ip);
+  // Who is using each key (read first), and the lock (set second). Never the other way round.
+  if (sub === "consumers/clients" && req.method === "GET") return CO.listClients(req, res);
+  if (sub === "consumers/policy" && req.method === "POST") return CO.setClientPolicy(req, res, ip);
   if (sub === "claudecode/strategy" && req.method === "POST") {
     const p = await readJson(req, res);
     if (!p) return;

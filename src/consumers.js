@@ -13,8 +13,10 @@
 //
 // The auth GATES themselves (`auth`, `consumers/enforce`) deliberately stay in the dispatcher:
 // turning either on with an unseeded registry is an instant outage, and they are not registry CRUD.
+const url = require("node:url");
+
 const { CFG } = require("./config");
-const { dbRows } = require("./db");
+const { dbRows, dbUp } = require("./db");
 const { sendJson, readJson } = require("./http");
 const { sha256 } = require("./identity");
 // registry.js pulls config/db/identity and nothing pulls admin, so there is no cycle here — the
@@ -46,7 +48,7 @@ async function listConsumers(req, res) {
     const s = seen.find((r) => r.consumer === name);
     // Never ship the hash. `id` is public by design — it is the half of the key that is not secret.
     const keys = (e.keys || []).map((k) => ({ id: k.id, created: k.created, lastUsed: k.lastUsed, revoked: !!k.revoked, note: k.note }));
-    return { name, kind: e.kind, owner: e.owner, note: e.note, keys,
+    return { name, kind: e.kind, owner: e.owner, note: e.note, keys, allowUa: e.allowUa || [],
       activeKeys: keys.filter((k) => !k.revoked).length,
       calls: s ? s.calls : 0, tokens: s ? Number(s.tokens) : 0,
       jobs: s ? s.jobs : 0, lastTs: s ? Number(s.last_ts) : 0 };
@@ -128,9 +130,59 @@ async function revokeKey(req, res, ip) {
   }
 }
 
+// Lock a consumer's key to the clients it is supposed to be used by. Its own endpoint rather than a
+// field on `POST consumers`, and logged, for the same reason as `auth` and `enforce`: setting it
+// wrong 403s a live caller, so it should read as a deliberate act in the log, not as a side effect
+// of a form save. Sending `allowUa: []` clears it.
+async function setClientPolicy(req, res, ip) {
+  const p = await readJson(req, res);
+  if (!p) return;
+  try {
+    const out = await REG.setClientPolicy({ name: p.name, allowUa: p.allowUa });
+    console.warn(`[admin] client policy ${out.consumer} allowUa=${out.allowUa.join(",") || "(cleared)"} ip=${ip}`);
+    return sendJson(res, 200, { ok: true, ...out });
+  } catch (e) {
+    if (e instanceof REG.RegistryError) return sendJson(res, e.status, { error: e.message, ...e.extra });
+    return sendJson(res, 500, { error: e.message });
+  }
+}
+
+// WHO is actually using each key — distinct user-agent + source IP per consumer over a window.
+// This is the reading you need BEFORE locking anything: it is what turned "developer keys are
+// probably being shared" into "pmac's key ran 11,485 calls from a production box last week". Locking
+// blind is the mistake this endpoint exists to prevent — the same one the image auth gate is still
+// waiting on. Read-only, no DB → empty list plus `available:false`, never a confident zero.
+async function listClients(req, res) {
+  const q = url.parse(req.url, true).query;
+  const days = Math.min(90, Math.max(1, parseInt(q.days || "7", 10) || 7));
+  const since = Date.now() - days * 86400000;
+  const rows = await dbRows(
+    `SELECT split_part(project, ':', 1) AS consumer, COALESCE(ua,'') AS ua, ip,
+            COUNT(*)::int AS calls,
+            COALESCE(SUM(COALESCE(prompt_tokens,0) + COALESCE(completion_tokens,0)),0)::bigint AS tokens,
+            MAX(ts) AS last_ts
+       FROM calls
+      WHERE ts > $1 AND project IS NOT NULL AND project <> '' AND provider <> 'blocked'
+      GROUP BY 1,2,3 HAVING COUNT(*) > 0 ORDER BY 4 DESC LIMIT 500`, [since]);
+  const reg = CFG.consumers || {};
+  const clients = rows.map((r) => {
+    const e = reg[r.consumer];
+    const allow = (e && e.allowUa) || [];
+    return {
+      consumer: r.consumer, kind: e ? e.kind : null, ua: r.ua || null, ip: r.ip || null,
+      calls: r.calls, tokens: Number(r.tokens), lastTs: Number(r.last_ts),
+      allowUa: allow,
+      // What WOULD happen if this consumer's current policy were enforced against this client. Null
+      // when there is no policy: "no rule" and "allowed by the rule" are different answers.
+      wouldBlock: allow.length ? !allow.some((p) => String(r.ua || "").toLowerCase().startsWith(String(p).toLowerCase())) : null,
+    };
+  });
+  return sendJson(res, 200, { available: !!rows.length || dbUp(), days, clients });
+}
+
 // Auth mode. Separate + logged, like `consumers/enforce`: going to "required" 401s every caller
 // that has not been issued a key, so the panel refuses to do it blind.
 // Account-selection strategy. Its own logged endpoint (like auth/enforce), never POST config:
 // flipping it is a deliberate act — it changes WHICH subscription every app bills to.
 
-module.exports = { setAlias, listConsumers, addConsumer, issueKey, revokeKey };
+module.exports = { setAlias, listConsumers, addConsumer, issueKey, revokeKey, setClientPolicy, listClients };

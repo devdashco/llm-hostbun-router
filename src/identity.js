@@ -120,7 +120,30 @@ function startKeyUseFlush() {
   }, 300000).unref();
 }
 
+// A key is a bearer credential: whoever holds it IS that consumer, and nothing stops a developer
+// from pasting their own into an app. Measured 2026-07-29: `pmac`'s key — a laptop — was being used
+// 11,485 times a week from 85.194.137.213 (hexabyte-bluebut-prod) by a `node` client, 22.9M tokens,
+// while `bluebut` sat in the registry with a key of its own. Nothing was wrong on the wire; the
+// spend simply landed under a person instead of an app, which is how "what do my developers cost"
+// quietly starts including production traffic.
+//
+// `allowUa` is the lock: a list of user-agent PREFIXES this consumer's key may be presented with.
+// Empty or absent means NO restriction — same rule as the routing allowlist, and for the same
+// reason: the opposite makes a mistyped save an outage. It REFUSES, never rewrites, and it is
+// opt-in per consumer because a blanket "dev keys are for claude-cli only" would 403 the daemons
+// that are legitimately dev-kind (`lprod-autofix`, `pmac-claude`) on the day it shipped.
+//
+// A user-agent is self-asserted, so this stops SHARING, not an attacker — the honest framing. The
+// deterministic version is an IP allowlist, which is the upgrade path for a consumer that lives at
+// a fixed address; it is not the default because a laptop does not have one.
+function uaAllowed(entry, ua) {
+  const allow = (entry && entry.allowUa) || [];
+  if (!allow.length) return true;
+  const got = String(ua || "").toLowerCase();
+  return allow.some((p) => got.startsWith(String(p).toLowerCase()));
+}
+
 module.exports = {
   extractProject, normalizeConsumerPath, parseConsumer, consumerEntry,
-  sha256, mintKey, rawApiKey, authenticate, startKeyUseFlush,
+  sha256, mintKey, rawApiKey, authenticate, startKeyUseFlush, uaAllowed,
 };

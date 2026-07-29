@@ -58,6 +58,11 @@ const SCHEMA = [
      note         TEXT
    )`,
   `CREATE INDEX IF NOT EXISTS api_keys_consumer ON api_keys (consumer_id)`,
+  // Which clients may present this consumer's key — a comma-separated list of user-agent prefixes,
+  // NULL/empty meaning unrestricted (see uaAllowed in identity.js). A separate ALTER rather than a
+  // column in the CREATE above: `CREATE TABLE IF NOT EXISTS` no-ops against the table that is
+  // already in prod, so a new column added there would exist only on a virgin database.
+  `ALTER TABLE consumers ADD COLUMN IF NOT EXISTS allow_ua TEXT`,
   // An alias is a legacy caller name folded onto a canonical `<consumer>[:<job>]` path.
   `CREATE TABLE IF NOT EXISTS consumer_aliases (
      alias        TEXT PRIMARY KEY,
@@ -140,7 +145,7 @@ async function refresh() {
   if (!dbUp()) return;
   const devs = await dbRows("SELECT id, name FROM developers WHERE disabled_at IS NULL");
   const byId = new Map(devs.map((d) => [String(d.id), d.name]));
-  const cons = await dbRows("SELECT id, name, kind, developer_id, note FROM consumers WHERE disabled_at IS NULL");
+  const cons = await dbRows("SELECT id, name, kind, developer_id, note, allow_ua FROM consumers WHERE disabled_at IS NULL");
   const keys = await dbRows("SELECT id, consumer_id, hash, created_at, last_used_at, revoked_at, note FROM api_keys");
   const aliases = await dbRows("SELECT alias, target FROM consumer_aliases");
 
@@ -156,6 +161,10 @@ async function refresh() {
     const e = { kind: c.kind === "machine" ? "dev" : "app", keys: keysOf.get(String(c.id)) || [] };
     if (c.kind === "machine") e.owner = byId.get(String(c.developer_id)) || "unknown";
     if (c.note) e.note = c.note;
+    // Only set when non-empty: `allowUa: []` and no field at all mean the same thing (unrestricted),
+    // and carrying an empty array into the config mirror invites reading it as "nothing allowed".
+    const allow = String(c.allow_ua || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (allow.length) e.allowUa = allow;
     next[c.name] = e;
   }
   CFG.consumers = next;
@@ -347,8 +356,27 @@ async function setAlias({ from, to }) {
   await refresh();
 }
 
+// Which clients may present this consumer's key. `allowUa: []` (or null) CLEARS the lock — an empty
+// list is "unrestricted", never "nothing allowed", so a save built from an empty form re-opens the
+// key rather than taking a consumer off the air. Merge-safe by construction: one consumer per call,
+// so this can never do what `POST config` does to the maps it assigns wholesale.
+async function setClientPolicy({ name, allowUa }) {
+  requireDb();
+  const n = cleanName(name);
+  if (!n || !validName(n)) throw new RegistryError("valid consumer name required");
+  const known = (await dbRows("SELECT 1 FROM consumers WHERE name=$1 AND disabled_at IS NULL", [n]))[0];
+  if (!known) throw new RegistryError(`consumer '${n}' is not registered`, 404);
+  const list = (Array.isArray(allowUa) ? allowUa : String(allowUa || "").split(","))
+    .map((s) => String(s).trim()).filter(Boolean);
+  // A comma is the storage separator, so it cannot appear inside a prefix.
+  if (list.some((p) => p.includes(","))) throw new RegistryError("a user-agent prefix may not contain a comma");
+  await dbExec("UPDATE consumers SET allow_ua = $2 WHERE name = $1", [n, list.length ? list.join(",") : null]);
+  await refresh();
+  return { consumer: n, allowUa: list };
+}
+
 module.exports = {
-  RegistryError, initRegistry, refresh,
+  RegistryError, initRegistry, refresh, setClientPolicy,
   listDevelopers, addDeveloper, removeDeveloper,
   listConsumers, addConsumer, removeConsumer, purgeUnregistered,
   issueKey, revokeKey, setAlias,

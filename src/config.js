@@ -337,6 +337,15 @@ function mergeConfig(base, saved) {
       // "what do my developers cost" quietly starts including cron jobs.
       if (kind === "dev" && typeof v.owner === "string" && v.owner.trim()) e.owner = v.owner.trim().toLowerCase();
       if (typeof v.note === "string" && v.note.trim()) e.note = v.note.trim();
+      // Which clients may present this consumer's key (user-agent prefixes; see uaAllowed in
+      // identity.js). It has to survive the mirror, not just the DB: the mirror is what a cold boot
+      // with the database down authenticates from, and a field the loader drops would take the lock
+      // off every key at exactly the moment nobody is watching. Empty = unrestricted, so it is only
+      // set when non-empty — an `allowUa: []` in the file must not read as "nothing allowed".
+      if (Array.isArray(v.allowUa)) {
+        const allow = v.allowUa.map((s) => String(s || "").trim()).filter(Boolean);
+        if (allow.length) e.allowUa = allow;
+      }
       // Only the hash is ever stored. A `keys` entry without one is not a key, it is a way to lock
       // yourself out of a consumer while believing it is authenticated — drop it.
       e.keys = Array.isArray(v.keys) ? v.keys.filter((x) => x && typeof x.id === "string" && typeof x.hash === "string")

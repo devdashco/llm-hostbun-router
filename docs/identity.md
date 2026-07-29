@@ -169,6 +169,46 @@ survive; only that credential dies.
 > `lastUsed` on a key is flushed on a five-minute timer, not per request. It is approximate. Never
 > treat it as an audit trail.
 
+## One key per consumer
+
+A key is a bearer credential: whoever holds it **is** that consumer. Nothing on the wire stops a
+developer from pasting their own key into an application, and when that happens nothing looks broken
+— the call authenticates, the row is logged, and the spend lands under a person instead of an app.
+Measured here on 2026-07-29: `pmac`'s key, a laptop, was serving **11,485 calls and 22.9M tokens a
+week from a production box**, while that app sat in the registry holding a key of its own.
+
+**Read before you lock.** `GET /api/consumers/clients?days=7` lists every distinct user-agent and
+source IP that has presented each consumer's key, with call and token counts, and — where a policy
+already exists — whether that client *would* be refused by it:
+
+```bash
+GET /api/consumers/clients?days=7
+→ {"clients":[{"consumer":"pmac","ua":"node","ip":"85.194.137.213",
+               "calls":11485,"tokens":22910524,"allowUa":[],"wouldBlock":null}, …]}
+```
+
+`wouldBlock: null` means *no policy*, which is not the same answer as *allowed by the policy*.
+
+**Then lock.** `allowUa` is a list of user-agent **prefixes** a consumer's key may be presented with:
+
+```bash
+POST /api/consumers/policy   {"name":"pmac","allowUa":["claude-cli/"]}
+POST /api/consumers/policy   {"name":"pmac","allowUa":[]}      # clears it
+```
+
+A key presented by any other client gets **403 `client_not_allowed_for_key`**, naming the consumer
+the key belongs to and how to mint its own. Three things about it are deliberate:
+
+- **Empty or absent means unrestricted**, never "nothing allowed" — the opposite makes a mistyped
+  save an outage, exactly as with the routing allowlist.
+- **It refuses; it never re-attributes.** Silently billing the call to whichever consumer it "should"
+  have been is a guess, and a guess is what the no-fallback invariant forbids.
+- **It is opt-in per consumer.** A blanket "developer keys are for the CLI only" would refuse the
+  daemons that are legitimately developer-kind (`lprod-autofix`, `pmac-claude`) the day it shipped.
+
+A user-agent is self-asserted, so this stops **sharing**, not an attacker. The deterministic version
+is an IP allowlist, which suits a consumer that lives at a fixed address; a laptop does not have one.
+
 ## Two gates
 
 - **`auth.mode`** — `off` | `optional` | `required`. The lock. `optional` is migration mode: a valid

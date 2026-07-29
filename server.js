@@ -46,7 +46,7 @@ const nodePath = require("node:path");
 
 const { CFG, loadConfig, UI_ROUTES } = require("./src/config");
 const { initDb, primeAcctCacheSoon, recordCall } = require("./src/db");
-const { extractProject, parseConsumer, authenticate, consumerEntry, startKeyUseFlush } = require("./src/identity");
+const { extractProject, parseConsumer, authenticate, consumerEntry, startKeyUseFlush, uaAllowed } = require("./src/identity");
 const { resolveRoute, accountFor, usageVerdict, sleep, isGated, throttleDelay } = require("./src/routing");
 const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL } = require("./src/http");
 const { jsonEnforce, wantsJsonFormat } = require("./src/jsonenforce");
@@ -316,6 +316,27 @@ const server = http.createServer(async (req, res) => {
   // `required`: no key, no service. This is the mode where the self-asserted X-Project header stops
   // being an identity and becomes a mere label.
   if (authMode === "required" && isInference && !(auth && auth.ok)) return keyFail("missing API key");
+
+  // A valid key, presented by a client this consumer is not supposed to be. `allowUa` exists because
+  // a key is a bearer credential and nothing stops a developer pasting theirs into an app: `pmac`'s
+  // laptop key was running 11,485 calls a week from a production box (see uaAllowed in identity.js).
+  // Opt-in per consumer, empty = unrestricted, and it REFUSES rather than re-attributing — silently
+  // billing an app's traffic to whichever consumer it "should" be is the same guess invariant 2
+  // forbids on the routing side. 403, not 401: the key is valid, the caller is not.
+  if (isInference && auth && auth.ok && !uaAllowed(auth.entry, req.headers["user-agent"])) {
+    const ua = String(req.headers["user-agent"] || "(none)").slice(0, 80);
+    console.error(`[err] 403 ua not allowed for ${auth.consumer} ua="${ua}" ip=${ip}`);
+    recordCall({ ts: Date.now(), ip, ua: req.headers["user-agent"] || "", method: req.method, path,
+      reqModel: model || null, provider: "blocked", sentModel: null, keyLabel: "—", status: 403, ms: 0,
+      error: "client not allowed for this key", reqContent: extractRequestContent(bodyBuf), project });
+    res.writeHead(403, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: {
+      type: "permission_error", code: "client_not_allowed_for_key",
+      message: `this key belongs to \`${auth.consumer}\`, which only accepts calls from ${(auth.entry.allowUa || []).map((p) => `\`${p}…\``).join(" or ")} — yours says \`${ua}\`. It is a developer credential; an application must call under its own name so its spend is attributable to it.`,
+      docs: `${DOCS_URL}#/identity?id=one-key-per-consumer`,
+      fix: "mint your own: POST /api/consumers/keys {\"name\":\"<your-app>\",\"kind\":\"app\"} from the panel at https://llm.hostbun.cc/ → Callers, then store it in keyvault at llm/<your-app>/API_KEY",
+    } }));
+  }
 
   // Project attribution gate: when on, inference POSTs must declare a project.
   if (CFG.requireProject && isInference && !project) {
