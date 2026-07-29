@@ -60,6 +60,7 @@ const { PRICES_FILE, isPremiumModel, modelTier } = require("./src/pricing");
 // Used on every refusal path (missing project, unknown consumer, bad key, unpinned account) and by
 // the upstream-error shipper. Unbound since the split, so each gate 502'd instead of refusing.
 const { extractRequestContent, shipError, shipEvent } = require("./src/telemetry");
+const { scanWaste } = require("./src/waste");
 
 // A single malformed request must NEVER take down the whole proxy. This is a
 // stateless per-request router, so a thrown error in one handler is isolated —
@@ -540,4 +541,9 @@ server.listen(PORT, () => {
   const sweepLimits = async () => { for (const a of CFG.claudecodeAccountPool || []) await refreshAccountLimits(a); };
   setTimeout(() => { if (CFG.accountStrategy === "soonest-weekly-reset") sweepLimits().catch(() => {}); }, 5000).unref();
   setInterval(() => { if (CFG.accountStrategy === "soonest-weekly-reset") sweepLimits().catch(() => {}); }, 30 * 60 * 1000).unref();
+  // Waste watcher: uncached burn, tool-schema bloat, hour-over-week spikes. Reads the call log only
+  // — it never touches a request — so a failure here costs a warning, not an inference. Runs on a
+  // 15-min tick against a rolling hour; each signal has its own cooldown inside scanWaste().
+  setTimeout(() => scanWaste().catch(() => {}), 60_000).unref();
+  setInterval(() => scanWaste().catch(() => {}), 15 * 60 * 1000).unref();
 });
