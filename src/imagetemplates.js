@@ -23,6 +23,7 @@ const path = require("node:path");
 const { CFG, CONFIG_FILE, persistConfig, IMAGE_MODEL_IDS } = require("./config");
 const { sanitizeImageTemplate, IMAGE_TEMPLATE_MODELS } = require("./config-schema");
 const { readJson, sendJson, proxy } = require("./http");
+const { recordCall } = require("./db");
 const { authenticate, extractProject, parseConsumer, uaAllowed } = require("./identity");
 
 // Beside config.json on the same persistent volume: one thing to back up, one thing to lose.
@@ -350,6 +351,17 @@ async function renderTemplate(req, res, ip) {
   const allowed = CFG.imageTemplateModels || IMAGE_TEMPLATE_MODELS;
   const model = allowed.includes(String(p.model || "").toLowerCase()) ? String(p.model).toLowerCase() : (tpl.model || allowed[0]);
   console.log(`[imgtpl] render ${tpl.slug} model=${model} ip=${ip} (panel)`);
+  // This route bypasses proxy(), so nothing writes the call-log row for it — and it spends the same
+  // crazyrouter money the public route does, per token. Unlogged, a panel preview loop is invisible
+  // in /api/stats and unfindable when the bill moves. `panel:image-template-render` is not a
+  // registered consumer and is not meant to be: the row says WHERE the spend came from, and an
+  // operator-triggered render genuinely belongs to no caller.
+  const t0 = Date.now();
+  const record = (status, extra) => recordCall({
+    ts: t0, ip, ua: req.headers["user-agent"] || "", method: "POST", path: "/api/image-templates/render",
+    reqModel: model, sentModel: model, provider: "crazyrouter", keyLabel: "imageTemplateKey",
+    status, ms: Date.now() - t0, project: `panel:image-template-render`, ...extra,
+  });
   try {
     const r = await fetch(`${CFG.bases.crazyrouter}/v1/chat/completions`, {
       method: "POST",
@@ -358,13 +370,23 @@ async function renderTemplate(req, res, ip) {
       signal: AbortSignal.timeout(180000),
     });
     const j = await r.json().catch(() => null);
-    if (!r.ok) return sendJson(res, 502, { error: `upstream ${r.status}`, upstream: j });
+    if (!r.ok) {
+      record(502, { error: `upstream ${r.status}` });
+      return sendJson(res, 502, { error: `upstream ${r.status}`, upstream: j });
+    }
     const url = j && j.data && j.data[0] && (j.data[0].url || (j.data[0].b64_json ? `data:image/png;base64,${j.data[0].b64_json}` : ""));
     // No image in a 200 means the id is not actually an image model — say that, rather than handing
     // the panel an empty <img> and letting it read as "the template is broken".
-    if (!url) return sendJson(res, 502, { error: `'${model}' answered without an image — is it an image model?`, upstream: j });
+    if (!url) {
+      // A 200 from upstream: this one BILLED and produced nothing usable, which is the branch most
+      // worth having a row for.
+      record(502, { error: `'${model}' answered without an image`, usage: (j && j.usage) || {} });
+      return sendJson(res, 502, { error: `'${model}' answered without an image — is it an image model?`, upstream: j });
+    }
+    record(200, { usage: (j && j.usage) || {} });
     return sendJson(res, 200, { ok: true, model, url });
   } catch (e) {
+    record(502, { error: `render failed: ${e.message}` });
     return sendJson(res, 502, { error: `render failed: ${e.message}` });
   }
 }

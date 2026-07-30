@@ -156,5 +156,68 @@ console.log("proxy() early returns still record:");
   stall.close();
 }
 
+// ── the panel's image-template render — spend that never went through proxy() at all ────────────
+// POST /api/image-templates/render calls crazyrouter with `fetch` directly (there is no caller
+// request to forward, only a form submit), so none of proxy()'s recording machinery runs. It bills
+// per token exactly like the public route, and every branch of it — success, upstream error, and a
+// 200 that came back without an image — used to return with no row at all. A preview loop in the
+// panel was therefore invisible in /api/stats and unfindable when the bill moved.
+{
+  const IT = req_(join(ROOT, "src/imagetemplates.js"));
+  // Two upstream shapes on one server: a 200 carrying an image, and a 200 carrying none. The
+  // second is the branch most worth a row — it BILLED and produced nothing usable.
+  const cr = http.createServer((rq, rs) => {
+    rs.writeHead(200, { "content-type": "application/json" });
+    rs.end(JSON.stringify(/noimage/.test(rq.url)
+      ? { usage: { prompt_tokens: 11, completion_tokens: 0, total_tokens: 11 } }
+      : { data: [{ url: "https://example.invalid/i.png" }], usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 } }));
+  });
+  await new Promise((r) => cr.listen(0, "127.0.0.1", r));
+  const CR = `http://127.0.0.1:${cr.address().port}`;
+  // A style-only template: no reference picture, so this exercises the billing path without
+  // needing a file on disk. `reference` is optional by design (systemInstruction, reference, or both).
+  const slug = "probe-style";
+  CFG.imageTemplates = { ...(CFG.imageTemplates || {}), [slug]: { slug, name: "probe", systemInstruction: "in the style of a probe", model: "nano-banana" } };
+  CFG.imageTemplateModels = ["nano-banana"];
+
+  const render = async (base) => {
+    CFG.bases = { ...(CFG.bases || {}), crazyrouter: base };
+    rows.length = 0;
+    const rq = fakeReq("/api/image-templates/render");
+    rq.headers = { ...(rq.headers || {}), "content-type": "application/json" };
+    const body = Buffer.from(JSON.stringify({ slug, prompt: "a cat" }));
+    // readJson reads the request stream, so feed it one.
+    const stream = new PassThrough();
+    stream.end(body);
+    Object.assign(rq, { on: stream.on.bind(stream), once: stream.once.bind(stream),
+      removeListener: stream.removeListener.bind(stream), pipe: stream.pipe.bind(stream),
+      [Symbol.asyncIterator]: stream[Symbol.asyncIterator].bind(stream) });
+    const res = fakeRes();
+    await IT.renderTemplate(rq, res, "127.0.0.1");
+    return res;
+  };
+
+  if (!slug) bad("a seeded template exists to render", "CFG.imageTemplates is empty");
+  else {
+    const okRes = await render(CR);
+    check("a successful panel render answers 200", okRes.status, 200);
+    if (rows.length !== 1) bad("a successful panel render records exactly one row", `got ${rows.length} rows`);
+    else {
+      ok("a successful panel render records exactly one row");
+      check("...against the provider that was actually billed", rows[0].provider, "crazyrouter");
+      check("...naming where the spend came from", rows[0].project, "panel:image-template-render");
+      check("...carrying the tokens upstream reported", rows[0].usage.total_tokens, 15);
+    }
+    const noneRes = await render(`${CR}/noimage`);
+    check("a 200 with no image is reported as a 502 to the panel", noneRes.status, 502);
+    if (rows.length !== 1) bad("...and still records the call that billed", `got ${rows.length} rows`);
+    else {
+      ok("...and still records the call that billed");
+      check("...with the reason, not a silent success", /answered without an image/.test(rows[0].error || ""), true);
+    }
+  }
+  cr.close();
+}
+
 upstream.close();
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
