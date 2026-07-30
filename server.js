@@ -559,21 +559,21 @@ server.listen(PORT, () => {
   // and a failure leaves the seed in place rather than an empty list.
   refreshClaudecodeModels("boot").catch((e) => console.error(`[models] boot refresh: ${e.message}`));
   setInterval(() => refreshClaudecodeModels("interval").catch(() => {}), CLAUDECODE_MODEL_REFRESH_MS).unref();
-  // Auto account selection orders on each account's weekly reset, but the passive harvest only
-  // learns from accounts that serve traffic — with a single selected account, everyone else's
-  // reading would freeze. Sweep the pool (one 1-token haiku ping each, serial) so reset7 stays
-  // honest. Gated per tick, so flipping the strategy in the panel starts/stops it without a deploy.
-  const sweepLimits = async () => { for (const a of CFG.claudecodeAccountPool || []) await refreshAccountLimits(a); };
+  // Auto selection orders on each account's weekly reset, but the passive harvest only learns from
+  // accounts that serve traffic, so everyone else's reading would freeze. Sweep the pool (one
+  // 1-token haiku ping each, serial) to keep reset7 honest, gated per tick so the panel can start it
+  // without a deploy. Skips DISABLED accounts: this POST spends against the window it measures, and
+  // `disabled` is also how an operator PARKS a healthy login they want left alone.
+  const sweepLimits = async () => { for (const a of (CFG.claudecodeAccountPool || []).filter((x) => !x.disabled)) await refreshAccountLimits(a); };
   setTimeout(() => { if (CFG.accountStrategy === "soonest-weekly-reset") sweepLimits().catch(() => {}); }, 5000).unref();
   setInterval(() => { if (CFG.accountStrategy === "soonest-weekly-reset") sweepLimits().catch(() => {}); }, 30 * 60 * 1000).unref();
-  // Waste watcher: uncached burn, tool-schema bloat, hour-over-week spikes. Reads the call log only
-  // — it never touches a request — so a failure here costs a warning, not an inference. Runs on a
-  // 15-min tick against a rolling hour; each signal has its own cooldown inside scanWaste().
+  // Waste watcher: uncached burn, tool-schema bloat, hour-over-week spikes. Reads the call log only,
+  // so a failure costs a warning, not an inference. 15-min tick over a rolling hour; each signal has
+  // its own cooldown inside scanWaste().
   //
-  // The catch REPORTS. Every other .catch(() => {}) on this page guards a task whose silence you
-  // would notice some other way — a stale model list, a frozen limits reading. This one's entire job
-  // is to be the thing that speaks up, so a watcher that dies on a bad query is indistinguishable
-  // from a fleet with nothing to report, and stays that way until someone happens to ask.
+  // The catch REPORTS. Every other .catch(() => {}) here guards a task whose silence you would
+  // notice another way. This one's whole job is to speak up, so a watcher that dies on a bad query
+  // is indistinguishable from a fleet with nothing to report.
   const waste = () => scanWaste().catch((e) => {
     console.error(`[waste] scan failed: ${e.message}`);
     shipError("waste scan failed", { from: "waste", error: e.message });
