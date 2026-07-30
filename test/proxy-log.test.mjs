@@ -287,5 +287,42 @@ console.log("proxy() early returns still record:");
   cf.close();
 }
 
+// ── a text-path upstream error kept its status and threw away its REASON ────────────────────────
+// The body is already buffered on this path (it is what fills `respContent`), and the row still
+// recorded a bare `upstream 500` — 4,195 such rows in the last 7 days, none of them saying why.
+// Anthropic and crazyrouter both answer `{"error":{"type","message"}}`, and the type IS the answer.
+{
+  const jsonErr = http.createServer((rq, rs) => {
+    rs.writeHead(500, { "content-type": "application/json" });
+    rs.end(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }));
+  });
+  await new Promise((r) => jsonErr.listen(0, "127.0.0.1", r));
+  rows.length = 0;
+  const res = fakeRes();
+  await proxy(fakeReq("/v1/chat/completions"), res, `http://127.0.0.1:${jsonErr.address().port}`, {
+    bodyBuf: Buffer.from(JSON.stringify({ model: "gemini-2.5-flash", messages: [] })),
+    provider: "crazyrouter", model: "gemini-2.5-flash", project: "someapp",
+  });
+  await new Promise((r) => { res.on("end", r); res.on("finish", r); setTimeout(r, 250); });
+  if (rows.length !== 1) bad("a text-path upstream error records one row", `got ${rows.length} rows`);
+  else {
+    ok("a text-path upstream error records one row");
+    check("...naming the upstream's own error type, not just the status",
+      rows[0].error, "upstream 500: overloaded_error: Overloaded");
+  }
+  // A 200 must stay clean — a reason on a successful call would poison every error rollup.
+  rows.length = 0;
+  const okRes = fakeRes();
+  const okSrv = http.createServer((rq, rs) => { rs.writeHead(200, { "content-type": "application/json" }); rs.end('{"choices":[]}'); });
+  await new Promise((r) => okSrv.listen(0, "127.0.0.1", r));
+  await proxy(fakeReq("/v1/chat/completions"), okRes, `http://127.0.0.1:${okSrv.address().port}`, {
+    bodyBuf: Buffer.from(JSON.stringify({ model: "gemini-2.5-flash", messages: [] })),
+    provider: "crazyrouter", model: "gemini-2.5-flash", project: "someapp",
+  });
+  await new Promise((r) => { okRes.on("end", r); okRes.on("finish", r); setTimeout(r, 250); });
+  check("a 200 still records no error at all", rows.length === 1 && rows[0].error, null);
+  jsonErr.close(); okSrv.close();
+}
+
 upstream.close();
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
