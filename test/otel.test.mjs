@@ -13,6 +13,7 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 import fs from "node:fs";
+import nodeCrypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -108,8 +109,14 @@ const PORT = await freePort();
 const cfgPath = path.join(os.tmpdir(), `otel-cfg-${process.pid}.json`);
 fs.writeFileSync(cfgPath, JSON.stringify({
   auth: { mode: "required" }, logging: { enabled: false, content: false },
-  consumers: {}, consumerAliases: {}, crazyrouterKey: "test",
+  // A REAL key. With an empty registry every request 401s at the gate, so the checks below that are
+  // about what happens AFTER authentication never reached their branch — `a non-JSON body never
+  // 5xx's` was measuring the 401, and stayed green with the malformed-body handling removed
+  // entirely (probed by the audit that found it). The parse branch needs a caller who got in.
+  consumers: { probe: { kind: "app", keys: [{ id: "dddd4444", hash: nodeCrypto.createHash("sha256").update("probesecret").digest("hex") }] } },
+  consumerAliases: {}, crazyrouterKey: "test",
 }));
+const GOOD_KEY = "sk-llm-dddd4444-probesecret";
 const srv = spawn(process.execPath, ["server.js"], {
   env: { ...process.env, PORT: String(PORT), CONFIG_FILE: cfgPath, PRICES_FILE: "/nonexistent.json",
     ADMIN_PASSWORD: "ddash", SESSION_INSECURE: "1", DATABASE_URL: "", PANEL_DIR: "/nonexistent" },
@@ -135,8 +142,13 @@ try {
   const badKey = await post(apiReq, { authorization: "Bearer sk-llm-deadbeef-nope" });
   check("ingest with a bad key is 401", badKey.status === 401, String(badKey.status));
   // Protobuf into a JSON-only endpoint is the likely misconfiguration; it must say so, not 500.
-  const proto = await post("\x00\x01binary", { authorization: "Bearer sk-llm-deadbeef-nope" });
-  check("a non-JSON body never 5xx's", proto.status < 500, String(proto.status));
+  // Authenticated, so this actually reaches the parse. Protobuf into a JSON-only endpoint is the
+  // likely misconfiguration and must be a 400 that NAMES the fix, never a 5xx and never a hang:
+  // ingest() is called un-awaited, so an uncaught throw there is an unhandled rejection with no
+  // response ever sent. `< 500` could not tell any of that apart from the 401 it was really seeing.
+  const proto = await post("\x00\x01binary", { authorization: `Bearer ${GOOD_KEY}` });
+  check("a non-JSON body from an AUTHENTICATED caller is a 400", proto.status === 400, String(proto.status));
+  check("...naming the protocol to change, not a bare failure", /http\/json|protocol/i.test(proto.text), true);
   // `!== 404` was the original assertion here and it could not fail for the reason it was written:
   // an UNAUTHENTICATED metrics POST answered 401 — a retry forever, and a `[otel] 401` line per
   // retry — and 401 is not 404, so the check stayed green while the storm it names ran in prod.

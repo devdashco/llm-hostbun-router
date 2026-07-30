@@ -83,8 +83,12 @@ else fail("an unguarded st.* read would throw when stats fails",
 // just pins the text so a reword cannot quietly widen the claim without tripping this suite.
 const banner = src.match(/<b className="text-ok">All healthy<\/b>\s*<span[^>]*>([^<]*)<\/span>/);
 if (!banner) fail("could not find the All healthy banner", "reword it and update this suite together");
+// Both branches used to call ok(), so no reword could ever trip this — the one thing the comment
+// above says it is for. The banner must name what it actually checked; a bare "All healthy" is the
+// widened claim this suite exists to refuse.
 else if (/slow providers|error/.test(banner[1])) ok(`the banner names what it checked: "${banner[1].trim().slice(0, 60)}…"`);
-else ok("the banner no longer claims stats-derived facts");
+else fail(`the All healthy banner says "${banner[1].trim().slice(0, 60)}" without naming what it checked`,
+  "it must name the checks it ran (providers, slow providers, errors) — an unqualified all-clear claims facts it did not gather");
 
 // An error RATE without a reason is not actionable: one caller sending a field the upstream just
 // dropped reads exactly like a dead upstream, and the two need opposite responses. /api/stats now

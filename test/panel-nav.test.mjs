@@ -104,13 +104,21 @@ for (const { name, slug } of NAV) {
   if (r.single) {
     // A single-component page: the nav label is the heading, there is no tab strip.
     const t = titles.get(r.single);
-    if (t && t !== name) fail(`nav "${name}" (/${slug}/) renders <${r.single}/>, whose heading is "${t}"`);
-    else ok(`nav "${name}" → heading "${t || r.single}"`);
+    // A MISSING heading has to fail. `t && t !== name` sent every falsy `t` — no <PageHead
+    // title=…> at all, or a regex that simply missed — down the else branch and reported ok, so a
+    // page with no heading was indistinguishable from a correct one. That is the exact bug this
+    // file exists to catch, in the file that catches it. Probed: stripping every title= from
+    // call-log.tsx left the suite green at 33 passed.
+    if (!t) fail(`nav "${name}" (/${slug}/) renders <${r.single}/>, which has no discoverable <PageHead title=…>`);
+    else if (t !== name) fail(`nav "${name}" (/${slug}/) renders <${r.single}/>, whose heading is "${t}"`);
+    else ok(`nav "${name}" → heading "${t}"`);
     continue;
   }
   for (const tab of r.tabs) {
     const t = titles.get(tab.comp);
-    if (!t) continue; // component renders no PageHead — nothing to compare against
+    // Same rule for a tab: a component with no heading is a finding, not a reason to skip. The
+    // silent `continue` here dropped the comparison for that tab with nothing saying so.
+    if (!t) { fail(`/${slug}/ tab "${tab.label}" renders <${tab.comp}/>, which has no discoverable <PageHead title=…>`); continue; }
     if (t !== tab.label) fail(`/${slug}/ tab "${tab.label}" renders <${tab.comp}/>, whose heading is "${t}"`);
     else ok(`/${slug}/ tab "${tab.label}" → heading "${t}"`);
   }
