@@ -51,12 +51,22 @@ _cctl_otel_direct() {
   export OTEL_TRACES_EXPORTER=none
   export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
   export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="$url/otel/v1/logs"
+  # BOTH forms, and the per-signal one is the load-bearing half. A box can already carry a GENERIC
+  # OTEL_EXPORTER_OTLP_HEADERS from ~/.claude/settings.json — pbox does, holding a HyperDX token —
+  # and settings env is applied over the shell's, so exporting only the generic form here is
+  # silently overwritten. The logs then reach the router carrying HyperDX's credential and are
+  # refused: measured in prod 2026-07-30 as a steady stream of
+  # `[otel] 401 no key ip=<pbox> path=/otel/v1/logs ua=OTel-OTLP-Exporter-JavaScript`, i.e. every
+  # direct-connect call on that box unlogged, which is the exact hole this ingest exists to close.
+  # Per-signal wins over generic in the OTLP spec, and settings.json does not set it.
   export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $key"
+  export OTEL_EXPORTER_OTLP_LOGS_HEADERS="Authorization=Bearer $key"
   export OTEL_LOGS_EXPORT_INTERVAL=5000
 }
 _cctl_otel_off() {
   unset CLAUDE_CODE_ENABLE_TELEMETRY OTEL_LOGS_EXPORTER OTEL_METRICS_EXPORTER OTEL_TRACES_EXPORTER \
         OTEL_EXPORTER_OTLP_PROTOCOL OTEL_EXPORTER_OTLP_LOGS_ENDPOINT OTEL_EXPORTER_OTLP_HEADERS \
+        OTEL_EXPORTER_OTLP_LOGS_HEADERS \
         OTEL_LOGS_EXPORT_INTERVAL 2>/dev/null || true
 }
 

@@ -129,13 +129,18 @@ fi
 
 # --- 2b. the claudectl MCP daemon (one per box) ----------------------------
 CLAUDECTL_MCP_PORT="${CLAUDECTL_LOCAL_PORT:-9150}"
-# Resolve the INSTALLED plugin copy — that is what `.mcp.json` points a session
-# at, and running a different checkout here would serve a different tool set
-# than the one the plugin promises.
+# WHICH copy the daemon runs, in a DELIBERATE order: this checkout first, the
+# installed plugin cache second.
+#   - the checkout is the canonical source (deploy.sh syncs it and the
+#     marketplace pins a SHA of it), so on a dev box it is never older;
+#   - the cache is a pinned, possibly stale sha — right only where no checkout
+#     exists. Running it on a dev box would serve yesterday's tool set from
+#     today's URL, and nothing on either side would say so.
+# First match wins — do NOT rewrite this as a last-wins loop.
 CLAUDECTL_MCP_ENTRY=""
-for c in "$HOME"/.claude/plugins/cache/*/claudectl/*/mcp/claudectl_launch.sh \
-         "$DIR/plugins/claudectl/mcp/claudectl_launch.sh"; do
-  [ -f "$c" ] && CLAUDECTL_MCP_ENTRY="$c"
+for c in "$DIR/plugins/claudectl/mcp/claudectl_launch.sh" \
+         "$HOME"/.claude/plugins/cache/*/claudectl/*/mcp/claudectl_launch.sh; do
+  if [ -f "$c" ]; then CLAUDECTL_MCP_ENTRY="$c"; break; fi
 done
 if [ "${CLAUDECTL_NO_MCP_DAEMON:-0}" = "1" ] || [ -z "$CLAUDECTL_MCP_ENTRY" ]; then
   [ -n "$CLAUDECTL_MCP_ENTRY" ] || say "note: no installed claudectl plugin found — MCP daemon not installed"
