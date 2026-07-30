@@ -210,7 +210,14 @@ const server = http.createServer(async (req, res) => {
   if (path.startsWith("/local/")) {
     const bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
     req.url = req.url.slice("/local".length);
-    return proxy(req, res, CFG.bases.local, { bodyBuf, provider: "local" });
+    // Pass the model and the caller's name through. Without them every row from this back-compat
+    // path carried `req_model = null` and `project = null` — the identical request sent to
+    // /v1/chat/completions is fully attributed, so the same traffic read as anonymous or not,
+    // depending only on which URL the caller happened to use. local is free, so this is not about
+    // cost: it is about `byProject`/`byModel` telling the truth about who runs what.
+    let m = null;
+    if (bodyBuf.length) { try { m = JSON.parse(bodyBuf.toString()).model ?? null; } catch { /* not json */ } }
+    return proxy(req, res, CFG.bases.local, { bodyBuf, provider: "local", model: m, project: extractProject(req, bodyBuf) });
   }
   if (req.method === "GET" && (path === "/v1/models" || path === "/api/v1/models"))
     return mergedModels(res);
