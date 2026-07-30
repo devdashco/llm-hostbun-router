@@ -25,12 +25,7 @@ Anthropic SDK), and a request without one gets `401`. The key IS the identity �
 from it, not from a header you send. Yours is in keyvault at `llm/<consumer>/API_KEY`; see
 [Authenticating](identity.md#authenticating).
 
-This page used to say the opposite — that `auth.mode` was `optional`, that "the network is the only
-boundary", and that anyone who could reach the hostname could spend our subscriptions. The migration
-finished; the warning did not. It is corrected here rather than deleted because a stale security
-claim is worse than none: read literally, it told an integrator not to bother sending a key.
-
-Still true: **the URL is not a place to be careless.** The image routes under `/v1/images/*` are
+**The URL is still not a place to be careless.** The image routes under `/v1/images/*` are
 deliberately anonymous (our own GPU, no per-token cost), so anyone who can reach the host can spend
 GPU seconds there. And every prompt is stored — see above.
 

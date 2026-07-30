@@ -29,10 +29,6 @@ curl https://llm.hostbun.cc/v1/chat/completions \
 
 The Anthropic SDK sends `x-api-key` instead of `Authorization`. Both are accepted.
 
-These examples used to omit the key entirely, with a separate "with an API key" section below them
-— written while `auth.mode` was `optional`. Copied today they answer `401`, which is a confusing
-first impression of a router whose front page also claimed no key was needed.
-
 ## Python
 
 ```python

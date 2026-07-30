@@ -5,7 +5,7 @@
 | POST | `/v1/chat/completions` | all three | Chat, routed by model. Streaming, tools, structured output, vision. Needs identity. |
 | POST | `/v1/messages` | `claudecode` | Anthropic-native shape, forwarded byte-for-byte. Needs identity. |
 | POST | `/v1/images/generations` | image | Text-to-image on ww's RTX 3070. No identity required. |
-| GET | `/v1/templates`, `/v1/loras` | image | SD-Turbo prompt templates and named-LoRA catalog |
+| GET | `/v1/templates`, `/v1/loras` | image | the image service's own prompt templates; `/v1/loras` answers an empty list under the current checkpoint (see below) |
 | POST | `/v1/images/generations` + `template` | `crazyrouter` | Reference-picture templates. Paid, **needs a key**. |
 | GET | `/v1/image-templates` | meta | The reference-picture templates and their pictures |
 | POST | `/v1/completions`, `/v1/embeddings`, `/v1/audio/*`, `/v1/rerank` | `crazyrouter` | Rest of the OpenAI-compatible surface, key injected |
@@ -53,16 +53,23 @@ Text-to-image on ww's GPU (NVIDIA SANA-Sprint 0.6B, 2 steps), token injected ser
 | `prompt` | Text prompt. Optional if `template` is given. |
 | `template` | Named prompt template (`GET /v1/templates`) |
 | `vars` | Pin specific template slots, e.g. `{"hair":"jet black"}`; the rest stay random |
-| `lora` | A registered LoRA name (`GET /v1/loras`), an HF repo id, or a local path |
-| `lora_scale` | Override LoRA strength |
+| `lora`, `lora_scale` | **SDXL mode only — refused by the checkpoint deployed today.** See the note below before using either |
 | `n`, `size`, `seed`, `steps` | Count (1–8), WxH (default `1024x1024`), seed, steps (default 8) |
 
-Sizes are floored to a multiple of 8: the SDXL VAE downsamples ×8, and a non-multiple crashes upstream
+Sizes are floored to a multiple of 8: the VAE downsamples ×8, and a non-multiple crashes upstream
 with a bare 500.
+
+> **The service does not run SD-Turbo, and LoRAs do not work on it.** It serves NVIDIA SANA-Sprint,
+> which is distilled rather than adapted and takes no LoRA at all: `GET /v1/loras` answers an empty
+> list, and sending `lora` gets `400 LoRAs are an SDXL feature; this host serves SANA-Sprint`. This
+> is not theoretical — 2,410 image generations failed that way in one day (2026-07-28), all from one
+> caller following this page. `MODEL_KIND=sdxl` on the host selects the SDXL + Lightning path where
+> LoRAs do work; ask `/health` on the image service for what is actually loaded rather than
+> inferring it from a model id.
 
 ```bash
 curl https://llm.hostbun.cc/v1/images/generations -H "Content-Type: application/json" \
-  -d '{"model":"imagegen","lora":"watercolor","prompt":"a cozy reading nook by a window"}'
+  -d '{"model":"imagegen","prompt":"a cozy reading nook by a window"}'
 ```
 
 Asking for `imagegen` on a chat endpoint is refused with a 400 that tells you to POST it here instead.
@@ -97,7 +104,7 @@ Unset, it falls back to the main key.
 GPU and is free, so it is deliberately anonymous; this one spends real money per picture, and an
 unauthenticated paid route is a bill nobody can attribute.
 
-A `template` value this router does not know **falls through untouched** to the SD-Turbo prompt
+A `template` value this router does not know **falls through untouched** to the image service's prompt
 templates above — the two vocabularies share the field, and ours wins a name collision.
 
 | Method | Path | Purpose |

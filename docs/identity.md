@@ -220,8 +220,7 @@ is an IP allowlist, which suits a consumer that lives at a fixed address; a lapt
 
 - **`auth.mode`** — `off` | `optional` | `required`. The lock. `optional` is migration mode: a valid
   key wins, no key falls back to the header, and a key that is *presented and bad* is always a 401.
-  Only `required` closes the hole. **Currently `required`** — the migration is done, and the top of
-  this page has said so for a while, which is exactly how a page ends up contradicting itself.
+  Only `required` closes the hole. **Currently `required`** — the migration is done.
 - **`requireRegisteredConsumer`** — a spelling check, not a lock. Applies only to calls with no key,
   and refuses an unknown consumer with `403 unknown_consumer` so a typo cannot become a new consumer
   with its own bill. **Currently on.**
