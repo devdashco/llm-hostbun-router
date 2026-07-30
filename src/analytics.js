@@ -16,6 +16,34 @@ const { parseConsumer, consumerEntry } = require("./identity");
 const { priceMap, costUsd, modelTier, isPremiumModel, listCostUsd } = require("./pricing");
 const { limitFor, projectUsage } = require("./routing");
 
+// One req_model can be served by SEVERAL models in a window (a rewrite, a pin changed mid-window,
+// a fallback id). `sent_models` on the byModel row is an UNORDERED string_agg, so reading its first
+// element and pricing the whole group at that model's rate is wrong in both directions. Measured in
+// prod 2026-07-30, 7d: the `claude-sonnet-5` row read `tier: haiku, premium: false` because haiku
+// sorts first in the agg, and the `claude-haiku-4-5` row priced 1.87B tokens — sonnet-5 traffic
+// included — entirely at haiku's list rate. Fold per sent_model off the cost rows instead: they are
+// already grouped (project, req_model, sent_model, provider) and already scanned the window, so this
+// costs no extra query. `served` is the token-weighted winner (the tier label), `premium` is true if
+// ANY member is premium, and one unpriced member makes list_usd null — unknown, never 0.
+function foldServedByModel(costRows) {
+  const out = {};
+  for (const r of costRows) {
+    const k = r.req_model + " " + r.provider;
+    const e = out[k] || (out[k] = { tokens: {}, listUsd: 0, unknown: false, premium: false });
+    const m = r.sent_model || r.req_model;
+    e.tokens[m] = (e.tokens[m] || 0) + Number(r.tok || 0);
+    if (isPremiumModel(m)) e.premium = true;
+    if (r.provider !== "claudecode") continue;
+    const lc = listCostUsd(m, r.ptok, r.ctok);
+    if (lc == null) e.unknown = true; else e.listUsd += lc;
+  }
+  for (const e of Object.values(out)) {
+    const top = Object.entries(e.tokens).sort((a, b) => b[1] - a[1])[0];
+    e.served = top ? top[0] : null;
+  }
+  return out;
+}
+
 // ── consumption rollups: kind → owner → consumer → job, plus account×kind ──
 // Grouping happens in JS, not SQL: the registry lives in CFG, and a 26-row group-by is cheaper to
 // ship whole than to join against a config file.
@@ -244,19 +272,24 @@ async function statsSummary(req, res) {
         r.limitPct = +(Math.max(pt, pc) * 100).toFixed(1);
       }
     }
+    const servedByModel = foldServedByModel(costRows);
     byModel.forEach((r) => {
       r.usd = +(costByModel[r.req_model + " " + r.provider] || 0).toFixed(4);
       // Classify by what was ACTUALLY served (sent_model), not the requested id — a rewrite
       // (redbut asks gemini, gets haiku) must read as its real tier. `list_usd` is the notional
       // Anthropic list cost of this claudecode traffic (never billed — the sub is flat — but it
       // makes premium spend visible where `usd` is 0).
-      const served = String(r.sent_models || "").split(",")[0] || r.req_model;
+      const f = servedByModel[r.req_model + " " + r.provider];
+      const served = (f && f.served) || String(r.sent_models || "").split(",")[0] || r.req_model;
       r.tier = modelTier(served);
-      r.premium = isPremiumModel(served);
-      // null (not 0) when the served id has no price — see listCostUsd. A non-claudecode row is a
+      // ANY premium member makes the row premium: the tier label is the dominant model, but a row
+      // that ran opus must never read `premium: false` — that is the one thing this field is for.
+      r.premium = f ? f.premium : isPremiumModel(served);
+      // null (not 0) when a served id has no price — see listCostUsd. A non-claudecode row is a
       // genuine 0: the sub is flat and local is free, so "no list cost" is the true answer there.
-      const lc = r.provider === "claudecode" ? listCostUsd(served, r.ptok, r.ctok) : 0;
-      r.list_usd = lc == null ? null : +lc.toFixed(4);
+      if (r.provider !== "claudecode") r.list_usd = 0;
+      else if (!f) r.list_usd = null;
+      else r.list_usd = f.unknown ? null : +f.listUsd.toFixed(4);
     });
     // Premium-usage warning: which PROJECTS (esp. apps) ran an opus/fable model in this window, and
     // how much. Devs choosing opus is expected; an app on premium is the cost signal worth surfacing.
@@ -297,4 +330,4 @@ async function statsSummary(req, res) {
 }
 
 
-module.exports = { usageRollup, seriesHistory, statsSummary };
+module.exports = { usageRollup, seriesHistory, statsSummary, foldServedByModel };
