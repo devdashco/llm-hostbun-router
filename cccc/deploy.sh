@@ -34,8 +34,17 @@ for f in claudectl_server.py _auth.py; do
   fi
 done
 
-echo "→ push origin master"
+# BOTH remotes, and the second one is the load-bearing half. `origin` here is GitLab (what Coolify
+# builds from), but every fleet checkout this script then resets — pbox's ~/.llm-hostbun-router
+# included — has `origin` pointing at GITHUB. Pushing one remote and resetting boxes that read the
+# other is how a cccc fix reports "ok <sha>" on every host and changes nothing. Measured 2026-07-30:
+# master was 133 commits ahead of the github mirror while every deploy had been reporting success.
+echo "→ push origin master (GitLab — Coolify builds from this)"
 git push origin master
+if git remote | grep -qx github; then
+  echo "→ push github master (the mirror the FLEET checkouts pull from)"
+  git push github master || { echo "!! github push failed — the boxes below will reset to a STALE commit"; exit 1; }
+fi
 
 for spec in $FLEET; do
   host="${spec%%:*}"; dir="${spec#*:}"
