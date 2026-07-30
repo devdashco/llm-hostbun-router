@@ -503,6 +503,13 @@ console.log("proxy() early returns still record:");
   else {
     ok("a large paid reply records one row");
     check("...carrying the tokens that trail 40 KB of base64", rows[0].usage && rows[0].usage.total_tokens, 13);
+    // The other half, and the reason uncapping the buffer is safe: extractResponseBody only pulls
+    // chat-shaped `choices[].message.content`, so an images envelope stores NO content at all. The
+    // megabytes of base64 are read to find the usage that trails them and then dropped. Asserted
+    // because it is what makes the previous line affordable — a `calls` table already at 38 GB
+    // cannot take a multi-MB blob per render, and if a future change starts extracting `data[]`
+    // this check is what says so.
+    check("...without storing the base64 itself", rows[0].respContent, null);
   }
   bigSrv.close();
 }

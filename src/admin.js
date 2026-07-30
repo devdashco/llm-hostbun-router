@@ -99,8 +99,8 @@ function adminState() {
     gatedModels: CFG.gatedModels,
     claudePrefix: CFG.claudePrefix,
     claudecodeModels: CFG.claudecodeModels,
-    // Advertised claudecode ids with no token cost defined in the pricing catalog — a coverage warning
-    // so a newly-shipped Anthropic id shows up here instead of silently reading as $0 / no tier.
+    // Advertised claudecode ids with no token cost in the pricing catalog — so a newly-shipped
+    // Anthropic id shows up here instead of silently reading as $0 / no tier.
     unpricedModels: unpricedModels(CFG.claudecodeModels),
     forceModel: CFG.forceModel,
     modelRoutes: CFG.modelRoutes,
@@ -108,8 +108,8 @@ function adminState() {
     projectAccounts: CFG.projectAccounts,
     consumerAccounts: CFG.consumerAccounts,   // legacy alias, same map
     defaultAccount: CFG.defaultAccount,
-    // "pinned" (default) or "soonest-weekly-reset". autoAccount = what the picker would choose right
-    // now (null when off or no usable weekly reading — then pins decide, exactly as before).
+    // "pinned" (default) or "soonest-weekly-reset". autoAccount = what the picker would choose now
+    // (null when off, or with no usable weekly reading — then pins decide, as before).
     accountStrategy: CFG.accountStrategy || "pinned",
     autoAccount: CFG.accountStrategy === "soonest-weekly-reset" ? ((autoAccount() || {}).name || null) : null,
     projectLimits: CFG.projectLimits,
@@ -121,9 +121,8 @@ function adminState() {
     jsonMaxRetries: CFG.jsonMaxRetries,
     requireProject: CFG.requireProject,
     requireRegisteredConsumer: CFG.requireRegisteredConsumer,
-    // Redacted: the entry carries key HASHES, and adminState is the broadest thing this API returns.
-    // A sha256 of 32 random bytes is not worth cracking, but it is a credential derivative and it has
-    // no business in a dashboard payload. `activeKeys` is all the UI needs from here.
+    // Redacted: the entry carries key HASHES and this is the broadest payload the API returns.
+    // A credential derivative has no business in a dashboard; `activeKeys` is all the UI needs.
     consumers: Object.fromEntries(Object.entries(CFG.consumers || {}).map(([n, e]) =>
       [n, { kind: e.kind, owner: e.owner, note: e.note, activeKeys: (e.keys || []).filter((k) => !k.revoked).length }])),
     // Apps currently back-pressured for drawing real upstream 429s (invariant: devs never appear here).
@@ -133,8 +132,7 @@ function adminState() {
     logging: CFG.logging,
     loggingDbReady: dbUp(),
     // ...and what that flag does NOT tell you. loggingDbReady is `!!pool` — true the moment
-    // DATABASE_URL is set, whether or not the database answers. Failed writes are the only signal
-    // that the log is lying, and they were going to stdout alone.
+    // DATABASE_URL is set, answering or not. Failed writes are the only signal the log is lying.
     loggingWrites: dbWriteHealth(),
     telemetryShip: shipHealth(),
 
@@ -143,10 +141,12 @@ function adminState() {
     imageTemplateKeySet: !!CFG.imageTemplateKey, imageTemplateKeyMasked: mask(CFG.imageTemplateKey),
     // Each account carries its harvested headroom AND the age of that reading, so any consumer
     // (admin UI, statusline) can render "hot/cool" together with "as of when" — never a stale
-    // number presented as fresh. `stale:true` = no reading in 6h; show it as unknown, not cool.
+    // number presented as fresh. `stale:true` = no reading in 6h: unknown, not cool.
     claudecodeAccountPool: (CFG.claudecodeAccountPool || []).map((a) => {
-      const h = acctHealth(a.org);
-      return { name: a.name, org: a.org, email: a.email || "", tokenMasked: mask(a.token),
+      // `a.org` is "" at creation and never written again — the id is LEARNED into ORG_OF_ACCOUNT,
+      // so a lookup under a.org read util 0 / stale:true beside a real reading (see accounts.js).
+      const org = ORG_OF_ACCOUNT.get(a.name) || a.org || null, h = acctHealth(org);
+      return { name: a.name, org, email: a.email || "", tokenMasked: mask(a.token),
                util: h.util, hot: h.hot, ts: h.ts, stale: h.stale };
     }),
     // No sticky account exists any more: selection is pinned per project (accountFor).
@@ -472,8 +472,8 @@ async function registryRoutes(req, res, sub, ip) {
     if (sub === path && req.method === "GET")
       return guard(async () => {
         const list = await REG.listConsumers(kind);
-        // Staleness belongs to the SOURCE: an empty mirror answered a bare `{machines: []}` —
-        // "nothing is registered", not "I cannot see". See listConsumers().
+        // Staleness belongs to the SOURCE: an empty mirror answered `{machines: []}` — "nothing is
+        // registered", not "I cannot see". See listConsumers().
         const stale = !DB.dbUp() || list.some((x) => x.stale);
         return sendJson(res, 200, { [path]: list, ...(stale ? { stale: true, warning: "registry DB unreachable — this is the /data/config.json mirror, possibly out of date" } : {}) });
       });
