@@ -60,14 +60,9 @@ console.log("every sidebar link resolves:");
 for (const link of [...md("_sidebar.md").matchAll(/\(([^)]+\.md)\)/g)].map((m) => m[1]))
   check(`sidebar → ${link}`, pages.includes(link));
 
-console.log("nothing secret is published:");
-// The docs describe the panel and the key format; they must never carry a live value.
-const all = pages.map(md).join("\n") + readFileSync(join(ROOT, "docs/index.html"), "utf8");
-check("no admin password", !/\bddash\b/.test(all));
-check("no Max setup token", !/sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,}/.test(all)); // real token body, not the bare prefix
-check("no complete API key", !/sk-llm-[0-9a-f]{8}-[\w-]{20,}/.test(all));
-check("no DATABASE_URL", !/postgres(ql)?:\/\/[^\s`]+:[^\s`]+@/.test(all));
-
+// The secret scan and every claim check moved to test/docs-claims.test.mjs, which needs no jsdom
+// and therefore runs in `npm test`. They were the checks that mattered on every push and, sitting
+// here behind a dev dependency, ran only when someone remembered. What is left needs a browser.
 console.log("it renders (docsify fetches its markdown at runtime):");
 const pageErrors = [];
 const virtualConsole = new VirtualConsole();
@@ -88,63 +83,6 @@ check("docsify loaded from the vendored bundle", await until(() => window.Docsif
 const rendered = await until(() => /One OpenAI-compatible endpoint/.test(text()));
 check("the home page renders its markdown", rendered, rendered ? "" : `body was: ${text().trim().slice(0, 140)}`);
 check("the sidebar rendered", await until(() => /Routing and providers/.test(window.document.body.textContent)));
-
-// The docs are PUBLIC and unauthenticated, so a wrong posture claim here is read by people who
-// cannot check it against the code. This page told readers for weeks that `auth.mode` was
-// `optional`, that "the network is the only boundary" and to treat the URL as a secret — while
-// prod had been `required` the whole time. Read literally it said: do not bother sending a key.
-// This suite already refuses to publish a secret; it now also refuses to publish that.
-{
-  const claims = readFileSync(join(ROOT, "docs", "README.md"), "utf8") +
-                 readFileSync(join(ROOT, "docs", "identity.md"), "utf8") +
-                 readFileSync(join(ROOT, "docs", "quickstart.md"), "utf8");
-  const stale = [
-    [/auth\.mode` is still `optional`|Currently `optional`/, "says auth.mode is optional — prod is `required`"],
-    [/the network is the only boundary/, "says the network is the only boundary — a key is required"],
-    [/while auth\.mode is optional/, "offers a placeholder key as an alternative to a real one"],
-  ];
-  for (const [re, why] of stale) {
-    if (re.test(claims)) check(`the published auth posture is current (${why})`, false, why);
-  }
-  check("the published auth posture is current", !stale.some(([re]) => re.test(claims)));
-  // Every image id the router accepts must be listed, and none it refuses. The id that is MISSING
-  // from the docs is the one a caller sends to a text endpoint and gets refused on, or worse, the
-  // one that reaches crazyrouter per-token for a 404 — the reason IMAGE_MODEL_IDS exists.
-  {
-    const routing = readFileSync(join(ROOT, "docs", "routing.md"), "utf8");
-    const ids = req_(join(ROOT, "src", "config.js")).IMAGE_MODEL_IDS;
-    const missing = ids.filter((id) => !new RegExp("`" + id + "`").test(routing));
-    check(`every image model id is documented (${ids.length} ids)`, missing.length === 0, `missing: ${missing.join(", ")}`);
-  }
-
-  // The docs' page table drifted a full rename behind the panel — it still said Consumers/Providers
-  // with tabs "Consumers · Access" after the 2026-07-27 rename to Callers/Upstreams, and never
-  // learned about the Image templates tab. panel-nav.test.mjs keeps the five files INSIDE the panel
-  // agreeing; nothing kept the published description honest, and a reader following it looks for a
-  // nav entry that is not there.
-  {
-    const adminDoc = readFileSync(join(ROOT, "docs", "admin.md"), "utf8");
-    const shell = readFileSync(join(ROOT, "panel", "components", "panel", "shell.tsx"), "utf8");
-    const navNames = [...shell.matchAll(/\{\s*name:\s*"([^"]+)",\s*slug:/g)].map((m) => m[1]);
-    const missing = navNames.filter((n) => !adminDoc.includes(`| ${n} |`));
-    check(`the published page table names the panel's pages (${navNames.length})`, missing.length === 0,
-      `missing rows for: ${missing.join(", ")}`);
-  }
-
-  // A documented URL on THIS host that this host does not serve sends a reader to a 400.
-  {
-    const all = readdirSync(join(ROOT, "docs")).filter((f) => f.endsWith(".md"))
-      .map((f) => readFileSync(join(ROOT, "docs", f), "utf8")).join("\n");
-    check("no doc points a reader at llm.hostbun.cc/dashboard/* — that is crazyrouter's API, not ours",
-      !/llm\.hostbun\.cc\/dashboard\//.test(all));
-  }
-
-  // And the quickstart's first example must actually work: no key, no service.
-  const qs = readFileSync(join(ROOT, "docs", "quickstart.md"), "utf8");
-  const firstCurl = (qs.match(/```bash[\s\S]*?```/) || [""])[0];
-  check("the first quickstart example sends a key", /Authorization: Bearer sk-llm-|x-api-key/i.test(firstCurl),
-    firstCurl.slice(0, 200));
-}
 
 dom.window.close();
 server.kill();
