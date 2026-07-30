@@ -442,7 +442,14 @@ async function proxy(req, res, base, opts = {}) {
       // none of it (cap 0) — the row is worth having, the payload is not.
       const isImage = provider === "images";
       const chunks = []; let size = 0;
-      const cap = isImage ? 0 : (base_rec.full ? Infinity : CONTENT_CAP + 8192); // local-dev keeps the full streamed reply
+      // CONTENT_CAP is 0 meaning UNCAPPED everywhere else in this codebase (see clip() in db.js), and
+      // `CONTENT_CAP + 8192` turned that into an 8 KB ceiling — the opposite. `usage` trails the body
+      // in both shapes we parse (the JSON envelope's last key, the stream's final chunk), so any
+      // reply over 8 KB lost its token counts entirely. Measured: 229 templated image renders in 7
+      // days, every one a PAID per-token crazyrouter call, recorded with no tokens at all and
+      // therefore $0 in every rollup. Treat 0 as what it means, and keep the +8192 headroom only
+      // when a real cap is set, so a capped reply still carries the usage that follows it.
+      const cap = isImage ? 0 : (base_rec.full || !CONTENT_CAP ? Infinity : CONTENT_CAP + 8192);
       r.on("data", (d) => { if (size < cap) { chunks.push(Buffer.from(d)); size += d.length; } });
       const done = () => {
         const ex = isImage ? { usage: null, content: null, stopReason: null }

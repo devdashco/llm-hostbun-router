@@ -469,5 +469,43 @@ console.log("proxy() early returns still record:");
   srv.close();
 }
 
+// ── a large reply must still carry its token counts ─────────────────────────────────────────────
+// The response buffer was capped at `CONTENT_CAP + 8192`, and CONTENT_CAP is 0 meaning UNCAPPED
+// everywhere else in this codebase — so that expression produced an 8 KB ceiling, the opposite.
+// `usage` trails the body in both shapes we parse (last key of the JSON envelope, final chunk of a
+// stream), so any reply over 8 KB lost its token counts. Measured: 229 templated image renders in 7
+// days, every one a PAID per-token crazyrouter call, recorded with no tokens and therefore $0 in
+// every spend rollup. An image reply is exactly the shape that trips it: megabytes of base64 with
+// the usage at the end.
+{
+  // Written in CHUNKS, deliberately. The cap is checked as `if (size < cap)` BEFORE appending, so a
+  // body that arrives as one write is kept whole however small the cap is — a single-chunk fixture
+  // passes against the bug and proves nothing. (Mine did, first go.) Real upstreams deliver 40 KB
+  // across many TCP segments, which is why prod lost the tail and the test did not.
+  const bigSrv = http.createServer(async (rq, rs) => {
+    rs.writeHead(200, { "content-type": "application/json" });
+    const body = JSON.stringify({ data: [{ b64_json: "A".repeat(40000) }], usage: { prompt_tokens: 11, completion_tokens: 2, total_tokens: 13 } });
+    for (let i = 0; i < body.length; i += 4096) {
+      rs.write(body.slice(i, i + 4096));
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    rs.end();
+  });
+  await new Promise((r) => bigSrv.listen(0, "127.0.0.1", r));
+  rows.length = 0;
+  const res = fakeRes();
+  await proxy(fakeReq("/v1/images/generations"), res, `http://127.0.0.1:${bigSrv.address().port}`, {
+    bodyBuf: Buffer.from(JSON.stringify({ model: "nano-banana", prompt: "x" })),
+    provider: "crazyrouter", model: "nano-banana", project: "mantal", targetPath: "/v1/chat/completions",
+  });
+  await new Promise((r) => { res.on("end", r); res.on("finish", r); setTimeout(r, 400); });
+  if (rows.length !== 1) bad("a large paid reply records one row", `got ${rows.length} rows`);
+  else {
+    ok("a large paid reply records one row");
+    check("...carrying the tokens that trail 40 KB of base64", rows[0].usage && rows[0].usage.total_tokens, 13);
+  }
+  bigSrv.close();
+}
+
 upstream.close();
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
