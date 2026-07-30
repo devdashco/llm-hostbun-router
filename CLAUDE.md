@@ -568,8 +568,9 @@ Set with `POST /api/consumers/policy {name, allowUa:[…]}` — merge-safe, one 
   (verified 2026-07-26) — the migration is done.**
 - **`requireRegisteredConsumer`** — a spelling check, not a lock. Only applies to calls with no key;
   refuses an unknown consumer with `403 unknown_consumer` so a typo can't become a new consumer with
-  its own bill. Redundant once auth is `required`. **Ships off, and is off in prod (verified
-  2026-07-26)** — correctly, since auth is `required` and this only ever applied to keyless calls.
+  its own bill. Redundant once auth is `required`. Ships off; **it is ON in prod as of 2026-07-30** —
+  this said "off, verified 2026-07-26", so someone turned it on since. Harmless either way while auth
+  is `required`: it only ever reached keyless calls, and there are none.
 
 Both are flipped through their own logged endpoints (`POST /admin/api/auth`,
 `POST /admin/api/consumers/enforce`), never through `POST config`, because turning either one on with

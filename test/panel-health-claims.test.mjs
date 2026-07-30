@@ -150,4 +150,16 @@ for (const [file, srcTxt] of [["health.tsx", src], ["accounts.tsx", accountsSrc]
   else ok("the panel shows alerts that never reached HyperDX");
 }
 
+// When `accountStrategy: "soonest-weekly-reset"` is on, an APP consumer is served by whichever
+// usable account resets soonest — so the account a project is PINNED to is not the account its
+// traffic hits. Both the strategy and the current pick were in /api/state and rendered nowhere, so
+// the Accounts page showed a pin table that was not what was happening. Same class as the
+// disabled/dead flags and the ship counter: state the API returns and no screen shows.
+{
+  const acct = readFileSync(join(ROOT, "panel", "components", "panel", "pages", "accounts.tsx"), "utf8");
+  if (!/accountStrategy/.test(acct)) fail("the panel says when auto-account is on", "state.accountStrategy is returned and never read — the pin table reads as the whole truth");
+  else if (!/autoAccount/.test(acct)) fail("...and which account it currently picks", "the strategy is shown without the account it resolved to");
+  else ok("the panel says when app traffic is auto-routed, and to where");
+}
+
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
