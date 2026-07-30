@@ -84,5 +84,21 @@ console.log("\nnothing false is published:");
 check("no doc points a reader at llm.hostbun.cc/dashboard/* — that is crazyrouter's API, not ours",
   !/llm\.hostbun\.cc\/dashboard\//.test(all));
 
+console.log("\nthe operating manual matches the gate:");
+// CLAUDE.md is what the next person (or agent) reads before touching anything, and it said "Nine
+// suites, 302 checks" while `npm test` had grown to twenty. A manual that is wrong about the gate is
+// how a suite gets added and then quietly dropped: nobody notices the list shrink back.
+{
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const suites = [...pkg.scripts.test.matchAll(/node (\S+\.(?:mjs|js))/g)].map((m) => m[1]);
+  const manual = readFileSync(join(ROOT, "CLAUDE.md"), "utf8");
+  const undocumented = suites.filter((f) => !manual.includes(f.replace(/^test\//, "")));
+  check(`every suite in the gate is described (${suites.length})`, undocumented.length === 0,
+    `not mentioned in CLAUDE.md: ${undocumented.join(", ")}`);
+  const claimed = (manual.match(/## Tests — `npm test` \((\d+) suites/) || [])[1];
+  check("the manual's suite COUNT is current", Number(claimed) === suites.length,
+    `manual says ${claimed}, package.json runs ${suites.length}`);
+}
+
 console.log(`\n${fail ? "FAIL" : "PASS"} — ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

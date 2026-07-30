@@ -87,9 +87,12 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (302 checks, ~30s)
+## Tests — `npm test` (20 suites, 512 checks, ~60s)
 
-Nine suites, no network beyond loopback, no database, zero deps. Run before every push.
+No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
+the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
+said "nine suites, 302 checks" for weeks while the gate had grown to twenty — and a manual that is
+wrong about the gate is how a suite gets added and then quietly dropped.
 
 - `test/imports.test.mjs` — static check that every cross-module call is actually bound in the file
   making it. The `src/` split left twelve module-level identifiers unimported; `require` doesn't
@@ -220,6 +223,44 @@ so this is recorded as a fact with a date rather than automated.
   copies of `upstream 504 POST /v1/images/generations` into HyperDX against ~529 rows of every other
   signal combined. `SHIP_WINDOW_MS` is env-tunable **only so the count path is testable** without a
   60s sleep — production never sets it.
+
+- `test/waste.test.mjs` — the waste watcher's thresholds, driven with the real shapes they were
+  calibrated against. The NEGATIVES matter most: `pmac` (8,323 calls/day at 0% cache) and `wmac` are
+  wired in as must-not-fire, because a watcher that cries wolf gets switched off.
+
+- `test/db-writehealth.test.mjs` — a failed call-log write must be COUNTED, not just logged. `dbUp()`
+  is `!!pool` and pg does not connect until the first query, so `loggingDbReady: true` only ever meant
+  "a config string was present". With the DB unreachable the panel showed `dbReady:true` and an empty
+  log — indistinguishable from a quiet hour while every row was dropped into a stdout warning.
+
+- `test/health-verdict.test.mjs` — `/api/health` must not call a provider up when it knows it is not.
+  `claudecode` is deliberately not probed (an unauthenticated request to api.anthropic.com reads as
+  down), so its verdict is "do we hold a usable login" — which was `pool.length > 0`, and the pool
+  retains accounts the router itself auto-disabled after a 403.
+
+- `test/panel-health-claims.test.mjs` — the Health tab may not report all-clear on a check it did not
+  run. `api("stats").catch(() => null)` makes a failed fetch look like a quiet hour, and the banner
+  must name what it actually checked.
+
+- `test/model-fold.test.mjs` — `foldServedByModel`: when one requested id was served by several
+  models, the tier, the premium flag and the list cost must come from a token-weighted fold, not from
+  an arbitrary member of an unordered `string_agg`.
+
+- `test/server-rows.test.mjs` — boots server.js **in-process** with `recordCall` stubbed, so what the
+  real handler writes to the call log is observable at all. The other suites boot it in a child
+  process, where a row cannot be seen. Also covers the OTel ingest end to end.
+
+- `test/gateway-route.test.mjs` — sources `cccc/shell/gateway-route.sh` in bash with a throwaway HOME
+  and asserts the environment a shell actually ends up with, per branch: the direct branch must ship
+  OTel it can authenticate, and a box with no key must ship nothing.
+
+- `test/module-size.test.mjs` — the 500-line module budget, as a ratchet. `server.js` and `admin.js`
+  are already over and carry ceilings they may only shrink; a file that shrinks without lowering its
+  ceiling fails too, with the number to write.
+
+- `test/docs-claims.test.mjs` — what the PUBLIC docs claim, checked against the code, plus the scan
+  that stops a live password/token/key/DSN being published. Split out of `docs.test.mjs` so it runs
+  in the gate: that suite needs jsdom, a dev dependency, so it ran only when someone remembered.
 
 Two more are **not** in `npm test` because they need `panel/out` or the docs build:
 
