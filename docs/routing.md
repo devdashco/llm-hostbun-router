@@ -6,7 +6,7 @@ The model id picks the provider, unless your project has a rule.
 |---|---|
 | `local`, `qwen`, `qwen3.5-9b` | `local` |
 | anything starting `claude` | `claudecode` |
-| `imagegen`, `sd-turbo` | image service, and **only** on `/v1/images/*` |
+| `imagegen`, `sana-sprint`, `sana`, `sdxl-lightning`, `sd-turbo` | image service, and **only** on `/v1/images/*` |
 | everything else | `crazyrouter` |
 
 Posting an image model to a text endpoint is refused, not forwarded. It used to fall through the whole

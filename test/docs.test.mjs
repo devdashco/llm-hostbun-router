@@ -12,6 +12,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, connect } from "node:net";
 import { JSDOM, VirtualConsole } from "jsdom";
+import { createRequire } from "node:module";
+const req_ = createRequire(import.meta.url);
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = await new Promise((r) => { const s = createServer(); s.listen(0, () => { const { port } = s.address(); s.close(() => r(port)); }); });
@@ -105,6 +107,16 @@ check("the sidebar rendered", await until(() => /Routing and providers/.test(win
     if (re.test(claims)) check(`the published auth posture is current (${why})`, false, why);
   }
   check("the published auth posture is current", !stale.some(([re]) => re.test(claims)));
+  // Every image id the router accepts must be listed, and none it refuses. The id that is MISSING
+  // from the docs is the one a caller sends to a text endpoint and gets refused on, or worse, the
+  // one that reaches crazyrouter per-token for a 404 — the reason IMAGE_MODEL_IDS exists.
+  {
+    const routing = readFileSync(join(ROOT, "docs", "routing.md"), "utf8");
+    const ids = req_(join(ROOT, "src", "config.js")).IMAGE_MODEL_IDS;
+    const missing = ids.filter((id) => !new RegExp("`" + id + "`").test(routing));
+    check(`every image model id is documented (${ids.length} ids)`, missing.length === 0, `missing: ${missing.join(", ")}`);
+  }
+
   // And the quickstart's first example must actually work: no key, no service.
   const qs = readFileSync(join(ROOT, "docs", "quickstart.md"), "utf8");
   const firstCurl = (qs.match(/```bash[\s\S]*?```/) || [""])[0];
