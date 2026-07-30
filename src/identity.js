@@ -86,6 +86,30 @@ function rawApiKey(req) {
   return null;
 }
 
+// Why the router saw no key of ours, for the LOG and the 401 body only — never for a routing or
+// auth decision. "no key" is what every refusal said even when the caller sent a perfectly good
+// credential for somewhere else, and that one word cost a day: pbox's Claude Code was shipping OTel
+// to this router carrying its HyperDX token (settings.json sets the GENERIC
+// OTEL_EXPORTER_OTLP_HEADERS, which overrode the router key), and the log said `no key` — so the
+// box read as "telemetry not configured" when the truth was "configured for the wrong backend".
+// Distinguishing the two is the difference between looking at the sender and looking at the router.
+function credentialHint(req) {
+  const a = String(req.headers["authorization"] || "");
+  const x = String(req.headers["x-api-key"] || "");
+  if (!a && !x) return "no key";
+  const which = a ? "authorization" : "x-api-key";
+  const val = a || x;
+  if (a && !/^bearer\s+/i.test(a)) return `${which} header is not a Bearer credential`;
+  const tok = a ? a.replace(/^bearer\s+/i, "").trim() : x.trim();
+  if (!tok.startsWith(KEY_PREFIX)) {
+    // Never echo the credential. The prefix up to the first separator is enough to recognise whose
+    // it is (`sk-ant-…`, a bare uuid) without putting a live secret in a log line.
+    const shape = tok.slice(0, 8).replace(/[^A-Za-z0-9-]/g, "") || "(empty)";
+    return `${which} carries a credential that is not one of ours (starts "${shape}…") — this router wants sk-llm-…`;
+  }
+  return "no key";
+}
+
 // null           → no key presented
 // {ok:false,…}   → a key was presented and is bad (unknown id, wrong secret, revoked, orphaned)
 // {ok:true,…}    → authenticated; `consumer` is now asserted by us, not by the caller
@@ -145,5 +169,5 @@ function uaAllowed(entry, ua) {
 
 module.exports = {
   extractProject, normalizeConsumerPath, parseConsumer, consumerEntry,
-  sha256, mintKey, rawApiKey, authenticate, startKeyUseFlush, uaAllowed,
+  sha256, mintKey, rawApiKey, authenticate, credentialHint, startKeyUseFlush, uaAllowed,
 };

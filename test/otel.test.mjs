@@ -146,6 +146,16 @@ try {
   // likely misconfiguration and must be a 400 that NAMES the fix, never a 5xx and never a hang:
   // ingest() is called un-awaited, so an uncaught throw there is an unhandled rejection with no
   // response ever sent. `< 500` could not tell any of that apart from the 401 it was really seeing.
+  // A credential meant for somewhere ELSE must not read as "no key". This is the exact shape that
+  // hid the live misconfiguration: pbox shipped OTel here carrying its HyperDX token, and the log
+  // said `no key`, so the box looked like telemetry was simply off rather than pointed at the wrong
+  // backend with the wrong credential.
+  const foreign = await post(apiReq, { authorization: "Bearer 3b1c3830-dead-beef-0000-000000000000" });
+  check("a foreign credential is still 401", foreign.status === 401, String(foreign.status));
+  check("...and the refusal says it is not OURS, not that none was sent",
+    /not one of ours/.test(foreign.text) && !/^no key/.test(JSON.parse(foreign.text).error.message), true);
+  check("...without echoing the credential", !/3b1c3830-dead/.test(foreign.text), true);
+
   const proto = await post("\x00\x01binary", { authorization: `Bearer ${GOOD_KEY}` });
   check("a non-JSON body from an AUTHENTICATED caller is a 400", proto.status === 400, String(proto.status));
   check("...naming the protocol to change, not a bare failure", /http\/json|protocol/i.test(proto.text), true);

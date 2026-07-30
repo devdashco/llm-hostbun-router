@@ -32,7 +32,7 @@ const zlib = require("node:zlib");
 
 const { CFG } = require("./config");
 const { recordCall } = require("./db");
-const { authenticate, parseConsumer } = require("./identity");
+const { authenticate, parseConsumer, credentialHint } = require("./identity");
 
 // OTLP/JSON encodes every attribute as an `AnyValue` union. int64 arrives as a STRING (JSON has no
 // 64-bit integer) — every numeric field read below goes through num() for that reason, and Number()
@@ -129,9 +129,10 @@ function ingest(req, res, { bodyBuf, ip, path }) {
     // Name the sender. This is an ingest from OUTSIDE, so a 401 is either a box that needs fixing
     // or someone probing — and `ip=` alone cannot tell them apart on a box running many agents.
     const ua = String(req.headers["user-agent"] || "-").slice(0, 60);
-    console.error(`[otel] 401 ${(auth && auth.why) || "no key"} ip=${ip} path=${path} ua=${ua}`);
+    const why = (auth && auth.why) || credentialHint(req);
+    console.error(`[otel] 401 ${why} ip=${ip} path=${path} ua=${ua}`);
     return done(401, { error: { type: "invalid_api_key", code: "invalid_api_key",
-      message: "OTEL ingest needs this box's router key: OTEL_EXPORTER_OTLP_HEADERS=\"Authorization=Bearer sk-llm-…\"." } });
+      message: `${why}. OTEL ingest needs this box's router key: set OTEL_EXPORTER_OTLP_LOGS_HEADERS="Authorization=Bearer sk-llm-…" — the per-signal form, because a generic OTEL_EXPORTER_OTLP_HEADERS meant for another backend overrides it.` } });
   }
   // With auth off there is no key to read identity from, so fall back to what the exporter asserts
   // (`OTEL_RESOURCE_ATTRIBUTES=consumer=…`, read below) via the header cccc already sends.
