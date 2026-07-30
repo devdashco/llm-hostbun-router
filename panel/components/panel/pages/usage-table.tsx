@@ -30,6 +30,12 @@ export function foldConsumers(rows: any[]) {
   }
   return [...map.values()].map((g) => ({
     ...g,
+    // BILLABLE: total minus cache reads — what actually drew down the Max window or the crazyrouter
+    // bill. A cached read costs about a tenth, so on a well-cached consumer the raw total overstates
+    // spend several-fold. Measured on the pool the same day: 4.6x, 9.5x and 27x on three accounts.
+    // The raw number stays, one column over, because it is the right answer to a different question
+    // (how much did this consumer PUSH through) — and `cache↓` beside it explains the gap.
+    billable: Math.max(0, (g.tok || 0) - (g.cr || 0)),
     avg_ms: g.n ? g.msSum / g.n : null,
     providers: [...g.prov].join(","),
     models: [...g.models.entries()].sort((a, b) => b[1] - a[1]),
@@ -72,7 +78,7 @@ export function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any
     return dir * (x > y ? 1 : x < y ? -1 : 0);
   });
   const cols: [string | null, string][] = [
-    ["project", "consumer"], ["n", "calls"], ["tok", "tokens"], ["io", "in → out"], ["cr", "cache↓"], ["usd", "est $"], ["avg_ms", "avg"], ["errors", "err%"], [null, "models"], [null, "providers"], ["last", "last seen"], [null, "share"],
+    ["project", "consumer"], ["n", "calls"], ["tok", "tokens"], ["billable", "billable"], ["io", "in → out"], ["cr", "cache↓"], ["usd", "est $"], ["avg_ms", "avg"], ["errors", "err%"], [null, "models"], [null, "providers"], ["last", "last seen"], [null, "share"],
   ];
   const onSort = (key: string | null) => {
     if (!key) return;
@@ -84,6 +90,9 @@ export function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any
       <>
         <TableCell className="font-mono">{r.n}</TableCell>
         <TableCell className="font-mono">{(r.tok || 0).toLocaleString()}</TableCell>
+        <TableCell className="font-mono" title="total minus cache reads — what actually drew down the window">
+          {(r.billable || 0).toLocaleString()}
+        </TableCell>
         <TableCell className="font-mono text-ui text-muted-foreground">
           {nfmt(r.ptok)} → {nfmt(r.ctok)}
         </TableCell>

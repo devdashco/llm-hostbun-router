@@ -189,4 +189,17 @@ for (const [file, srcTxt] of [["health.tsx", src], ["accounts.tsx", accountsSrc]
   else ok("the per-account token column is billable and labelled");
 }
 
+// The per-CONSUMER table had the same problem the per-account one did: a "tokens" column showing
+// raw totals, which overstate spend on a well-cached caller. Measured on the live pool the same
+// day: 4.6x, 9.5x and 27x across three accounts. Raw stays — it answers "how much did this push
+// through" — but the number that drew down the window has to be visible beside it.
+{
+  const t = readFileSync(join(ROOT, "panel", "components", "panel", "pages", "usage-table.tsx"), "utf8");
+  if (!/billable: Math\.max\(0, \(g\.tok \|\| 0\) - \(g\.cr \|\| 0\)\)/.test(t))
+    fail("the consumer table computes billable tokens", "no total-minus-cache_read fold in foldConsumers");
+  else if (!/\["billable", "billable"\]/.test(t))
+    fail("...and shows it as its own column", "computed but never rendered — the exact shape this suite keeps catching");
+  else ok("the consumer table shows billable tokens beside the raw total");
+}
+
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
