@@ -8,7 +8,7 @@
 // other route module: a route may move, the lock that guards it may not.
 const { CFG } = require("./config");
 const { dbRows, ACCT_DEAD } = require("./db");
-const { sendJson, readBody, readJson, mask } = require("./http");
+const { sendJson, readBody, readJson, mask, upstreamReason } = require("./http");
 const { resolveRoute, isGated, accountFor } = require("./routing");
 const { recordCall } = require("./db");
 const TR = require("../translate");
@@ -73,7 +73,7 @@ async function adminTest(model, prompt, maxTokens) {
   const done = (r) => {
     recordCall({ ts: t0, ip: null, ua: "panel", method: "POST", path: "/api/test",
       reqModel: model, sentModel: sendModel, provider: route.provider, keyLabel: `admin:${route.provider}`,
-      status: r.status || 0, ms: Date.now() - t0, error: r.ok ? null : (r.error || `upstream ${r.status}`),
+      status: r.status || 0, ms: Date.now() - t0, error: r.ok ? null : (r.error || `upstream ${r.status}${r.why ? `: ${r.why}` : ""}`),
       project: "admin:test-call", usage: r.usage || {} });
     return r;
   };
@@ -97,7 +97,10 @@ async function adminTest(model, prompt, maxTokens) {
     const m = oa && oa.choices && oa.choices[0] && oa.choices[0].message;
     const content = (m && (m.content || m.reasoning_content)) || null;
     return done({ ok: r.ok, status: r.status, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, content,
-      usage: (oa && oa.usage) || {}, raw: content == null ? text.slice(0, 2000) : undefined });
+      // Same reasoning as the proxy paths: the body is right here, and "which model" or "out of
+      // credit" is the whole content of a failed test call.
+      why: r.ok ? "" : upstreamReason(text), usage: (oa && oa.usage) || {},
+      raw: content == null ? text.slice(0, 2000) : undefined });
   } catch (e) { return done({ ok: false, status: 0, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, error: e.message }); }
 }
 

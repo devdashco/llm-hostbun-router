@@ -22,7 +22,7 @@ const path = require("node:path");
 
 const { CFG, CONFIG_FILE, persistConfig, IMAGE_MODEL_IDS } = require("./config");
 const { sanitizeImageTemplate, IMAGE_TEMPLATE_MODELS } = require("./config-schema");
-const { readJson, sendJson, proxy } = require("./http");
+const { readJson, sendJson, proxy, upstreamReason } = require("./http");
 const { recordCall } = require("./db");
 const { authenticate, extractProject, parseConsumer, uaAllowed, credentialHint } = require("./identity");
 
@@ -395,7 +395,11 @@ async function renderTemplate(req, res, ip) {
     });
     const j = await r.json().catch(() => null);
     if (!r.ok) {
-      record(502, { error: `upstream ${r.status}` });
+      // The body is parsed right above; recording only the status throws away the one part an
+      // operator needs — "this token has no access to model X" and "you are out of credit" are both
+      // a 4xx from crazyrouter and want completely different responses.
+      const why = j ? upstreamReason(JSON.stringify(j)) : "";
+      record(502, { error: `upstream ${r.status}${why ? `: ${why}` : ""}` });
       return sendJson(res, 502, { error: `upstream ${r.status}`, upstream: j });
     }
     const url = j && j.data && j.data[0] && (j.data[0].url || (j.data[0].b64_json ? `data:image/png;base64,${j.data[0].b64_json}` : ""));

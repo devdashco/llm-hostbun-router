@@ -208,6 +208,22 @@ console.log("proxy() early returns still record:");
       check("...naming where the spend came from", rows[0].project, "panel:image-template-render");
       check("...carrying the tokens upstream reported", rows[0].usage.total_tokens, 15);
     }
+    // An upstream ERROR on the same route: the parsed body is in hand, so the row must say why.
+    // "this token has no access to model X" and "out of credit" are both a 4xx and want opposite
+    // responses from whoever reads the log.
+    {
+      const errSrv = http.createServer((rq, rs) => {
+        rs.writeHead(403, { "content-type": "application/json" });
+        rs.end(JSON.stringify({ error: { type: "permission_error", message: "This token does not have access to model gemini-2.5-flash-image" } }));
+      });
+      await new Promise((r) => errSrv.listen(0, "127.0.0.1", r));
+      const res3 = await render(`http://127.0.0.1:${errSrv.address().port}`);
+      check("an upstream error on the paid render answers 502", res3.status, 502);
+      check("...and the row names the upstream's reason", rows.length === 1 && rows[0].error,
+        "upstream 403: permission_error: This token does not have access to model gemini-2.5-flash-image");
+      errSrv.close();
+    }
+
     const noneRes = await render(`${CR}/noimage`);
     check("a 200 with no image is reported as a 502 to the panel", noneRes.status, 502);
     if (rows.length !== 1) bad("...and still records the call that billed", `got ${rows.length} rows`);
@@ -371,6 +387,29 @@ console.log("proxy() early returns still record:");
     check("...naming where the spend came from", rows[0].project, "admin:test-call");
     check("...carrying the tokens upstream reported", rows[0].usage.prompt_tokens, 5);
   }
+  // Its error path must name the reason too — a failed test call whose row says only "upstream 402"
+  // tells an operator nothing they could not already see on screen.
+  {
+    const errSrv = http.createServer((rq, rs) => {
+      rs.writeHead(402, { "content-type": "application/json" });
+      rs.end(JSON.stringify({ error: { type: "insufficient_credit", message: "balance exhausted" } }));
+    });
+    await new Promise((r) => errSrv.listen(0, "127.0.0.1", r));
+    C.bases = { ...C.bases, crazyrouter: `http://127.0.0.1:${errSrv.address().port}` };
+    rows.length = 0;
+    const resE = fakeRes();
+    const rqE = fakeReq("/api/test");
+    const stE = new PassThrough(); stE.end(Buffer.from(JSON.stringify({ model: "gemini-2.5-flash", prompt: "hi" })));
+    Object.assign(rqE, { on: stE.on.bind(stE), once: stE.once.bind(stE),
+      removeListener: stE.removeListener.bind(stE), pipe: stE.pipe.bind(stE),
+      [Symbol.asyncIterator]: stE[Symbol.asyncIterator].bind(stE) });
+    await DX.testCall(rqE, resE);
+    check("a failed test call records the upstream's reason", rows.length === 1 && rows[0].error,
+      "upstream 402: insufficient_credit: balance exhausted");
+    errSrv.close();
+    C.bases = { ...C.bases, crazyrouter: UP };
+  }
+
   // And the claudecode dialect: /v1/messages, a pinned account's token, the oauth beta header, and
   // a TRANSLATED body. Posting /v1/chat/completions there with no auth is what made every Claude
   // test fail and report the upstream's complaint as the router's fault.
