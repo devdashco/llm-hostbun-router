@@ -41,29 +41,9 @@ check("markdown is served", await code("/docs/README.md") === 200);
 check("the sidebar is served (leading underscore)", await code("/docs/_sidebar.md") === 200);
 check("the vendored bundle is served", await code("/docs/vendor/docsify.js") === 200);
 check("an unknown page 404s", await code("/docs/nope.md") === 404);
-// fetch() normalizes ".." out of the path before it leaves the process, so a traversal test written
-// with fetch tests nothing at all. Speak HTTP directly.
-const rawGet = (path) => new Promise((resolve) => {
-  const sock = connect(PORT, "localhost", () => sock.write(`GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`));
-  let buf = "";
-  sock.on("data", (d) => { buf += d; });
-  sock.on("end", () => resolve(buf.split("\r\n")[0]));
-  sock.on("error", () => resolve("ERR"));
-});
-check("traversal is refused", /404/.test(await rawGet("/docs/../server.js")), await rawGet("/docs/../server.js"));
-check("encoded traversal is refused", /404/.test(await rawGet("/docs/..%2f..%2fetc/passwd")));
-// A NUL byte in a served path made fs.readFile THROW synchronously — it does not call back — inside
-// an async handler with no try/catch, so the throw became an unhandled rejection the process guard
-// only logged: no response written, socket never closed, connection held open forever with zero
-// bytes returned. Cheap to repeat, so it is a connection-exhaustion primitive. The traversal guard
-// lets it through because a NUL does not break a string prefix check. Raw socket, because fetch()
-// rejects the URL client-side and would assert nothing.
-{
-  const r = await rawGet("/panel-asset%00.js");
-  check("a NUL byte in a path is ANSWERED, not left hanging", /HTTP\/1\.1 \d{3}/.test(r), r.slice(0, 80));
-  check("...and the server still serves after it", await code("/docs/") === 200);
-}
-
+// The traversal probes, the NUL-byte guard and the /docs 301 moved to test/static-guards.test.mjs,
+// which needs no jsdom and therefore runs in `npm test`. They are about the SERVER, not the site,
+// and a regression guard on a connection-exhaustion bug has no business behind a dev dependency.
 const md = (p) => readFileSync(join(ROOT, "docs", p), "utf8");
 const pages = readdirSync(join(ROOT, "docs")).filter((f) => f.endsWith(".md"));
 

@@ -87,7 +87,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (22 suites, ~545 checks, ~60s)
+## Tests — `npm test` (23 suites, ~555 checks, ~70s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -263,6 +263,13 @@ so this is recorded as a fact with a date rather than automated.
 - `test/module-size.test.mjs` — the 500-line module budget, as a ratchet. `server.js` and `admin.js`
   are already over and carry ceilings they may only shrink; a file that shrinks without lowering its
   ceiling fails too, with the number to write.
+
+- `test/static-guards.test.mjs` — the guards on the only code that turns a URL into a file read.
+  Traversal in the forms that actually differ (literal, encoded, double-encoded, backslash, absolute,
+  panel-root escape), the NUL-byte guard, and the `/docs` 301. All over RAW SOCKETS: `fetch()`
+  normalises `..` out of a path and rejects a NUL outright, so either test written with fetch proves
+  the client is well behaved and nothing about the server. Split out of `docs.test.mjs` so it runs in
+  the gate — a regression guard on a connection-exhaustion bug has no business behind jsdom.
 
 - `test/registry-refresh.test.mjs` — a refresh that cannot READ must not WRITE. `refresh()` projects
   the Postgres registry into `CFG` and the `/data/config.json` mirror, and it read through `dbRows`,
