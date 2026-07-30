@@ -17,7 +17,8 @@ refs may still linger in sibling repos.
   | `config-schema.js` | the vocabularies and their validators — providers, image ids, limit windows/actions, auth modes. Depends on nothing but `path`; `config.js` **re-exports every name**, so callers and the import guard still resolve them there |
   | `identity.js` | consumer/job paths, API keys, `authenticate()` |
   | `routing.js` | pins, allowlists, usage limits, account pinning |
-  | `http.js` | `readBody`/`readJson`, `buildHeaders`, `proxy()`, JSON enforcement — **536 lines, over the 500 budget** |
+  | `http.js` | `readBody`/`readJson`, `buildHeaders`, `proxy()` — 400 lines. It was 536 and over the 500 budget until JSON enforcement moved to `jsonenforce.js`; that split is what dropped `HOP_RES`'s import and is why `imports.test.mjs` now checks module-scope consts too |
+  | `jsonenforce.js` | the `response_format: json_object` retry loop, lifted out of `http.js` |
   | `db.js` | Postgres call log + harvested account headroom |
   | `claudecode.js` | Anthropic model catalog, per-account live usage-limit refresh |
   | `admin.js` | the control-plane API behind the password cookie — **the dispatcher and the auth gate** |
