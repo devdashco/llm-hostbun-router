@@ -216,6 +216,46 @@ console.log("proxy() early returns still record:");
       check("...with the reason, not a silent success", /answered without an image/.test(rows[0].error || ""), true);
     }
   }
+  // ── refusals on the PAID image route ──────────────────────────────────────────────────────────
+  // /v1/images/generations with a template of ours is the one image path behind a key. A burst of
+  // 401s there is someone probing the paid door and a burst of 403s is a locked key used from the
+  // wrong client — and with no row, both read as "no image-template traffic", the same silence the
+  // image-error branch used to produce. The text paths have recorded their refusals all along
+  // (keyFail in server.js); this route did not.
+  {
+    const tpl = CFG.imageTemplates[slug];
+    const prevAuth = CFG.auth;
+    CFG.auth = { mode: "required" };
+    rows.length = 0;
+    const res = fakeRes();
+    await IT.generate(fakeReq("/v1/images/generations"), res,
+      { tpl, body: { template: slug, prompt: "a cat" }, ip: "203.0.113.9", docsUrl: "https://docs.invalid" });
+    check("an unauthenticated call to the paid image route is 401", res.status, 401);
+    if (rows.length !== 1) bad("...and is recorded, like the same refusal on a text path", `got ${rows.length} rows`);
+    else {
+      ok("...and is recorded, like the same refusal on a text path");
+      check("...as blocked, since nothing reached an upstream", rows[0].provider, "blocked");
+      check("...carrying the status a reader would filter on", rows[0].status, 401);
+      check("...and the ip that was probing", rows[0].ip, "203.0.113.9");
+    }
+
+    // An AUTHENTICATED caller asking for a model this router will not render a template with. It
+    // reaches no upstream and costs nothing, but it is a refusal an operator debugging a broken
+    // integration needs to see — it is the difference between "they never called" and "we said no".
+    rows.length = 0;
+    CFG.auth = { mode: "off" };                 // skip the key gate; this branch is about validation
+    const res2 = fakeRes();
+    await IT.generate(fakeReq("/v1/images/generations"), res2,
+      { tpl, body: { template: slug, model: "claude-opus-5", prompt: "a cat" }, ip: "203.0.113.9", docsUrl: "https://docs.invalid" });
+    check("a non-image model on the template route is 400", res2.status, 400);
+    if (rows.length !== 1) bad("...and is recorded too", `got ${rows.length} rows`);
+    else {
+      ok("...and is recorded too");
+      check("...naming the model that was refused", rows[0].reqModel, "claude-opus-5");
+      check("...with the reason", rows[0].error, "model_not_image_capable");
+    }
+    CFG.auth = prevAuth;
+  }
   cr.close();
 }
 

@@ -220,15 +220,31 @@ function chatBody(tpl, model, prompt) {
   return { model, messages: [{ role: "user", content }] };
 }
 
+// A refusal on this route is worth a row for the same reason the text paths record theirs: it is
+// the ONE image path behind a key, so a burst of 401s is someone probing the paid door and a burst
+// of 403s is a locked key being used from the wrong client. Without a row both read as "no
+// image-template traffic", which is the same silence the image-error branch used to produce.
+// `provider: "blocked"` is the value server.js already uses for a call that never reached upstream.
+function recordRefusal(req, ip, status, why, project, model) {
+  recordCall({
+    ts: Date.now(), ip: ip || null, ua: req.headers["user-agent"] || "", method: "POST",
+    path: "/v1/images/generations", reqModel: model || null, sentModel: null, provider: "blocked",
+    keyLabel: "—", status, ms: 0, error: why, project: project || null,
+  });
+}
+
 // This route spends money, so it authenticates like inference does — even though every other route
 // under /v1/images/* is anonymous (SD-Turbo is our own GPU and free). Returns the attributed project
 // on success, or null after having ALREADY answered 401.
-function authForTemplate(req, res, docsUrl) {
+function authForTemplate(req, res, docsUrl, ip) {
   const mode = (CFG.auth && CFG.auth.mode) || "optional";
   if (mode === "off") return extractProject(req, Buffer.alloc(0)) || "";
   const auth = authenticate(req);
   if (!auth || !auth.ok) {
     const why = auth ? auth.why : "no API key";
+    // The name the caller ASSERTED, not an identity — same as keyFail() in server.js. It is the
+    // only handle on who was probing, and it is exactly why the row must not be trusted as billing.
+    recordRefusal(req, ip, 401, why, parseConsumer(extractProject(req, Buffer.alloc(0))).consumer, null);
     sendJson(res, 401, { error: {
       type: "invalid_api_key", code: "invalid_api_key",
       message: `${why}. Templated image generation runs on a paid upstream, so it needs an API key: send it as \`Authorization: Bearer sk-llm-…\`. Untemplated /v1/images/generations still goes to our own GPU and stays open.`,
@@ -243,6 +259,7 @@ function authForTemplate(req, res, docsUrl) {
   if (!uaAllowed(auth.entry, req.headers["user-agent"])) {
     const ua = String(req.headers["user-agent"] || "(none)").slice(0, 80);
     console.error(`[err] 403 ua not allowed for ${auth.consumer} ua="${ua}" path=images`);
+    recordRefusal(req, ip, 403, "client_not_allowed_for_key", auth.consumer, null);
     sendJson(res, 403, { error: {
       type: "permission_error", code: "client_not_allowed_for_key",
       message: `this key belongs to \`${auth.consumer}\`, which only accepts calls from ${(auth.entry.allowUa || []).map((p) => `\`${p}…\``).join(" or ")} — yours says \`${ua}\`. Templated image generation is paid, so it must be billed to the caller that actually ran it.`,
@@ -256,7 +273,7 @@ function authForTemplate(req, res, docsUrl) {
 
 // POST /v1/images/generations, when `template` names one of ours.
 async function generate(req, res, { tpl, body, ip, docsUrl }) {
-  const project = authForTemplate(req, res, docsUrl);
+  const project = authForTemplate(req, res, docsUrl, ip);
   if (project === null) return;
 
   const allowed = CFG.imageTemplateModels || IMAGE_TEMPLATE_MODELS;
@@ -268,6 +285,7 @@ async function generate(req, res, { tpl, body, ip, docsUrl }) {
   // "model":"claude-opus-5"}` reaches crazyrouter as a chat request, bills per token, and answers an
   // images endpoint with a chat completion — the caller's parser sees `data: undefined` and blames us.
   if (!allowed.includes(model)) {
+    recordRefusal(req, ip, 400, "model_not_image_capable", project, model);
     return sendJson(res, 400, { error: {
       type: "invalid_request_error", code: "model_not_image_capable",
       message: `'${model}' is not one of the image models this router will render a template with`,
@@ -276,6 +294,7 @@ async function generate(req, res, { tpl, body, ip, docsUrl }) {
   }
   const prompt = String(body.prompt || "").trim();
   if (!prompt) {
+    recordRefusal(req, ip, 400, "prompt_required", project, model);
     return sendJson(res, 400, { error: {
       type: "invalid_request_error", code: "prompt_required",
       message: `template '${tpl.slug}' describes a style, not a scene — send \`prompt\` with what to draw`,
@@ -284,6 +303,7 @@ async function generate(req, res, { tpl, body, ip, docsUrl }) {
   if (tpl.reference && !readReference(tpl)) {
     // The metadata says there is a reference and the volume disagrees. Rendering anyway would quietly
     // drop the one thing a template is for and return a plausible off-style image.
+    recordRefusal(req, ip, 500, "reference_image_missing", project, model);
     return sendJson(res, 500, { error: {
       type: "server_error", code: "reference_image_missing",
       message: `template '${tpl.slug}' names reference image '${tpl.reference}', which is not on disk`,
