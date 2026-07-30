@@ -75,5 +75,27 @@ check("adminState reports loggingDbReady", st.loggingDbReady, true);
 if (st.loggingWrites && st.loggingWrites.failures === h.failures) ok("...alongside loggingWrites, which is what makes that flag readable");
 else bad("adminState carries loggingWrites", `got ${JSON.stringify(st.loggingWrites)}`);
 
+// A row can also be lost BEFORE the insert is attempted: recordCall shapes ~30 columns out of the
+// record, and that whole block sat inside a catch that swallowed everything — no log, no counter,
+// dbWriteHealth().failures still reading 0 while rows vanished. The file's promise is that write
+// failures are COUNTED, not merely logged, and that only ever covered dbWrite's async catch. Same
+// for recordLimits, which feeds ACCT_CACHE: stopping silently freezes every account's headroom at
+// its last value.
+{
+  const before = db.dbWriteHealth().failures;
+  db.recordCall(undefined);                   // throws inside the shaping, must not escape
+  const after = db.dbWriteHealth();
+  if (after.failures > before) ok("a row lost before the insert is counted like one pg rejected");
+  else bad("a row lost before the insert is counted", `failures stayed at ${before} — it vanished`);
+  if (/recordCall/.test(after.lastError || "")) ok("...naming which stage dropped it");
+  else bad("the last error names the stage", `lastError was ${JSON.stringify(after.lastError)}`);
+
+  const b2 = db.dbWriteHealth().failures;
+  db.recordLimits({}, "acct", "org");         // no .get on the fake headers → throws inside
+  if (db.dbWriteHealth().failures > b2) ok("a dropped limits harvest is counted too");
+  else bad("a dropped limits harvest is counted", "it vanished");
+}
+
+
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
 process.exit(process.exitCode || 0);   // the pg pool keeps the loop alive with a dead upstream

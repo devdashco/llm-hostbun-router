@@ -25,7 +25,8 @@ globalThis.fetch = async (_url, init) => {
   sent.push({ body: rec.body.stringValue, attrs: Object.fromEntries((rec.attributes || []).map((a) => [a.key, a.value.stringValue])) });
   return { ok: true };
 };
-const { shipError, shipEvent } = req(new URL("../src/telemetry.js", import.meta.url).pathname);
+const T = req(new URL("../src/telemetry.js", import.meta.url).pathname);
+const { shipError, shipEvent } = T;
 
 let pass = 0;
 const ok = (m) => { pass++; console.log(`  ok    ${m}`); };
@@ -61,5 +62,30 @@ else fail("the summary body should name the count", sent[3].body);
 shipError("a brand new fault", {});
 eq("a brand new fault ships immediately", sent.length, 5);
 eq("...and carries no repeat annotation", sent[4].attrs.repeats_suppressed, undefined);
+
+// The alerting channel's OWN failure must be visible. `.catch(() => {})` on the delivery fetch meant
+// a HyperDX outage or a rotated ingest key dropped every WARN and ERROR with nothing anywhere
+// saying so: an operator watching for `account_disabled` or `waste_burn` sees silence and reads it
+// as nothing to report. Same failure dbWriteHealth() exists to prevent, one level deeper — not "the
+// scan crashed" but "the scan found something and telling anyone about it failed".
+{
+  const before = T.shipHealth().failures;
+  globalThis.fetch = () => Promise.reject(new Error("ECONNREFUSED"));
+  T.shipError("delivery probe", { from: "test" });
+  await new Promise((r) => setTimeout(r, 50));
+  const h = T.shipHealth();
+  if (h.failures > before) ok("a failed delivery is counted, not swallowed");
+  else fail("a failed delivery is counted", `failures stayed at ${before} — the alert vanished`);
+  if (/ECONNREFUSED/.test(h.lastError || "")) ok("...with the reason kept");
+  else fail("the reason is kept", `lastError was ${JSON.stringify(h.lastError)}`);
+  // A non-2xx is a failure too: a rotated key answers 401 and resolves the promise, so a
+  // catch-only guard would have counted nothing at all for the most likely outage there is.
+  globalThis.fetch = () => Promise.resolve({ ok: false, status: 401 });
+  const b2 = T.shipHealth().failures;
+  T.shipError("delivery probe 2", { from: "test" });
+  await new Promise((r) => setTimeout(r, 50));
+  if (T.shipHealth().failures > b2) ok("a 401 from the ingest counts as a failure, not a delivery");
+  else fail("a non-2xx counts", "a rotated ingest key would look like success");
+}
 
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);

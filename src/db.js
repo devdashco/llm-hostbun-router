@@ -144,7 +144,14 @@ function recordLimits(headers, project, model, account) {
       reset5: num(h("anthropic-ratelimit-unified-5h-reset")), reset7: num(h("anthropic-ratelimit-unified-7d-reset")),
       s5: h("anthropic-ratelimit-unified-5h-status") || null,
       s7: h("anthropic-ratelimit-unified-7d-status") || null, ts: Date.now() });
-  } catch { /* never let limit-harvest break a request */ }
+  } catch (e) {
+    // Same shape, different stake: this one feeds ACCT_CACHE, which decides whether an account is
+    // usable and which the auto-strategy orders on. Silently stopping would freeze every account's
+    // headroom reading at its last value — and `limits: null` vs a stale number is exactly the
+    // distinction this codebase keeps insisting on.
+    writeFails++; lastWriteErr = `recordLimits: ${e.message}`; lastWriteErrAt = Date.now();
+    console.warn(`[limits] harvest dropped: ${e.message}`);
+  }
 }
 
 const CALL_COLS = "ts,ip,ua,method,path,req_model,provider,sent_model,key_label,status,duration_ms,stream," +
@@ -191,7 +198,16 @@ function recordCall(rec) {
                           ORDER BY id DESC LIMIT $1)`,
         [CFG.logging.retain]);
     }
-  } catch (e) { /* never let logging break a request */ }
+  } catch (e) {
+    // A row lost here is as lost as one pg rejected, so it is counted the same way. This catch
+    // guards the SHAPING of the insert — every ternary and lookup above — and it swallowed
+    // everything: no log, no counter, `dbWriteHealth().failures` still 0 while rows vanished.
+    // The file's promise one screen up is that write failures are counted, not just logged; it only
+    // ever covered dbWrite's async catch. Never let logging break a request, still — but never let
+    // it fail silently either, which is the whole reason the counter exists.
+    writeFails++; lastWriteErr = `recordCall: ${e.message}`; lastWriteErrAt = Date.now();
+    console.warn(`[log] row dropped before insert: ${e.message}`);
+  }
 }
 
 // Prime the harvested-headroom cache once the DB is up. Deferred, not awaited: a slow DB must never

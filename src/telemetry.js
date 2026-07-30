@@ -257,8 +257,25 @@ function shipLog(severityText, severityNumber, message, attrs) {
       attributes: Object.entries(attrs || {}).map(([k, v]) => ({ key: k, value: { stringValue: String(v).slice(0, 500) } })),
     }] }],
   }] };
-  fetch(HDX_URL, { method: "POST", headers: { "content-type": "application/json", authorization: HDX_KEY }, body: JSON.stringify(payload) }).catch(() => {});
+  // The alerting channel had no self-monitoring: a `.catch(() => {})` here meant a HyperDX outage or
+  // a rotated ingest key dropped every WARN and ERROR with nothing anywhere saying so. An operator
+  // watching HyperDX for `account_disabled` or `waste_burn` would see silence and read it as
+  // nothing to report — which is the same failure the db counter exists to prevent, one level
+  // deeper: not "the scan crashed" but "the scan found something and telling anyone failed".
+  // Counted rather than logged per-failure on purpose: a dead ingest fails on EVERY event, and a
+  // warning per failure would be the noise the throttle above exists to stop.
+  fetch(HDX_URL, { method: "POST", headers: { "content-type": "application/json", authorization: HDX_KEY }, body: JSON.stringify(payload) })
+    .then((r) => { if (!r.ok) noteShipFail(`HTTP ${r.status}`); })
+    .catch((e) => noteShipFail(e.message));
 }
+// Counters since boot, surfaced by shipHealth() the way dbWriteHealth() surfaces dropped rows. The
+// first failure logs once so it appears in the container log too; the rest only move the count.
+let shipFails = 0, lastShipErr = null, lastShipErrAt = 0;
+function noteShipFail(why) {
+  if (!shipFails) console.warn(`[ship] telemetry delivery failing: ${why} — WARN/ERROR events are not reaching HyperDX`);
+  shipFails++; lastShipErr = why; lastShipErrAt = Date.now();
+}
+const shipHealth = () => ({ failures: shipFails, lastError: lastShipErr, lastErrorAt: lastShipErrAt || null });
 // An upstream/runtime failure — the error stream in HyperDX.
 function shipError(message, attrs) { shipLog("ERROR", 17, message, attrs); }
 // A structured, ALERTABLE operational signal (not an error): an app reaching for a premium model, an
@@ -283,7 +300,7 @@ function applyLocalThinkingDefault(j) {
 }
 const isChatCompletions = (url) => typeof url === "string" && url.split("?")[0].endsWith("/chat/completions");
 
-module.exports = {
+module.exports = { shipHealth,
   keyLabel, toolsSummary, extractRequestContent, extractReqAll,
   normalizeUsage, extractResponseBody, shipError, shipEvent, applyLocalThinkingDefault, isChatCompletions,
 };

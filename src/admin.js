@@ -20,6 +20,7 @@ const C = require("./config");
 const { CFG, setCFG, persistConfig, mergeConfig, envDefaults, loadConfig, reindexKeys, CANON, OBLIT, E4B,
         PROVIDERS, normProvider, sanitizeRule, sanitizeLimit, IMAGE_MODEL_IDS, CONFIG_FILE } = C;
 const DB = require("./db");
+const { shipHealth } = require("./telemetry");   // a dead ingest drops every alert; count is the sign
 const { dbUp, dbWriteHealth, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
 const { unpricedModels } = require("./pricing");
 const { sha256 } = require("./identity");
@@ -135,6 +136,7 @@ function adminState() {
     // DATABASE_URL is set, whether or not the database answers. Failed writes are the only signal
     // that the log is lying, and they were going to stdout alone.
     loggingWrites: dbWriteHealth(),
+    telemetryShip: shipHealth(),
 
     // secrets — never returned in clear
     crazyrouterKeySet: !!CFG.crazyrouterKey, crazyrouterKeyMasked: mask(CFG.crazyrouterKey),
@@ -184,10 +186,10 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (!isAuthed(req)) return sendJson(res, 401, { error: "unauthorized" });
 
   // Logout sits BELOW the gate and is POST-only: it bumps the global signing epoch and writes to
-  // disk — ungated it threw every operator out with no password, and on GET an `<img>` tag did it.
+  // disk — ungated, an `<img src=".../api/logout">` threw every operator out, no password needed.
   if (sub === "logout" && req.method === "POST") {
-    // Telling the CLIENT to drop the cookie is not logging out: the token is a stateless signature,
-    // so replaying it authenticated every gated route for 7 days. The epoch IS the revocation.
+    // Dropping the client's cookie is not logging out: the token is a stateless signature, so
+    // replaying it authenticated everything for 7 days. The epoch IS the revocation.
     CFG.sessionEpoch = (CFG.sessionEpoch || 1) + 1;
     persistConfig();
     const secure = process.env.SESSION_INSECURE === "1" ? "" : " Secure;";
@@ -398,13 +400,11 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
 
   if (sub === "usage" && req.method === "GET") return AN.usageRollup(req, res);
 
-  // One shape for all three providers: {up, status, ms, count}. claudecode used to answer `{ok}`
-  // instead, so the panel — which reads `.up` — showed it permanently DOWN with "status —", on a
-  // provider that was serving every Claude call we made. Never let one member of a set speak a
-  // different dialect than its siblings.
-  //
-  // claudecode is not probed over HTTP: api.anthropic.com/v1/models needs a Max token, so an
-  // unauthenticated GET answers 401 and would read as DOWN. Its health IS "do we hold accounts".
+  // One shape for all three providers: {up, status, ms, count}. claudecode used to answer `{ok}`, so
+  // the panel — which reads `.up` — showed it permanently DOWN while it served every Claude call.
+  // Never let one member of a set speak a different dialect than its siblings. And claudecode is not
+  // probed over HTTP: api.anthropic.com needs a Max token, so an unauthenticated GET reads as DOWN.
+  // Its health IS "do we hold accounts".
   // ── diagnostics ── (src/diagnostics.js)
   if (sub === "health" && req.method === "GET") return DX.health(req, res);
   if (sub === "models" && req.method === "GET") return DX.catalogs(req, res);
@@ -472,8 +472,8 @@ async function registryRoutes(req, res, sub, ip) {
     if (sub === path && req.method === "GET")
       return guard(async () => {
         const list = await REG.listConsumers(kind);
-        // Staleness belongs to the SOURCE, not the rows: an empty mirror answered a bare
-        // `{machines: []}` — "nothing is registered", not "I cannot see". See listConsumers().
+        // Staleness belongs to the SOURCE: an empty mirror answered a bare `{machines: []}` —
+        // "nothing is registered", not "I cannot see". See listConsumers().
         const stale = !DB.dbUp() || list.some((x) => x.stale);
         return sendJson(res, 200, { [path]: list, ...(stale ? { stale: true, warning: "registry DB unreachable — this is the /data/config.json mirror, possibly out of date" } : {}) });
       });
