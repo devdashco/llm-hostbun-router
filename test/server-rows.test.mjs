@@ -18,6 +18,7 @@ import { createRequire } from "node:module";
 import http from "node:http";
 import net from "node:net";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,9 +52,13 @@ fs.writeFileSync(cfgPath, JSON.stringify({
   // auth off: this suite is about what gets RECORDED, not about who may call. The gate has its own
   // coverage in router.test.mjs, and leaving it on here would only test the refusal path twice.
   auth: { mode: "off" }, logging: { enabled: true, content: false },
-  consumers: {}, consumerAliases: {}, projectRoutes: {}, projectAccounts: {},
+  // A real key, because the OTel ingest below authenticates for real — identity there comes from
+  // the KEY, never from a resource attribute the exporter asserts.
+  consumers: { pbox: { kind: "dev", owner: "philip", keys: [{ id: "dddd4444", hash: "SHA" }] } },
+  consumerAliases: {}, projectRoutes: {}, projectAccounts: {},
   crazyrouterKey: "test-key",
-}));
+}).replace('"SHA"', JSON.stringify(createHash("sha256").update("probesecret").digest("hex"))));
+const OTEL_KEY = "sk-llm-dddd4444-probesecret";
 
 Object.assign(process.env, {
   PORT: String(PORT), CONFIG_FILE: cfgPath, ADMIN_PASSWORD: "ddash", SESSION_INSECURE: "1",
@@ -121,6 +126,58 @@ console.log("server.js — what lands in the call log:");
     check("...with the same model as the /local/* form", row.reqModel, "qwen3.5-9b");
     check("...and the same consumer", row.project, "seoul:crawl");
   }
+}
+
+// ── the OTel ingest, end to end ─────────────────────────────────────────────────────────────────
+// otel.test.mjs covers the PARSE (otlpRows over an OTLP/JSON payload) and the GATE (401s) as
+// separate halves. Nothing covered the wiring between them: an authenticated POST arriving at the
+// real server and becoming a call-log row. That path is the whole reason the ingest exists — a
+// direct-connect box talks to api.anthropic.com and this router writes nothing, so these rows are
+// the only record that spend happened at all.
+{
+  // Flip the gate to `required` for this block only — prod's mode, and the one where identity comes
+  // from the KEY. With auth off the ingest falls back to the self-asserted `x-consumer` header, so
+  // the test would prove the fallback works and say nothing about the path that actually runs.
+  // CFG is mutated in place and shared with the server running in this process, so this reaches it.
+  const { CFG } = req_(join(ROOT, "src/config.js"));
+  const prevMode = CFG.auth.mode;
+  CFG.auth.mode = "required";
+  rows.length = 0;
+  const attrs = { "event.name": "api_request", model: "claude-opus-5", duration_ms: 4200,
+    input_tokens: 1200, output_tokens: 340, cache_read_tokens: 88000, cache_creation_tokens: 5000,
+    "session.id": "abc-123" };
+  const payload = { resourceLogs: [{ resource: { attributes: [{ key: "service.name", value: { stringValue: "claude-code" } }] },
+    scopeLogs: [{ logRecords: [{ timeUnixNano: "1750000000000000000",
+      attributes: Object.entries(attrs).map(([k, v]) => ({ key: k,
+        value: typeof v === "number" ? { intValue: String(v) } : { stringValue: String(v) } })) }] }] }] };
+  const r = await fetch(`http://127.0.0.1:${PORT}/otel/v1/logs`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${OTEL_KEY}` },
+    body: JSON.stringify(payload),
+  });
+  check("an authenticated OTLP post is accepted", r.status, 200);
+  const row = await rowSoon();
+  if (!row) bad("...and becomes a call-log row", "no row — the ingest accepted it and dropped it");
+  else {
+    ok("...and becomes a call-log row");
+    // Tagged `:direct` because these tokens passed no pin, no allowlist and no cache breakpoint.
+    // Folding them under the bare consumer name would make half of `pbox` stop meaning "went
+    // through the router".
+    check("...tagged as direct, not as routed traffic", row.project, "pbox:direct");
+    check("...with the model the box actually used", row.reqModel, "claude-opus-5");
+    check("...and every token count, cache included",
+      [row.usage.prompt_tokens, row.usage.completion_tokens, row.usage.cache_read_input_tokens],
+      [1200, 340, 88000]);
+  }
+  // An unauthenticated ingest must write NOTHING: this is a write into the call log from outside,
+  // and forging spend against another consumer is the whole reason it is gated.
+  rows.length = 0;
+  const anon = await fetch(`http://127.0.0.1:${PORT}/otel/v1/logs`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  });
+  check("an unauthenticated OTLP post is refused", anon.status, 401);
+  await new Promise((r) => setTimeout(r, 150));
+  check("...and writes no row at all", rows.length, 0);
+  CFG.auth.mode = prevMode;
 }
 
 // ── the guard that keeps this harness honest ────────────────────────────────────────────────────
