@@ -279,12 +279,16 @@ async function statsSummary(req, res) {
       // (redbut asks gemini, gets haiku) must read as its real tier. `list_usd` is the notional
       // Anthropic list cost of this claudecode traffic (never billed — the sub is flat — but it
       // makes premium spend visible where `usd` is 0).
+      // No fallback to `sent_models[0]` when the fold has no entry: that unordered-agg read IS the
+      // bug this fold replaced, and keeping it as a fallback keeps one row able to reproduce it.
+      // The two SELECTs share a window and group on the same columns, so a miss means the rows were
+      // pruned mid-request — answer `null` (no reading) rather than guess, the `limits: null` rule.
       const f = servedByModel[r.req_model + " " + r.provider];
-      const served = (f && f.served) || String(r.sent_models || "").split(",")[0] || r.req_model;
-      r.tier = modelTier(served);
+      const served = (f && f.served) || r.req_model;
+      r.tier = f ? modelTier(served) : null;
       // ANY premium member makes the row premium: the tier label is the dominant model, but a row
       // that ran opus must never read `premium: false` — that is the one thing this field is for.
-      r.premium = f ? f.premium : isPremiumModel(served);
+      r.premium = f ? f.premium : isPremiumModel(r.req_model);
       // null (not 0) when a served id has no price — see listCostUsd. A non-claudecode row is a
       // genuine 0: the sub is flat and local is free, so "no list cost" is the true answer there.
       if (r.provider !== "claudecode") r.list_usd = 0;
