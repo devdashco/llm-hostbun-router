@@ -616,6 +616,14 @@ const rawPost = (path, raw) => {
   // is silently 3x what it says.
   check("a consumer-scoped cap meters the whole consumer", rl("promopilot:generatetext").byConsumer, true);
   check("...at the consumer's scope, not the job path", rl("promopilot:generatetext").scope, "promopilot");
+  // And the SAME cap must meter the same way when the call arrives with no job suffix at all. This
+  // block only ever asked about job paths, so the bare-consumer case went unchecked: it took the
+  // exact-match branch, which hard-coded byConsumer:false, and metered a bare `promopilot` call
+  // only against traffic that also arrived bare. Same config, same consumer, two buckets, decided
+  // by whether the caller sent X-Job — and the cap was bypassable in the spend-more direction.
+  check("a bare consumer call meters the whole consumer too", rl("promopilot").byConsumer, true);
+  check("...which is the same bucket its jobs are metered in",
+    rl("promopilot").scope, rl("promopilot:generatetext").scope);
 
   // An exact-path entry still wins outright — including an all-zero one, so a single greedy job can
   // be exempted from its consumer's cap. Falling through to the consumer here would make "exempt"

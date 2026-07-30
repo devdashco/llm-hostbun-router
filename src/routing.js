@@ -95,7 +95,20 @@ function resolveLimit(project) {
   // An exact-path entry decides outright, INCLUDING an all-zero one: exempting a single greedy job
   // from its consumer's cap has to be expressible, so `promopilot:cheapjob: {0,0}` means exempt and
   // must not fall through to the consumer's cap or to the default.
-  if (Object.prototype.hasOwnProperty.call(pl, k)) return at(k, k, false);
+  // What it METERS still depends on which key it is, though. A key that IS a bare consumer name is
+  // the consumer's cap however it was reached, so it has to fold
+  // that consumer's jobs in; hard-coding byConsumer:false here meant a call arriving without a job
+  // suffix was metered only against traffic that also arrived without one. Same config, same
+  // consumer, two different buckets, decided by whether the caller happened to send X-Job: a
+  // `promopilot` cap of 100k was bypassable by bare calls while `promopilot:generatetext` correctly
+  // saw the aggregate and 429'd. It failed in the spend-more direction, and the traffic pattern is
+  // real — this router exists partly because `promopilot` logged 4 bare calls beside ~30k from its
+  // jobs. A job-specific key (`promopilot:heavy`) still meters only itself, which is the point of
+  // being able to write one.
+  if (Object.prototype.hasOwnProperty.call(pl, k)) {
+    const { consumer: kc } = parseConsumer(k);
+    return at(k, k, kc === k);
+  }
   const { consumer } = parseConsumer(k);
   if (consumer && consumer !== k && Object.prototype.hasOwnProperty.call(pl, consumer)) {
     return at(consumer, consumer, true);
