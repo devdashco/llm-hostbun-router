@@ -117,10 +117,14 @@ console.log("admin — the alias routes:");
 // key issuance. Driven here rather than in wire.test.mjs: 503 is the CORRECT answer, and that suite
 // treats any 5xx as the router breaking.
 {
+  // `{from, to}` — the field names the route actually reads. These used to send {alias, consumer},
+  // so `from` was undefined and the 503 came from requireDb() firing before any alias logic ran:
+  // green, but not for the reason the label claims. Now that validation is hoisted above the DB
+  // gate, a malformed body answers "from required" and this reads the real path.
   check("consumers/alias needs the DB",
-    api("consumers/alias", { alias: "old-name", consumer: "acme" }).error, "registry unavailable: no database connection");
+    api("consumers/alias", { from: "old-name", to: "acme" }).error, "registry unavailable: no database connection");
   check("registry/alias needs the DB",
-    api("registry/alias", { alias: "old-name", consumer: "acme" }).error, "registry unavailable: no database connection");
+    api("registry/alias", { from: "old-name", to: "acme" }).error, "registry unavailable: no database connection");
 }
 
 console.log("admin — minting and revoking credentials:");
@@ -140,6 +144,28 @@ console.log("admin — minting and revoking credentials:");
   // infrastructure. This is the line that keeps "refuses" from degrading into "always 503".
   check("a mint with no name is a validation error, not a DB error",
     /name/i.test(api("registry/keys", { kind: "app" }).error || ""), true);
+}
+
+// A malformed request must report ITSELF, not our infrastructure. Every one of these runs with no
+// DB, so a `503 registry unavailable` here would tell a caller to come back later about a request
+// that was wrong no matter what the database was doing. addConsumer already ordered its checks this
+// way and said why in a comment; the other seven writers did not.
+console.log("admin — validation answers before the database is demanded:");
+{
+  const noDbMsg = "registry unavailable: no database connection";
+  const cases = [
+    ["developers",          {},                          "name required"],
+    ["consumers/keys/revoke", { name: "", id: "x" },      "name required"],
+    ["consumers/keys/revoke", { name: "acme", id: "" },   "key id required"],
+    ["consumers/policy",    { name: "" },                 "valid consumer name required"],
+    ["consumers/purge",     {},                           "name required"],
+    ["registry/alias",      {},                           "from required"],
+  ];
+  for (const [route, body, want] of cases) {
+    // The whole point: with no DB, the answer must be the VALIDATION error, never noDbMsg.
+    const got = api(route, body).error;
+    check(`${route} says "${want}", not "${noDbMsg}"`, got, want);
+  }
 }
 
 console.log("admin — the destructive routes, with no database to destroy:");

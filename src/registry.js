@@ -244,9 +244,9 @@ async function listConsumers(kind) {
 // name, and never takes a pattern — a bulk purge over a LIKE is how you lose promopilot's history to
 // a typo. Returns the row count so the caller can see what it cost.
 async function purgeUnregistered(name) {
-  requireDb();
   const n = cleanName(name);
   if (!n) throw new RegistryError("name required");
+  requireDb();
   const registered = (await dbRows("SELECT 1 FROM consumers WHERE name = $1", [n]))[0];
   if (registered) throw new RegistryError(`'${n}' IS registered — delete the consumer instead of purging its history`, 409);
   const aliased = (await dbRows("SELECT 1 FROM consumer_aliases WHERE alias = $1", [n]))[0];
@@ -257,6 +257,11 @@ async function purgeUnregistered(name) {
 }
 
 async function addDeveloper({ name, email }) {
+  // Validate first, then demand a database — the rule addConsumer states and the rest of this file
+  // did not follow. With the DB down, `POST /api/developers {}` answered `503 registry unavailable`
+  // for a request that was malformed no matter what the database was doing, so a caller could not
+  // tell "fix your request" from "come back later".
+  if (!cleanName(name)) throw new RegistryError("name required");
   requireDb();
   await upsertDeveloper(name, email);
   await refresh();
@@ -265,8 +270,9 @@ async function addDeveloper({ name, email }) {
 // ON DELETE RESTRICT on consumers.developer_id makes the DB refuse this while a machine still points
 // at the developer. Catch it and say what to do rather than surfacing a raw FK violation.
 async function removeDeveloper(name) {
-  requireDb();
   const n = cleanName(name);
+  if (!n) throw new RegistryError("name required");
+  requireDb();
   const owned = await dbRows(
     `SELECT c.name FROM consumers c JOIN developers d ON d.id = c.developer_id WHERE d.name = $1`, [n]);
   if (owned.length) throw new RegistryError(
@@ -318,8 +324,9 @@ async function addConsumer({ name, kind, developer, note }) {
 }
 
 async function removeConsumer(name) {
-  requireDb();
   const n = cleanName(name);
+  if (!n) throw new RegistryError("name required");
+  requireDb();
   const r = await dbExec("DELETE FROM consumers WHERE name = $1", [n]);
   if (!r.rowCount) throw new RegistryError(`unknown consumer '${n}'`, 404);
   await refresh();
@@ -347,8 +354,10 @@ async function issueKey({ name, kind, developer, note }) {
 }
 
 async function revokeKey({ name, id }) {
-  requireDb();
   const n = cleanName(name);
+  if (!n) throw new RegistryError("name required");
+  if (!String(id || "").trim()) throw new RegistryError("key id required");
+  requireDb();
   const r = await dbExec(
     `UPDATE api_keys SET revoked_at = $1 FROM consumers c
       WHERE api_keys.consumer_id = c.id AND c.name = $2 AND api_keys.id = $3 AND api_keys.revoked_at IS NULL`,
@@ -359,10 +368,10 @@ async function revokeKey({ name, id }) {
 
 // ── aliases ───────────────────────────────────────────────────────────────
 async function setAlias({ from, to }) {
-  requireDb();
   const f = cleanName(from);
   if (!f) throw new RegistryError("from required");
   if (f.includes(":")) throw new RegistryError("alias the consumer, not a job path");
+  requireDb();
   if (to === null || to === "" || to === undefined) {
     await dbExec("DELETE FROM consumer_aliases WHERE alias = $1", [f]);
     await refresh();
@@ -401,9 +410,9 @@ async function setAlias({ from, to }) {
 // key rather than taking a consumer off the air. Merge-safe by construction: one consumer per call,
 // so this can never do what `POST config` does to the maps it assigns wholesale.
 async function setClientPolicy({ name, allowUa }) {
-  requireDb();
   const n = cleanName(name);
   if (!n || !validName(n)) throw new RegistryError("valid consumer name required");
+  requireDb();
   const known = (await dbRows("SELECT 1 FROM consumers WHERE name=$1 AND disabled_at IS NULL", [n]))[0];
   if (!known) throw new RegistryError(`consumer '${n}' is not registered`, 404);
   const list = (Array.isArray(allowUa) ? allowUa : String(allowUa || "").split(","))
