@@ -117,10 +117,19 @@ function ingest(req, res, { bodyBuf, ip, path }) {
     res.writeHead(code, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
   };
+  // /otel/v1/metrics is a black hole ABOVE the auth gate, on purpose: it exists only so a box
+  // pointed at a bare OTEL_EXPORTER_OTLP_ENDPOINT stops retrying, and it stores nothing whether the
+  // caller is authenticated or not. Behind the gate it answered 401 forever instead, which is the
+  // retry storm it was added to prevent — and each retry wrote a `[otel] 401` line, burying the
+  // 401s that mean something. Nothing is read, written or echoed here, so there is nothing to gate.
+  if (!path.endsWith("/logs")) return done(200, { partialSuccess: {} });
   const mode = (CFG.auth && CFG.auth.mode) || "optional";
   const auth = mode === "off" ? null : authenticate(req);
   if (mode !== "off" && !(auth && auth.ok)) {
-    console.error(`[otel] 401 ${(auth && auth.why) || "no key"} ip=${ip}`);
+    // Name the sender. This is an ingest from OUTSIDE, so a 401 is either a box that needs fixing
+    // or someone probing — and `ip=` alone cannot tell them apart on a box running many agents.
+    const ua = String(req.headers["user-agent"] || "-").slice(0, 60);
+    console.error(`[otel] 401 ${(auth && auth.why) || "no key"} ip=${ip} path=${path} ua=${ua}`);
     return done(401, { error: { type: "invalid_api_key", code: "invalid_api_key",
       message: "OTEL ingest needs this box's router key: OTEL_EXPORTER_OTLP_HEADERS=\"Authorization=Bearer sk-llm-…\"." } });
   }
@@ -129,8 +138,6 @@ function ingest(req, res, { bodyBuf, ip, path }) {
   const consumer = auth && auth.ok
     ? auth.consumer
     : parseConsumer(String(req.headers["x-consumer"] || "")).consumer || null;
-
-  if (!path.endsWith("/logs")) return done(200, { partialSuccess: {} });
 
   let payload = null;
   try {

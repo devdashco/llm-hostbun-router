@@ -137,8 +137,16 @@ try {
   // Protobuf into a JSON-only endpoint is the likely misconfiguration; it must say so, not 500.
   const proto = await post("\x00\x01binary", { authorization: "Bearer sk-llm-deadbeef-nope" });
   check("a non-JSON body never 5xx's", proto.status < 500, String(proto.status));
+  // `!== 404` was the original assertion here and it could not fail for the reason it was written:
+  // an UNAUTHENTICATED metrics POST answered 401 — a retry forever, and a `[otel] 401` line per
+  // retry — and 401 is not 404, so the check stayed green while the storm it names ran in prod.
+  // Metrics is a black hole that stores nothing, so the only answer that ends the retry is 200.
   const metrics = await fetch(`http://127.0.0.1:${PORT}/otel/v1/metrics`, { method: "POST", body: "{}" });
-  check("metrics endpoint answers (no retry storm) rather than 404", metrics.status !== 404, String(metrics.status));
+  check("an unauthenticated metrics POST is 200-and-dropped, not a 401 the exporter retries",
+    metrics.status === 200, String(metrics.status));
+  // The 401 must say WHICH sender to go fix: one box runs many agents behind one IP.
+  check("a 401 names the path and the user-agent, not just the ip",
+    /\[otel\] 401 .*ip=.*path=\/otel\/v1\/logs ua=/.test(log), log.slice(-300));
 } finally {
   srv.kill("SIGKILL");
   try { fs.unlinkSync(cfgPath); } catch { /* gone */ }
