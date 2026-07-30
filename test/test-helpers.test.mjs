@@ -17,7 +17,7 @@
 // So this is deliberately narrow: only the known assertion vocabulary, only calls, only in test
 // files. A general "any undefined identifier" version of this over src/ was tried before and flagged
 // eleven things on a clean tree — a check that cries wolf gets switched off.
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -89,6 +89,22 @@ for (const rel of files.filter((f) => f.startsWith("test/"))) {
   } else if (lines.some((l) => /^\s*db\.[a-zA-Z]+\s*=/.test(l))) {
     ok(`${rel} — stubs first, then requires`);
   }
+}
+
+// ── the cccc MCP bundle is a COPY, and must stay byte-identical ─────────────────────────────────
+// `cccc/server/claudectl_server.py` is canonical; `cccc/plugins/claudectl/mcp/claudectl_server.py`
+// is the bundle the plugin cache imports. Which one loads depends on how cccc was installed, so a
+// change to one and not the other means two machines running the same version answer differently —
+// and the difference is invisible until someone compares outputs. deploy.sh resyncs them; nothing
+// checked they were in sync, and this file was edited today.
+console.log("\nthe cccc MCP server and its plugin bundle agree:");
+{
+  const a = join(ROOT, "cccc/server/claudectl_server.py");
+  const b = join(ROOT, "cccc/plugins/claudectl/mcp/claudectl_server.py");
+  if (!existsSync(a) || !existsSync(b)) ok("(one of the two copies is absent — nothing to compare)");
+  else if (readFileSync(a, "utf8") === readFileSync(b, "utf8")) ok("cccc/server ≡ cccc/plugins/claudectl/mcp");
+  else bad("the two copies of claudectl_server.py are identical",
+    "they have drifted — fix cccc/server/claudectl_server.py, then copy it over the plugin bundle (cccc/deploy.sh does this)");
 }
 
 console.log(`\n${failures ? "FAIL" : "PASS"} — ${pass} passed, ${failures} failed`);

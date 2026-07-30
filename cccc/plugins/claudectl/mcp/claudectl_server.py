@@ -164,8 +164,14 @@ async def accounts_list() -> dict:
 
     Rich per-account view: name, Anthropic org id, the projects PINNED to it,
     harvested `limits` (5h/7d utilization 0..1, reset epochs, status — `null`
-    means "no reading yet", NEVER 0%), and per-account spend from the call log
-    (calls/tokens lifetime + 24h, rate_limited/error counts). Also returns
+    means "no reading yet", NEVER 0%), and per-account spend from the call log.
+
+    `usage.tokens` / `usage.tokens24h` are BILLABLE tokens (total minus cache
+    reads) — what actually draws down a Max window, since a cached read costs
+    about a tenth and barely moves it. `usage.tokensRaw` / `tokensRaw24h` carry
+    the raw totals for throughput questions. Reading the raw number as spend
+    overstates a well-cached account by roughly 6x and points at the wrong
+    subscription. Also returns
     `orphanPins` (projects pinned to an account no longer in the pool) and
     `defaultAccount`. Tokens are server-side only and never included.
     """
