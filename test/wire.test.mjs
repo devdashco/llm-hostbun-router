@@ -68,7 +68,7 @@ fs.writeFileSync(path.join(panelDir, "calls", "index.html"), "<!doctype html><ti
 fs.writeFileSync(path.join(panelDir, "_next", "static", "chunks", "x.js"), "export const a=1;");
 
 const srv = spawn(process.execPath, ["server.js"], {
-  env: { ...process.env, PORT: String(PORT), CONFIG_FILE: cfgPath, PRICES_FILE: "/nonexistent.json",
+  env: { ...process.env, MAX_BODY_MB: "1", PORT: String(PORT), CONFIG_FILE: cfgPath, PRICES_FILE: "/nonexistent.json",
     ADMIN_PASSWORD: "ddash", SESSION_INSECURE: "1", DATABASE_URL: "", PANEL_DIR: panelDir },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -201,6 +201,26 @@ for (const path of ["/api/machines", "/api/projects"]) {
   else if (body.stale !== true) bad(`${path} SAYS it is serving the mirror`, `no stale flag: ${JSON.stringify(body).slice(0, 120)}`);
   else if (!/mirror/i.test(body.warning || "")) bad(`${path}'s warning names what the reader is looking at`, body.warning || "(none)");
   else ok(`${path} answers from the mirror and says so`);
+}
+
+// A body must not be able to make this process hold arbitrary memory before it is even
+// authenticated. `readBody` accumulated every chunk until `end`, and on the inference path that runs
+// BEFORE authenticate() — so an unauthenticated caller got its 401 only after the last byte landed.
+// Measured with 20 MB: body complete at t+16ms, first response byte at t+116ms.
+//
+// The cap is env-tunable and this suite sets MAX_BODY_MB=1, so a 2 MB body is over it. Real traffic
+// for reference: largest body in 7 days 10.6 MB, 99.9th percentile 1.6 MB — the default 64 MB is
+// ~6x the biggest thing anyone legitimately sends.
+{
+  const big = Buffer.alloc(2 * 1024 * 1024, 0x61).toString();
+  const r = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"${big}"}]}`,
+  }).catch((e) => ({ status: `ERR ${e.message}` }));
+  if (r.status === 413) ok("POST /v1/chat/completions -> 413 over the body cap");
+  else bad("an oversize body is refused 413", `got ${r.status}`);
+  // And the router keeps serving: destroying one request must not take the listener with it.
+  await expect("...and the server is still healthy after it", "/v1/models", 200);
 }
 
 await expect("GET  /admin/api/state is GONE", "/admin/api/state", 404);

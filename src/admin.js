@@ -168,7 +168,7 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   // login is the only unauthenticated endpoint
   if (sub === "login" && req.method === "POST") {
     if (throttled(ip)) return sendJson(res, 429, { error: "too many attempts, wait a few minutes" });
-    const body = await readBody(req);
+    const body = await readBody(req, res); if (body === null) return;   // over MAX_BODY_MB
     let pw = "";
     try { pw = JSON.parse(body.toString()).password || ""; } catch {}
     const ok = pw.length === CFG.adminPassword.length &&
@@ -185,11 +185,11 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   }
   if (!isAuthed(req)) return sendJson(res, 401, { error: "unauthorized" });
 
-  // Logout sits BELOW the gate and is POST-only: it bumps the global signing epoch and writes to
-  // disk — ungated, an `<img src=".../api/logout">` threw every operator out, no password needed.
+  // Logout sits BELOW the gate and is POST-only: it bumps the epoch and writes to disk — ungated,
+  // an `<img src=".../api/logout">` threw every operator out, no password needed.
   if (sub === "logout" && req.method === "POST") {
     // Dropping the client's cookie is not logging out: the token is a stateless signature, so
-    // replaying it authenticated everything for 7 days. The epoch IS the revocation.
+    // replaying it worked for 7 days. The epoch IS the revocation.
     CFG.sessionEpoch = (CFG.sessionEpoch || 1) + 1;
     persistConfig();
     const secure = process.env.SESSION_INSECURE === "1" ? "" : " Secure;";
@@ -443,7 +443,7 @@ const HANDLED = Symbol("handled");
 async function registryRoutes(req, res, sub, ip) {
   const REG = require("./registry");
   const body = async () => {
-    const b = await readBody(req);
+    const b = await readBody(req, res); if (b === null) throw new REG.RegistryError("body too large");
     try { return JSON.parse(b.toString() || "{}"); } catch { throw new REG.RegistryError("bad json"); }
   };
   const guard = async (fn) => {

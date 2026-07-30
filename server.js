@@ -216,7 +216,8 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   if (path.startsWith("/local/")) {
-    const bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
+    const bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req, res);
+    if (bodyBuf === null) return;                       // over MAX_BODY_MB: already 413'd
     req.url = req.url.slice("/local".length);
     // Pass the model and the caller's name through. Without them every row from this back-compat
     // path carried `req_model = null` and `project = null` — the identical request sent to
@@ -236,7 +237,8 @@ const server = http.createServer(async (req, res) => {
   // call-log row. Own auth gate (see src/otel.js) — this is not an inference path, so `isInference`
   // below never matches it. NOT under /v1: that prefix is real inference on a caller's bill.
   if (req.method === "POST" && path.startsWith("/otel/v1/"))
-    return OTEL.ingest(req, res, { bodyBuf: await readBody(req), ip: clientIp(req), path });
+  { const b = await readBody(req, res); if (b === null) return;   // over MAX_BODY_MB: already 413'd
+    return OTEL.ingest(req, res, { bodyBuf: b, ip: clientIp(req), path }); }
 
   // Image generation. TWO upstreams share this path and the `template` field is what picks between
   // them: a name registered in our own image-template store (a reference picture + a style
@@ -244,7 +246,7 @@ const server = http.createServer(async (req, res) => {
   // anything else — including the image service's own prompt-template names — falls through to it
   // (SDXL + Lightning on ww's RTX 3070), free, anonymous, exactly as before. See src/imagetemplates.js.
   if (req.method === "POST" && /\/images\/(generations|edits|variations)$/.test(path)) {
-    let imgBody = await readBody(req);
+    let imgBody = await readBody(req, res); if (imgBody === null) return;   // over MAX_BODY_MB
     let imgJson = null;
     try { imgJson = JSON.parse(imgBody.toString()); } catch { /* not JSON — SD-Turbo can say so */ }
     const tpl = imgJson && IT.templateFor(imgJson.template);
@@ -277,7 +279,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && ref) return IT.serveReference(res, ref[1]);
   }
 
-  let bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req);
+  let bodyBuf = ["GET", "HEAD"].includes(req.method) ? Buffer.alloc(0) : await readBody(req, res);
+  if (bodyBuf === null) return;                         // over MAX_BODY_MB: already 413'd
   // Parse the body ONCE here and reuse it: `model` and the project fallback in extractProject both
   // want it, and re-parsing a 340 KB agent transcript costs ~280 µs a time. null = not JSON.
   let reqJson = null;
@@ -300,13 +303,11 @@ const server = http.createServer(async (req, res) => {
   const provider = route.provider;
   console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${provider}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} project=${project || "-"} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
 
-  // What makes a request "inference" is that it is about to be DISPATCHED to a provider, and
-  // dispatch resolves on the body's `model` alone — `resolveRoute()` never looks at the URL. This
-  // used to be a regex over the path suffix (chat/completions|responses|completions|messages|chat),
-  // so a POST to any other path carrying a real model id — /v1/embeddings, /v1/rerank, anything —
-  // skipped every gate below (the key check, the UA lock, the project rules, the usage limits) and
-  // was proxied anyway, with the router's own crazyrouter key injected. Two independent notions of
-  // "is this inference" is the bug; the route is the one that decides where the money goes.
+  // "Inference" means about to be DISPATCHED to a provider, and dispatch resolves on the body's
+  // `model` alone — resolveRoute() never looks at the URL. This was a regex over the path suffix, so
+  // a POST to any other path carrying a real model id (/v1/embeddings, /v1/rerank) skipped every
+  // gate below — key, UA lock, project rules, limits — and was proxied with our crazyrouter key.
+  // Two independent notions of "is this inference" is the bug; the route decides where money goes.
   const isInference = req.method === "POST" && bodyBuf.length > 0 && model != null;
 
   // A key that was PRESENTED and is bad is always an error, in every mode above "off". Falling back
@@ -338,9 +339,8 @@ const server = http.createServer(async (req, res) => {
   if (auth && !auth.ok && isInference) return keyFail(auth.why);
   // `required`: no key, no service. This is the mode where the self-asserted X-Project header stops
   // being an identity and becomes a mere label.
-  // credentialHint, not a flat "missing API key": a caller that presented a credential meant for
-  // another backend used to be told none was sent, which sends whoever is debugging to the wrong
-  // side of the wire. See the OTel case — the same word cost a day there.
+  // credentialHint, not a flat "missing API key": a caller presenting a credential meant for another
+  // backend used to be told none was sent, sending whoever debugs it to the wrong side of the wire.
   if (authMode === "required" && isInference && !(auth && auth.ok)) return keyFail(credentialHint(req));
 
   // A valid key, presented by a client this consumer is not supposed to be. `allowUa` exists because

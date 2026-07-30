@@ -152,7 +152,8 @@ async function crazyrouterStatus(req, res) {
 }
 
 async function crazyrouterTest(req, res) {
-  const body = await readBody(req); let key = "";
+  const body = await readBody(req, res); if (body === null) return;   // over the cap: already answered 413
+  let key = "";
   try { key = JSON.parse(body.toString()).key || ""; } catch {}
   return sendJson(res, 200, await crazyCheck(key));
 }

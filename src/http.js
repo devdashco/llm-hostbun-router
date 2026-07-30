@@ -47,11 +47,42 @@ const HEADROOM_PROVIDERS = new Set(
   (process.env.HEADROOM_PROVIDERS || "local,crazyrouter").split(",").map((x) => x.trim()).filter(Boolean)
 );
 
-const readBody = (req) => new Promise((resolve) => {
+// A ceiling on what one request may make this process hold. There was none: `readBody` accumulated
+// every chunk until `end`, and on the inference path it runs BEFORE authenticate() — so an
+// unauthenticated caller could make the router buffer an arbitrarily large body and only then be
+// told 401. Measured: a 20 MB body under auth.mode=required got its 401 after the last byte
+// arrived, not before the first.
+//
+// 64 MB, against real traffic: the largest request body in the last 7 days was 10.6 MB and the
+// 99.9th percentile was 1.6 MB, so this is ~6x the biggest thing anyone legitimately sends and
+// nowhere near what a caller could use to squeeze the box. Env-tunable because the honest number
+// depends on what the fleet sends, not on what looks tidy — and a cap that has to be edited in code
+// is a cap someone raises to Infinity in an incident.
+const MAX_BODY_BYTES = Math.max(1, Number(process.env.MAX_BODY_MB || 64)) * 1024 * 1024;
+
+// Resolves the body, or `null` when it exceeded the cap — in which case the request has already
+// been answered 413 and the socket destroyed, so a caller does `if (!body) return;`. Returning a
+// TRUNCATED buffer instead would be worse than the problem: the router would forward a body that
+// silently lost its tail, and the model would answer a question nobody asked.
+const readBody = (req, res) => new Promise((resolve) => {
   const c = [];
-  req.on("data", (d) => c.push(d));
-  req.on("end", () => resolve(Buffer.concat(c)));
-  req.on("error", () => resolve(Buffer.concat(c)));
+  let size = 0, done = false;
+  const finish = (v) => { if (!done) { done = true; resolve(v); } };
+  req.on("data", (d) => {
+    size += d.length;
+    if (size > MAX_BODY_BYTES) {
+      if (res && !res.headersSent) {
+        res.writeHead(413, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { type: "invalid_request_error", code: "body_too_large",
+          message: `request body exceeds ${Math.round(MAX_BODY_BYTES / 1024 / 1024)} MB` } }));
+      }
+      req.destroy();
+      return finish(null);
+    }
+    c.push(d);
+  });
+  req.on("end", () => finish(Buffer.concat(c)));
+  req.on("error", () => finish(Buffer.concat(c)));
 });
 
 // Read a JSON request body for a control-plane route. Returns the parsed object, or null after
@@ -67,7 +98,7 @@ const readBody = (req) => new Promise((resolve) => {
 // An EMPTY body stays valid and yields {} — several routes are legitimately called with no payload,
 // and conflating "sent nothing" with "sent garbage" is the whole bug above.
 async function readJson(req, res) {
-  const body = await readBody(req);
+  const body = await readBody(req, res);
   if (!body || !body.length) return {};
   try { return JSON.parse(body.toString()); }
   catch { sendJson(res, 400, { error: "bad json" }); return null; }
