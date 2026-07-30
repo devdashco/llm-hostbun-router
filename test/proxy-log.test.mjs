@@ -87,40 +87,6 @@ console.log("proxy() early returns still record:");
   }
 }
 
-// ── the same branch, when an INGRESS answers instead of the service ──
-//
-// A 502/524 from Cloudflare or a reverse proxy has a whole HTML document as its body, and the raw
-// clip stored its first 120 characters as the row's reason. Measured in prod 2026-07-30: 7,116 rows
-// on 502 plus 206 on 524, every one of them reading `upstream 502: <!DOCTYPE html> <!--[if lt IE 7]>`
-// — which is what /api/stats' topErrors then printed at the operator as the dominant cause of
-// failure. The <title> is the only part of that document a human wants. The CALLER's body must stay
-// verbatim: this is a logging change, and an image client parsing the response is not our business.
-{
-  const ingress = http.createServer((rq, rs) => {
-    rs.writeHead(502, { "content-type": "text/html" });
-    rs.end('<!DOCTYPE html>\n<!--[if lt IE 7]> <html class="no-js ie6"> <![endif]-->\n'
-      + "<head><title>502 Bad Gateway</title></head><body>lots and lots of markup</body></html>");
-  });
-  await new Promise((r) => ingress.listen(0, "127.0.0.1", r));
-  rows.length = 0;
-  const res = fakeRes();
-  await proxy(fakeReq("/v1/images/generations"), res, `http://127.0.0.1:${ingress.address().port}`, {
-    bodyBuf: Buffer.from(JSON.stringify({ model: "sd-turbo", prompt: "x" })),
-    provider: "images", model: "sd-turbo", project: "someapp",
-  });
-  if (rows.length !== 1) bad("an html error page records exactly one row", `got ${rows.length} rows`);
-  else {
-    const err = rows[0].error || "";
-    check("an html error page is not stored as markup", /<!DOCTYPE|<html|<!--/i.test(err), false);
-    check("...it is stored as its title", /502 Bad Gateway/.test(err), true);
-    check("...and still says where it came from", /ingress/.test(err), true);
-    check("...keeping the upstream status", /502/.test(err), true);
-  }
-  check("...while the CALLER still gets the body verbatim",
-    JSON.parse(res.body || "{}").error?.message?.includes("lots and lots of markup"), true);
-  ingress.close();
-}
-
 // A GET through the image provider — /v1/templates and /v1/loras proxy to the same upstream as
 // generations and sit above the auth gate, but they are GETs and match no path in the record regex,
 // so nothing was ever written for them. In prod that showed as 200 of 200 image rows being

@@ -154,6 +154,37 @@ async function headroomCompress(bodyBuf, model, provider) {
 }
 
 
+// What to STORE as the reason a call failed. Three shapes arrive and only one of them is already
+// readable:
+//
+//   an error PAGE — when an ingress or CDN answers instead of the service, the body is a whole HTML
+//     document and clip() stored its first 120 characters, so /api/stats' topErrors read `upstream
+//     502: <!DOCTYPE html> <!--[if lt IE 7]>` and the Health tab printed that at the operator as the
+//     dominant cause. Measured in prod 2026-07-30: 7,322 such rows in 7 days. The <title> is the
+//     only part a human wants.
+//   an error OBJECT — Anthropic and crazyrouter both answer `{"error":{"type","message"}}`. That
+//     type is the actual answer ("overloaded_error", "rate_limit_error") and it was being thrown
+//     away entirely on the text paths, which recorded a bare `upstream 500` for 4,195 rows.
+//   anything else — clip it and move on.
+//
+// The CALLER is never affected by this: the upstream's own bytes are forwarded either way. This is
+// only what lands in the call log, where it has to be groupable.
+function upstreamReason(text) {
+  const msg = String(text || "").trim();
+  if (!msg) return "";
+  if (/^\s*(<!doctype html|<html[\s>])/i.test(msg)) {
+    const title = (msg.match(/<title[^>]*>([^<]{1,80})<\/title>/i) || [])[1];
+    return `html error page from the ingress${title ? `: ${title.trim()}` : ""}`;
+  }
+  try {
+    const j = JSON.parse(msg);
+    const e = j && (j.error || j);
+    const parts = [e && e.type, e && (e.message || e.detail)].filter((x) => typeof x === "string" && x);
+    if (parts.length) return clip(parts.join(": "));
+  } catch { /* not JSON — fall through */ }
+  return clip(msg);
+}
+
 async function proxy(req, res, base, opts = {}) {
   const { bodyBuf, injectKey, authToken, rewriteModel, model, provider, project } = opts;
   // `targetPath` overrides the path upstream while the call-log row keeps the path the CALLER used.
@@ -296,19 +327,7 @@ async function proxy(req, res, base, opts = {}) {
   if (curProvider === "images" && up.status >= 400) {
     const errText = await up.text().catch(() => "");
     const msg = errText.trim() || `image generation failed (${up.status})`;
-    // An error page is not an error message. When an ingress or a CDN answers instead of the
-    // service, the body is a whole HTML document, and `clip()` stores its first 120 characters as
-    // the reason — so /api/stats' topErrors reads `upstream 502: <!DOCTYPE html> <!--[if lt IE 7]>`
-    // for thousands of rows, and the Health tab prints that at the operator as the dominant cause.
-    // Measured in prod 2026-07-30: 7,116 rows on 502 plus 206 on 524, all of them that same blob.
-    // The <title> is the only part a human wants ("502 Bad Gateway" / "Origin unreachable"), so
-    // reduce to it and say where it came from. The CALLER still gets the body verbatim below —
-    // this only changes what the log stores.
-    const html = /^\s*(<!doctype html|<html[\s>])/i.test(msg);
-    const title = html ? (msg.match(/<title[^>]*>([^<]{1,80})<\/title>/i) || [])[1] : null;
-    const reason = html
-      ? `html error page from the ingress${title ? `: ${title.trim()}` : ""}`
-      : clip(msg);
+    const reason = upstreamReason(msg);
     if (recordThis) {
       recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0,
         usage: null, respContent: null, stopReason: null, error: `upstream ${up.status}: ${reason}` });
@@ -383,8 +402,12 @@ async function proxy(req, res, base, opts = {}) {
       const done = () => {
         const ex = isImage ? { usage: null, content: null, stopReason: null }
                            : extractResponseBody(Buffer.concat(chunks), isStream);
+        // The body is ALREADY buffered here for every non-image provider, so the reason costs
+        // nothing extra to extract — it was simply never looked at, and 4,195 rows in the last 7
+        // days say only `upstream 500`. Nothing about what the caller receives changes.
+        const why = up.status >= 400 ? upstreamReason(Buffer.concat(chunks).toString("utf8")) : "";
         recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0, usage: ex.usage, respContent: ex.content,
-          stopReason: ex.stopReason, error: up.status >= 400 ? `upstream ${up.status}` : null });
+          stopReason: ex.stopReason, error: up.status >= 400 ? `upstream ${up.status}${why ? `: ${why}` : ""}` : null });
       };
       r.on("end", done); r.on("error", done);
     }
