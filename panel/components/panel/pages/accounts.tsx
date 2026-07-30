@@ -137,6 +137,7 @@ export function ProjectPins() {
 }
 
 export function Accounts() {
+  const { state } = useApp();
   const [d, setD] = useState<any>(null);
   const [now, setNow] = useState(0);
   const [off, setOff] = useState(0);
@@ -310,6 +311,18 @@ export function Accounts() {
           <CardDescription>
             {d ? `${s.accounts} subscription${s.accounts === 1 ? "" : "s"} · ${d.advertisedModels} model ids · usage windows + who spends each` : "the Claude Max subscriptions"}
           </CardDescription>
+          {/* The pins below are not the whole story when the auto strategy is on: an APP consumer is
+              served by whichever usable account resets soonest, so the account a project is pinned to
+              is not the account its traffic hits. That state lived only in /api/state and was rendered
+              nowhere — an operator reading the pins would have drawn the wrong conclusion about where
+              the spend went, which is the one thing this page is for. Devs keep their pins either way. */}
+          {state.accountStrategy === "soonest-weekly-reset" ? (
+            <div className="mt-1 text-meta text-warn">
+              auto account is ON — <b>app</b> consumers are served by the usable subscription whose weekly window
+              resets soonest{state.autoAccount ? <> (currently <b className="font-mono">{state.autoAccount}</b>)</> : ", but no weekly reading is available yet, so each pin decides"}.
+              Developer pins are never auto-hopped.
+            </div>
+          ) : null}
           <CardAction>
             <Button variant="outline" size="sm" disabled={!!busy} onClick={() => refreshLimits(null)} title="ping each subscription once and read its live 5h/7d usage window">
               {busy === "all" ? "Refreshing…" : "↻ Refresh limits (live)"}
