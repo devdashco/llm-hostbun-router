@@ -291,6 +291,16 @@ async function addConsumer({ name, kind, developer, note }) {
     throw new RegistryError("a machine belongs to a developer — developer required");
   requireDb();
 
+  // The same collision from the other side: registering a real consumer under a name that already
+  // exists as an alias means every self-asserted call under that name keeps resolving to the alias
+  // target, so the new consumer looks registered and silently never receives its own traffic.
+  const aliased = (await dbRows("SELECT target FROM consumer_aliases WHERE alias=$1", [n]))[0];
+  if (aliased) {
+    throw new RegistryError(
+      `'${n}' is an alias for '${aliased.target}' — its traffic would keep landing there. ` +
+      `Remove the alias first (POST /api/registry/alias {from:"${n}", to:null}).`, 409);
+  }
+
   let devId = null;
   if (kind === "machine") {
     const d = cleanName(developer);
@@ -360,6 +370,20 @@ async function setAlias({ from, to }) {
   }
   const t = cleanName(to);
   if (t === f) throw new RegistryError("an alias to itself does nothing");
+  // An alias whose NAME is a live consumer shadows it. Every guard below validates the TARGET; this
+  // one validates the alias itself, and without it `{from:"acme", to:"othercorp"}` answered 200 and
+  // silently re-attributed every self-asserted `acme` call to othercorp — the registry still listing
+  // `acme` with its key, `normalizeConsumerPath()` resolving the alias before ever asking whether
+  // the name is registered. Key-based auth is unaffected (the consumer comes from the key, never
+  // through an alias), so this is attribution, not a credential bypass: exactly the kind of thing
+  // that is discovered months later in a cost review. An alias exists to fold a LEGACY name onto a
+  // real one — if the name is real, there is nothing to fold.
+  const shadows = (await dbRows("SELECT 1 FROM consumers WHERE name=$1 AND disabled_at IS NULL", [f]))[0];
+  if (shadows) {
+    throw new RegistryError(
+      `'${f}' is a registered consumer — aliasing it would silently bill its traffic to '${t}'. ` +
+      `Alias a legacy name ONTO a consumer, not a consumer's own name away.`, 409);
+  }
   const target = parseConsumer(t);
   const known = (await dbRows("SELECT 1 FROM consumers WHERE name=$1 AND disabled_at IS NULL", [target.consumer]))[0];
   // An alias onto an unregistered name is an outage disguised as a cleanup: it resolves to something

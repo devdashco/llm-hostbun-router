@@ -33,8 +33,20 @@ const { CFG } = req_(join(ROOT, "src/config.js"));
 let failOn = null;          // a regex: which query dies this round
 let keyRows = [{ id: "deadbeef", consumer_id: 1, hash: "h", created_at: 1, last_used_at: 0, revoked_at: null, note: null }];
 let consumerNote = null;
+let registered = new Set();     // which names the guards should see as live consumers
+let aliasOf = new Map();        // which names are already an alias
+const aliasWrites = [];         // params of every INSERT INTO consumer_aliases that got through
 db.dbUp = () => true;
-db.dbExec = async (sql) => {
+// dbRows is what setAlias/addConsumer read their guards through, and it must be stubbed BEFORE the
+// require for the same reason dbExec is. (Installed after, the first time — the alias block below
+// failed against the real dbRows and reported the wrong guard.)
+db.dbRows = async (sql, params = []) => {
+  if (/FROM consumers WHERE name=\$1/.test(sql)) return registered.has(params[0]) ? [{ id: 1 }] : [];
+  if (/FROM consumer_aliases WHERE alias=\$1/.test(sql)) return aliasOf.has(params[0]) ? [{ target: aliasOf.get(params[0]) }] : [];
+  return [];
+};
+db.dbExec = async (sql, params) => {
+  if (/INSERT INTO consumer_aliases/.test(sql)) { aliasWrites.push(params); return { rows: [] }; }
   if (failOn && failOn.test(sql)) throw new Error("ECONNRESET");
   if (/FROM developers/.test(sql)) return { rows: [{ id: 9, name: "philip" }] };
   if (/FROM consumers/.test(sql)) return { rows: [{ id: 1, name: "acme", kind: "project", developer_id: null, note: consumerNote, allow_ua: null }] };
@@ -75,6 +87,46 @@ consumerNote = "back";
 await REG.refresh();
 check("a successful refresh still applies — including a genuine key removal", keysNow().length, 0);
 check("...and the row it did read", ((CFG.consumers || {}).acme || {}).note, "back");
+
+// ── an alias may not shadow a live consumer ─────────────────────────────────────────────────────
+// Every guard in setAlias validated the TARGET. Nothing checked the alias NAME, so
+// {from:"acme", to:"othercorp"} answered 200 while `acme` was still a registered consumer holding a
+// key — and from then on every self-asserted `acme` call was attributed to othercorp, because
+// normalizeConsumerPath() resolves aliases before asking whether the name is registered. Key-based
+// auth is unaffected (the consumer comes from the key), so it is an attribution hijack: the kind of
+// thing found months later in a cost review, if at all.
+console.log("\nalias collisions:");
+{
+  registered = new Set(["acme", "othercorp"]);
+  let err = null;
+  try { await REG.setAlias({ from: "acme", to: "othercorp" }); } catch (e) { err = e; }
+  if (!err) bad("aliasing a live consumer is refused", "it succeeded — acme's self-asserted traffic now bills othercorp");
+  else {
+    ok("aliasing a live consumer is refused");
+    check("...as a conflict, not a validation error", err.status, 409);
+    check("...and nothing was written", aliasWrites.length, 0);
+    if (/registered consumer/.test(err.message)) ok("...saying why, and what an alias is for");
+    else bad("the refusal explains itself", err.message);
+  }
+  // A LEGACY name — not registered — is exactly what an alias is for, and must still work.
+  err = null;
+  try { await REG.setAlias({ from: "old-name", to: "othercorp" }); } catch (e) { err = e; }
+  if (err) bad("a legacy name can still be aliased onto a real consumer", err.message);
+  else { ok("a legacy name can still be aliased onto a real consumer"); check("...and it was written", aliasWrites.length, 1); }
+
+  // The collision from the other side: registering a consumer whose name is already an alias means
+  // its traffic keeps landing on the alias target while the registry says it exists.
+  aliasOf = new Map([["ghost", "othercorp"]]);
+  err = null;
+  try { await REG.addConsumer({ name: "ghost", kind: "project" }); } catch (e) { err = e; }
+  if (!err) bad("registering over an existing alias is refused", "it succeeded — ghost would never receive its own traffic");
+  else {
+    ok("registering over an existing alias is refused");
+    check("...as a conflict", err.status, 409);
+    if (/alias for 'othercorp'/.test(err.message)) ok("...naming where the traffic is going instead");
+    else bad("the refusal names the target", err.message);
+  }
+}
 
 console.log(`\n${fail ? "FAIL" : "PASS"} — ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
