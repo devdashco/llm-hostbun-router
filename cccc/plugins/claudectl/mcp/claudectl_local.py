@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""claudectl — the ONE local stdio MCP.
+"""claudectl — the ONE local MCP, served over loopback HTTP by ONE daemon per box.
 
 Consolidation: the plugin used to ship TWO servers — a remote HTTP `claudectl`
 (account/limit/proxy tools, deployed container) and a local stdio `ccc-terminals`
-(terminals + plugin/marketplace mgmt). This merges both into a SINGLE local stdio
+(terminals + plugin/marketplace mgmt). This merges both into a SINGLE local
 server named `claudectl` that installs on your machine and provides the whole SDK:
 
   * account / limit / proxy tools  — reused verbatim from `server/claudectl_server.py`
@@ -14,9 +14,22 @@ server named `claudectl` that installs on your machine and provides the whole SD
   * terminals + plugin/marketplace tools — reused from `ccc_terminals_mcp.py`
     (local cmux + ssh→tmux; a remote container could never reach these).
 
-Same FastMCP instance, one `tools/list`. The container deploy of `server/` is
-unaffected — it still runs the same account tools over HTTP for anyone who wants
-the remote gateway. This file is what the plugin's `.mcp.json` launches locally.
+Same FastMCP instance, one `tools/list`.
+
+⚠ IT IS NOT stdio ANY MORE, AND IT MUST NOT GO BACK. Claude Code forks a stdio
+server once per open session, and this one is a `mcp` + `httpx` python: measured
+on pbox 2026-07-30 at **50 live processes, 0.65 GB PSS**, before a single tool
+call — the biggest per-session MCP on the box. It is now ONE daemon
+(`claudectl-mcp.service` / the launchd twin, installed by install.sh) that every
+session shares over `http://127.0.0.1:9150/mcp`.
+
+⚠ AND IT CANNOT BE HOSTED like the other fleet MCPs (mcp-rules §1 wants a real
+URL, not loopback). Two thirds of these tools read and write THIS box —
+`~/.claude` plugin/marketplace/mcp state, the local cmux and tmux panes — so a
+container on hostbun would answer about the wrong machine. Loopback is the
+correct address here; the rule it must still honour is "one process per box, not
+one per session". The daemon is `Restart=always`, so a dead one is a visible ✘ in
+`claude mcp list` rather than a silent leak.
 
 Deps: `mcp` + `httpx` (installed by install.sh). If they're missing we fall back
 to the pure-stdlib terminals-only server so the plugin never hard-fails.
@@ -179,12 +192,34 @@ def _register_terminal_tools() -> None:
         return T.op_reload(scope, apply, surface, delay)
 
 
+def _serve_http() -> None:
+    """One daemon per box, loopback only. See the module docstring for why this
+    is http-on-127.0.0.1 rather than either stdio or a hosted URL."""
+    import uvicorn
+    from _auth import BearerMiddleware
+
+    host = os.environ.get("CLAUDECTL_LOCAL_HOST", "127.0.0.1")
+    port = int(os.environ.get("CLAUDECTL_LOCAL_PORT", "9150"))
+    # ⚠ Bind loopback, and STILL require the bearer. These tools install plugins,
+    # rewrite ~/.claude and type into terminals — "only local processes can reach
+    # it" is not an access decision on a box that runs dozens of agents.
+    os.environ.setdefault("STATIC_BEARER", "ddash")
+    sys.stderr.write(f"[claudectl] serving http://{host}:{port}/mcp\n")
+    uvicorn.run(BearerMiddleware(mcp.streamable_http_app()), host=host, port=port)
+
+
 if __name__ == "__main__":
-    if _MERGED:
-        _register_terminal_tools()
-        mcp.run(transport="stdio")
-    else:
+    if not _MERGED:
         # Deps missing — run the self-contained stdlib terminals server so the
         # plugin still provides terminal control (account tools just absent).
+        # stdio only: that fallback has no HTTP app to serve.
         import ccc_terminals_mcp as T
         raise SystemExit(T.main())
+
+    _register_terminal_tools()
+    # `stdio` stays reachable for a one-off debug run (`--stdio`), but it is NOT
+    # what the plugin launches any more — see the docstring.
+    if "--stdio" in sys.argv or os.environ.get("CLAUDECTL_LOCAL_TRANSPORT") == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        _serve_http()

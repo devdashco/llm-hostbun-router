@@ -17,16 +17,22 @@ FLEET="pbox:/home/philip/.llm-hostbun-router wmac:/Users/williamwiklund/.llm-hos
 
 cd "$(dirname "$0")"   # the cccc/ dir
 
-# Keep the plugin's BUNDLED account-tool server in sync with the canonical one.
-# The plugin ships as a git-subdir of only cccc/plugins/claudectl/, so cccc/server/
-# isn't in the plugin cache — claudectl_local.py imports a bundled copy. Refresh it
-# here so it can never drift from server/claudectl_server.py.
-if ! cmp -s server/claudectl_server.py plugins/claudectl/mcp/claudectl_server.py; then
-  cp server/claudectl_server.py plugins/claudectl/mcp/claudectl_server.py
-  git add plugins/claudectl/mcp/claudectl_server.py
-  git commit -q -m "chore(plugin): resync bundled claudectl_server.py" || true
-  echo "→ resynced bundled claudectl_server.py"
-fi
+# Keep the plugin's BUNDLED copies in sync with the canonical ones. The plugin
+# ships as a git-subdir of only cccc/plugins/claudectl/, so cccc/server/ isn't in
+# the plugin cache — claudectl_local.py imports bundled copies. Refresh them here
+# so they can never drift from server/.
+#   claudectl_server.py — the account/proxy tools
+#   _auth.py            — BearerMiddleware, now needed LOCALLY too: the plugin
+#                         serves loopback HTTP instead of forking a stdio server
+#                         per session, and that listener is still bearer-gated.
+for f in claudectl_server.py _auth.py; do
+  if ! cmp -s "server/$f" "plugins/claudectl/mcp/$f"; then
+    cp "server/$f" "plugins/claudectl/mcp/$f"
+    git add "plugins/claudectl/mcp/$f"
+    git commit -q -m "chore(plugin): resync bundled $f" || true
+    echo "→ resynced bundled $f"
+  fi
+done
 
 echo "→ push origin master"
 git push origin master

@@ -49,10 +49,33 @@ for (const m of MODULES) {
 // in telemetry.js from the 2026-07-10 split until 2026-07-26 — the one bug this file exists to
 // catch, invisible to it for sixteen days. Bounding each class to a line caps the damage of a
 // mispaired quote at that line. Template literals legitimately span lines and stay unbounded.
+// A template literal is blanked EXCEPT its ${…} interpolations, which are code and are exactly
+// where this file's blind spot was: `${clip(x)}` is a cross-module call, and blanking the whole
+// literal made it invisible to both passes — the unbound-ReferenceError class this test exists to
+// catch, reintroduced by one syntax shape. This codebase logs almost entirely in template literals.
+const keepInterpolations = (lit) => {
+  let out = "`", i = 1;
+  while (i < lit.length - 1) {
+    if (lit[i] === "\\") { i += 2; continue; }
+    if (lit[i] === "$" && lit[i + 1] === "{") {
+      let depth = 1, j = i + 2;
+      while (j < lit.length && depth) {
+        if (lit[j] === "{") depth++;
+        else if (lit[j] === "}") depth--;
+        j++;
+      }
+      out += lit.slice(i, j);           // the expression, verbatim and scannable
+      i = j;
+      continue;
+    }
+    i++;                                // literal text: dropped, as before
+  }
+  return out + "`";
+};
 const strip = (s) => s
   .replace(/\/\/.*$/gm, "")
   .replace(/\/\*[\s\S]*?\*\//g, "")
-  .replace(/`(?:\\[\s\S]|[^`\\])*`/g, "``")
+  .replace(/`(?:\\[\s\S]|[^`\\])*`/g, keepInterpolations)
   .replace(/"(?:\\.|[^"\\\n])*"/g, '""')
   .replace(/'(?:\\.|[^'\\\n])*'/g, "''");
 
