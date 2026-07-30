@@ -66,10 +66,11 @@ export function CallLog() {
     [qs, pageSize],
   );
   useEffect(() => {
+    // Every filter gotoCalls() can be handed must be read back here, or the link navigates and then
+    // silently shows an unfiltered log — which reads as "these are the calls you asked for".
     const sp = new URLSearchParams(window.location.search);
-    const pr = sp.get("project"),
-      qq = sp.get("q");
-    if (pr || qq) setF((x: any) => ({ ...x, project: pr || "", q: qq || "" }));
+    const pick = ["project", "q", "provider", "model", "key", "status"].filter((k) => sp.get(k));
+    if (pick.length) setF((x: any) => ({ ...x, ...Object.fromEntries(pick.map((k) => [k, sp.get(k) || ""])) }));
   }, []);
   useEffect(() => {
     load(0);

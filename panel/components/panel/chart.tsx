@@ -4,7 +4,7 @@ import { nfmt, fmtTime, seriesColor, GRID, AXIS, DANGER } from "@/lib/format";
 
 // Stacked-bar time chart — a faithful port of admin/ui/core.js buildChart. Builds an SVG string and
 // renders it via dangerouslySetInnerHTML (same as the old panel); pure math, no charting dep.
-const METRIC_LABEL: Record<string, string> = { tok: "tokens", n: "calls", err: "errors" };
+const METRIC_LABEL: Record<string, string> = { tok: "tokens", bil: "billable tokens", n: "calls", err: "errors" };
 
 function buildChart(d: any, metric: string, opts: { by?: string; H?: number }) {
   const pts = d.points || [];
@@ -20,7 +20,7 @@ function buildChart(d: any, metric: string, opts: { by?: string; H?: number }) {
     padT = 10,
     plotH = H - padB - padT,
     plotW = W - padL - 10;
-  const field = metric === "tok" ? "tok" : "n";
+  const field = metric === "tok" ? "tok" : metric === "bil" ? "bil" : "n";
   const stackVal = (p: any, name: string) => (metric === "err" ? (name === "__err" ? p.totalErr : 0) : p[field][name] || 0);
   const useSeries = metric === "err" ? ["__err"] : series;
   const totals = pts.map((p: any) => useSeries.reduce((a: number, nm: string) => a + stackVal(p, nm), 0));

@@ -67,6 +67,10 @@ export const ORANGE = "oklch(0.730 0.160 52)";
 export const VIOLET = "oklch(0.680 0.180 300)";
 export const GRID = "oklch(0.278 0.006 285)";
 export const AXIS = "oklch(0.560 0.010 285)";
+// The "cached" half of a token bar. Deliberately achromatic: a cache read is not another category
+// competing for identity, it is the part of the bar that did NOT cost anything, and giving it a hue
+// makes it read as a second consumer. Sits above GRID so it is visible on the track.
+export const CACHED_FILL = "oklch(0.400 0.008 285)";
 
 export const PALETTE = [
   ACCENT, OK, ORANGE, WARN, VIOLET, DANGER,

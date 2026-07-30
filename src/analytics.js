@@ -25,15 +25,22 @@ async function usageRollup(req, res) {
   const WIN = { "1h": 36e5, "24h": 864e5, "7d": 6048e5, "30d": 2592e6 };
   const win = WIN[q.win] ? q.win : "24h";
   const since = Date.now() - WIN[win];
+  // `billable` is what actually drains a Max account: a cache READ costs ~0.1x and barely moves the
+  // 5h/7d window, so raw total_tokens ranks the wrong consumer first. Measured 2026-07-29: wmac was
+  // the fleet's largest by raw tokens (78.2M / $394 list) and 6x SMALLER than a classifier bot on
+  // this axis (2.8M, 96% cached). routing.js already quotas on exactly this expression.
   const rows = await dbRows(
     `SELECT project, split_part(key_label, ':', 2) AS acct, provider,
        COUNT(*)::int AS calls, COALESCE(SUM(total_tokens),0)::bigint AS tokens,
+       COALESCE(SUM(GREATEST(total_tokens - cache_read, 0)),0)::bigint AS billable,
+       COALESCE(SUM(cache_read),0)::bigint AS cached,
        COUNT(*) FILTER (WHERE status >= 400)::int AS errors
      FROM calls WHERE ts >= $1 AND project IS NOT NULL AND project <> '' GROUP BY 1,2,3`, [since]);
   const reg = CFG.consumers || {};
   const add = (m, k, r) => {
-    const e = m.get(k) || { calls: 0, tokens: 0, errors: 0 };
-    e.calls += r.calls; e.tokens += Number(r.tokens); e.errors += r.errors; m.set(k, e);
+    const e = m.get(k) || { calls: 0, tokens: 0, billable: 0, cached: 0, errors: 0 };
+    e.calls += r.calls; e.tokens += Number(r.tokens); e.errors += r.errors;
+    e.billable += Number(r.billable); e.cached += Number(r.cached); m.set(k, e);
   };
   const byKind = new Map(), byOwner = new Map(), byConsumer = new Map(), byAcctKind = new Map();
   const jobsOf = new Map();
@@ -49,7 +56,9 @@ async function usageRollup(req, res) {
     if (r.acct) add(byAcctKind, `${r.acct}|${kind}`, r);
     if (job) { if (!jobsOf.has(consumer)) jobsOf.set(consumer, new Map()); add(jobsOf.get(consumer), job, r); }
   }
-  const out = (m) => [...m.entries()].map(([k, v]) => ({ key: k, ...v })).sort((a, b) => b.tokens - a.tokens);
+  // Ordered by BILLABLE, not raw tokens — see the query comment. Ranking a mostly-cached consumer
+  // first is how "who is burning the pool" gets answered with the wrong name.
+  const out = (m) => [...m.entries()].map(([k, v]) => ({ key: k, ...v })).sort((a, b) => b.billable - a.billable);
   return sendJson(res, 200, {
     dbReady: true, win, since,
     byKind: out(byKind), byOwner: out(byOwner),
@@ -58,7 +67,7 @@ async function usageRollup(req, res) {
       owner: reg[c.key] && reg[c.key].owner || null,
       jobs: jobsOf.has(c.key) ? out(jobsOf.get(c.key)) : [],
     })),
-    byAccountKind: out(byAcctKind).map((r) => { const [account, kind] = r.key.split("|"); return { account, kind, calls: r.calls, tokens: r.tokens, errors: r.errors }; }),
+    byAccountKind: out(byAcctKind).map((r) => { const [account, kind] = r.key.split("|"); return { account, kind, calls: r.calls, tokens: r.tokens, billable: r.billable, cached: r.cached, errors: r.errors }; }),
   });
 }
 
@@ -71,11 +80,13 @@ async function seriesHistory(req, res) {
     const q = url.parse(req.url, true).query;
     const WINDOWS = { "15m": 900000, "1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000 };
     const winKey = (q.window in WINDOWS || q.window === "all") ? q.window : "24h";
-    const by = ["provider", "project", "consumer", "model"].includes(q.by) ? q.by : "provider";
+    const by = ["provider", "project", "consumer", "model", "owner"].includes(q.by) ? q.by : "provider";
     // consumer folds jobs: `promopilot:generatetext` and `promopilot:l1_metadata` chart as one
     // series, so one busy consumer's jobs don't eat three of the top-8 series slots.
+    // `owner` groups the same column and then maps consumer → the person who owns it, in JS: the
+    // registry lives in CFG, not in Postgres, so there is nothing to join against.
     const groupCol = by === "provider" ? "provider" : by === "model" ? "req_model"
-      : by === "consumer" ? "split_part(COALESCE(NULLIF(project,''),'(none)'), ':', 1)"
+      : (by === "consumer" || by === "owner") ? "split_part(COALESCE(NULLIF(project,''),'(none)'), ':', 1)"
       : "COALESCE(NULLIF(project,''),'(none)')";
     const oldestRow = await dbRow("SELECT MIN(ts) AS t FROM calls");
     const oldest = (oldestRow && oldestRow.t) || Date.now();
@@ -84,26 +95,47 @@ async function seriesHistory(req, res) {
     // bucket width: aim for ~60 buckets, snapped to a sane floor of 1 minute.
     // bucketMs is derived here, never caller-supplied, so interpolating it is not an injection path.
     const bucketMs = Math.max(60000, Math.round(span / 60 / 60000) * 60000);
-    const rows = await dbRows(`SELECT (ts/${bucketMs}) AS b, ${groupCol} AS g,
+    let rows = await dbRows(`SELECT (ts/${bucketMs}) AS b, ${groupCol} AS g,
       COUNT(*)::int AS n, COALESCE(SUM(total_tokens),0) AS tok,
+      COALESCE(SUM(GREATEST(total_tokens - cache_read, 0)),0) AS bil,
       COUNT(*) FILTER (WHERE status>=400)::int AS err
       FROM calls WHERE ts >= $1 GROUP BY b, g`, [since]);
-    // top-8 series by total tokens; everything else → "other".
-    const totals = {}; for (const r of rows) totals[r.g] = (totals[r.g] || 0) + r.tok;
+    // by=owner keeps ONLY traffic that belongs to a person — a dev-kind consumer with an owner.
+    // Folding apps into one "(not a person)" series was the other option and it makes the chart
+    // useless: autonoma alone runs ~10x every developer combined, so every human is a sliver at the
+    // bottom of the stack. What is dropped is reported as `excluded` instead of vanishing.
+    let excluded = null;
+    if (by === "owner") {
+      const reg = CFG.consumers || {};
+      excluded = { calls: 0, tokens: 0 };
+      rows = rows.filter((r) => {
+        const e = reg[r.g];
+        const own = e && e.kind === "dev" ? e.owner : null;
+        if (!own) { excluded.calls += r.n; excluded.tokens += Number(r.tok); return false; }
+        r.g = own; return true;
+      });
+    }
+    // top-8 series by total tokens; everything else → "other". by=owner ranks on BILLABLE instead,
+    // for the same reason usageRollup does — and because series order IS colour order: rank a person
+    // 1st here on raw tokens while the Developers card ranks them 2nd on billable, and the same
+    // human is blue in one card and green in the other, on the same screen.
+    const rank = (r) => (by === "owner" ? Number(r.bil) : r.tok);
+    const totals = {}; for (const r of rows) totals[r.g] = (totals[r.g] || 0) + rank(r);
     const top = Object.entries(totals).sort((a, b2) => b2[1] - a[1]).slice(0, 8).map(([k]) => k);
     const topSet = new Set(top); const hasOther = Object.keys(totals).length > top.length;
     const series = hasOther ? [...top, "other"] : top;
-    const points = new Map(); // bucketStart -> {t, tok:{}, n:{}, totalTok, totalN, totalErr}
+    const points = new Map(); // bucketStart -> {t, tok:{}, bil:{}, n:{}, totalTok, totalN, totalErr}
     for (const r of rows) {
       const t = r.b * bucketMs;
       let p = points.get(t);
-      if (!p) { p = { t, tok: {}, n: {}, totalTok: 0, totalN: 0, totalErr: 0 }; points.set(t, p); }
+      if (!p) { p = { t, tok: {}, bil: {}, n: {}, totalTok: 0, totalN: 0, totalErr: 0 }; points.set(t, p); }
       const key = topSet.has(r.g) ? r.g : "other";
       p.tok[key] = (p.tok[key] || 0) + r.tok; p.n[key] = (p.n[key] || 0) + r.n;
+      p.bil[key] = (p.bil[key] || 0) + Number(r.bil);
       p.totalTok += r.tok; p.totalN += r.n; p.totalErr += r.err;
     }
     const out = [...points.values()].sort((a, b2) => a.t - b2.t);
-    return sendJson(res, 200, { dbReady: true, window: winKey, by, bucketMs, since, series, points: out });
+    return sendJson(res, 200, { dbReady: true, window: winKey, by, bucketMs, since, series, points: out, excluded });
   } catch (e) { return sendJson(res, 500, { error: e.message }); }
 }
 
