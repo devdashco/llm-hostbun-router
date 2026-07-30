@@ -26,6 +26,12 @@ default:
 
 # One pipeline per push, plus merge-request pipelines — never both for the same commit.
 workflow:
+  # Newest push wins. `conservative`, not `interruptible`: cancel only while no
+  # NON-interruptible job has started, so a pipeline that reached a deploy or a
+  # migration rides to completion. (bluebut lost eighteen pipelines and froze prod
+  # on `interruptible`, 2026-07-25.)
+  auto_cancel:
+    on_new_commit: conservative
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
