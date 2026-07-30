@@ -87,7 +87,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (20 suites, 512 checks, ~60s)
+## Tests — `npm test` (21 suites, ~535 checks, ~60s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -257,6 +257,18 @@ so this is recorded as a fact with a date rather than automated.
 - `test/module-size.test.mjs` — the 500-line module budget, as a ratchet. `server.js` and `admin.js`
   are already over and carry ceilings they may only shrink; a file that shrinks without lowering its
   ceiling fails too, with the number to write.
+
+- `test/test-helpers.test.mjs` — a suite may not call an assertion helper it does not define. No two
+  suites here agree on the names — `check(name, actual, expected)` in some, `check(name, bool)` in
+  others, `ok`/`bad` in nine files, `ok`/`fail` in four, `eq` in one, and in `waste.test.mjs` `fail`
+  is a COUNTER. That is fine; each suite is standalone. What is not fine is that a missing helper
+  throws only on the line that calls it, and that line is usually the FAILING branch — so the check
+  reads green until the day it should go red, and then crashes instead of reporting. It happened
+  three times in one session, and the first probe of a real bug read "0 failures" because of it.
+  Narrow on purpose: only that vocabulary, and not `is`/`same`/`must`, which are English as often as
+  code. It strips comments but NOT strings — every string-aware strip tried swallowed whole files
+  through the backticks inside their own regex literals, and a blanked file is a guaranteed false
+  negative in a check whose entire value is that a green result means something.
 
 - `test/docs-claims.test.mjs` — what the PUBLIC docs claim, checked against the code, plus the scan
   that stops a live password/token/key/DSN being published. Split out of `docs.test.mjs` so it runs
