@@ -66,5 +66,30 @@ for (const rel of files) {
   }
 }
 
+// ── a stub must precede the require of whatever destructures it ─────────────────────────────────
+// `src/http.js`, `src/registry.js`, `src/imagetemplates.js` and friends do
+// `const { recordCall } = require("./db")` at module load, so a test that patches `db.recordCall`
+// AFTER requiring them patches something nobody is holding. The failure is silent in the worst way:
+// the suite runs, the assertions read an empty array, and you conclude the code under test never
+// recorded anything. It cost three debugging detours in one session — once reporting a real bug as
+// "0 failures", once failing a recovery case for the wrong reason, once blaming the wrong guard.
+//
+// The rule, statically checkable: no `db.<fn> = ` assignment may appear after the first require of a
+// src module other than db.js and config.js (those two are the stub's own dependencies).
+console.log("\ndb stubs are installed before the module that captures them:");
+for (const rel of files.filter((f) => f.startsWith("test/"))) {
+  const lines = readFileSync(join(ROOT, rel), "utf8").split("\n");
+  const firstConsumer = lines.findIndex((l) =>
+    /req_?\(join\(ROOT, "(src\/|server\.js)/.test(l) && !/src\/(db|config)\.js/.test(l));
+  const late = lines.map((l, i) => [l, i]).filter(([l, i]) =>
+    /^\s*db\.[a-zA-Z]+\s*=/.test(l) && firstConsumer >= 0 && i > firstConsumer);
+  if (late.length) {
+    bad(`${rel} stubs db AFTER requiring the module that captures it`,
+      `line ${late[0][1] + 1}: ${late[0][0].trim().slice(0, 60)} — the require on line ${firstConsumer + 1} already destructured it, so this patch is invisible and the assertions below will read whatever the real function does`);
+  } else if (lines.some((l) => /^\s*db\.[a-zA-Z]+\s*=/.test(l))) {
+    ok(`${rel} — stubs first, then requires`);
+  }
+}
+
 console.log(`\n${failures ? "FAIL" : "PASS"} — ${pass} passed, ${failures} failed`);
 process.exit(failures ? 1 : 0);
