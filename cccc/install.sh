@@ -104,22 +104,83 @@ if [ ! -s "$MACHINE_FILE" ]; then
 fi
 
 # --- 2a. the local `claudectl` MCP ships WITH THE PLUGIN -------------------
-# The single local stdio MCP `claudectl` (mcp/claudectl_local.py via
-# mcp/claudectl_launch.sh, ${CLAUDE_PLUGIN_ROOT}-relative) merges the account/limit/
-# proxy tools (server/, httpx -> llm.hostbun.cc) with terminals + plugin/mcp mgmt.
-# Needs mcp+httpx for the account half; installs best-effort, else degrades to
-# terminals-only. Any box that installs the plugin gets it — no per-machine add.
+# The single local MCP `claudectl` (mcp/claudectl_local.py) merges the account/
+# limit/proxy tools (server/, httpx -> llm.hostbun.cc) with terminals + plugin/mcp
+# mgmt. Needs mcp+httpx+uvicorn; installs best-effort, else degrades to a
+# stdlib terminals-only stdio server. Any box that installs the plugin gets it.
+#
+# ⚠ ONE DAEMON PER BOX, NOT ONE PER SESSION. It used to be a stdio server, which
+# Claude Code forks per open session: measured on pbox at 50 processes / 0.65 GB
+# before a tool call. It now serves loopback HTTP (see claudectl_local.py) and
+# the plugin's .mcp.json points at that URL, so the unit below IS the server —
+# without it the MCP is a visible ✘ in `claude mcp list`.
 if command -v python3 >/dev/null 2>&1; then
-  if ! python3 -c 'import mcp, httpx' >/dev/null 2>&1; then
-    python3 -m pip install --user --quiet mcp httpx >/dev/null 2>&1 \
-      || python3 -m pip install --user --quiet --break-system-packages mcp httpx >/dev/null 2>&1 \
+  if ! python3 -c 'import mcp, httpx, uvicorn' >/dev/null 2>&1; then
+    python3 -m pip install --user --quiet mcp httpx 'uvicorn[standard]' >/dev/null 2>&1 \
+      || python3 -m pip install --user --quiet --break-system-packages mcp httpx 'uvicorn[standard]' >/dev/null 2>&1 \
       || true
-    if python3 -c 'import mcp, httpx' >/dev/null 2>&1; then
-      say "installed mcp+httpx — claudectl MCP serves the full account+terminals SDK"
+    if python3 -c 'import mcp, httpx, uvicorn' >/dev/null 2>&1; then
+      say "installed mcp+httpx+uvicorn — claudectl MCP serves the full account+terminals SDK"
     else
-      say "note: couldn't install mcp+httpx — claudectl MCP serves terminals-only until deps exist"
+      say "note: couldn't install mcp+httpx+uvicorn — claudectl MCP serves terminals-only until deps exist"
     fi
   fi
+fi
+
+# --- 2b. the claudectl MCP daemon (one per box) ----------------------------
+CLAUDECTL_MCP_PORT="${CLAUDECTL_LOCAL_PORT:-9150}"
+# Resolve the INSTALLED plugin copy — that is what `.mcp.json` points a session
+# at, and running a different checkout here would serve a different tool set
+# than the one the plugin promises.
+CLAUDECTL_MCP_ENTRY=""
+for c in "$HOME"/.claude/plugins/cache/*/claudectl/*/mcp/claudectl_launch.sh \
+         "$DIR/plugins/claudectl/mcp/claudectl_launch.sh"; do
+  [ -f "$c" ] && CLAUDECTL_MCP_ENTRY="$c"
+done
+if [ "${CLAUDECTL_NO_MCP_DAEMON:-0}" = "1" ] || [ -z "$CLAUDECTL_MCP_ENTRY" ]; then
+  [ -n "$CLAUDECTL_MCP_ENTRY" ] || say "note: no installed claudectl plugin found — MCP daemon not installed"
+elif [ "$(uname -s)" = "Darwin" ]; then
+  PLIST="$HOME/Library/LaunchAgents/co.devdash.claudectl-mcp.plist"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>co.devdash.claudectl-mcp</string>
+  <key>ProgramArguments</key><array><string>/bin/sh</string><string>$CLAUDECTL_MCP_ENTRY</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>CLAUDECTL_LOCAL_PORT</key><string>$CLAUDECTL_MCP_PORT</string>
+    <key>STATIC_BEARER</key><string>ddash</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict></plist>
+PLISTEOF
+  launchctl unload "$PLIST" >/dev/null 2>&1 || true
+  launchctl load "$PLIST" >/dev/null 2>&1 \
+    && say "claudectl MCP daemon on :$CLAUDECTL_MCP_PORT (launchd)" \
+    || say "note: launchctl load failed for the claudectl MCP daemon"
+elif command -v systemctl >/dev/null 2>&1; then
+  mkdir -p "$HOME/.config/systemd/user"
+  cat > "$HOME/.config/systemd/user/claudectl-mcp.service" <<UNITEOF
+[Unit]
+Description=claudectl MCP (one loopback HTTP daemon per box, not one stdio proc per session)
+
+[Service]
+ExecStart=/bin/sh $CLAUDECTL_MCP_ENTRY
+Environment=CLAUDECTL_LOCAL_PORT=$CLAUDECTL_MCP_PORT
+Environment=STATIC_BEARER=ddash
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+UNITEOF
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  systemctl --user enable --now claudectl-mcp.service >/dev/null 2>&1 \
+    && say "claudectl MCP daemon on :$CLAUDECTL_MCP_PORT (systemd --user)" \
+    || say "note: could not start claudectl-mcp.service"
+  systemctl --user restart claudectl-mcp.service >/dev/null 2>&1 || true
 fi
 # Remove stale user-scope registrations from before the merge.
 if [ "${CLAUDECTL_NO_MCP_CLEANUP:-0}" != "1" ] && command -v claude >/dev/null 2>&1; then

@@ -264,6 +264,12 @@ console.log("admin — the gate:");
 check("unauthed state is 401", status("/api/state"), "401");
 check("bad password is 401", curl(["-o", "/dev/null", "-X", "POST", `${BASE}/api/login`, "-d", '{"password":"no"}']).trim().replace(/[<>]/g, ""), "401");
 check("unknown admin endpoint is 404", api("nope").error, "unknown admin endpoint");
+// /api/pricing was exempted from the admin gate as "public" while no such route existed, so the
+// path fell through to the MODEL ROUTER: prod answered `model_not_routable: no model specified` and
+// logged it as blocked traffic. An unknown /api path must be answered by the admin dispatcher —
+// like /admin/*, the point is that it never reaches the router that bills people.
+check("/api/pricing is not routed as inference", api("pricing").error, "unknown admin endpoint");
+check("...and says nothing about models", /model/.test(JSON.stringify(api("pricing"))), false);
 
 console.log("shell routes:");
 // The panel is a Next static export (panel/out) built separately (`npm run build:panel`); the image

@@ -49,8 +49,13 @@ refs may still linger in sibling repos.
   runtime image stays **pg-only** — the Next build is a Docker build stage, not a runtime. server.js
   serves `/_next/*` + assets by extension (traversal-guarded) and the enumerated `UI_ROUTES` slugs →
   `out/<slug>/index.html`. **There is no `/admin` anything** — `/admin*` is a tombstone 404. Two
-  carve-outs are load-bearing: `/api/v1/*` is real inference (`base_url=…/api`) and `/api/pricing` is
-  public — routing either into the cookie-gated handler 401s callers that never had a cookie. Build
+  ONE carve-out is load-bearing: `/api/v1/*` is real inference (`base_url=…/api`) — routing it into
+  the cookie-gated handler 401s callers that never had a cookie. This used to name a second,
+  `/api/pricing` "is public", and **there was no such route** (verified 400 in prod 2026-07-30): the
+  exemption only let the path fall through to the model router, which answered `model_not_routable`
+  and logged it as blocked traffic. Removed 2026-07-30, and deliberately not implemented —
+  `prices.json` is crazyrouter's list with OUR group discount applied (`gen-prices.sh`), which is not
+  something to serve unauthenticated. Build
   locally: `npm run build:panel`; preview against prod's API: `node panel/scripts/preview.mjs`.
   **Five pages, ordered as the path a request takes** — `overview` (Health · Usage), `calls`, then
   **`consumers`** (Callers · Secrets — who may call in, and the locks), **`routing`** (Rules ·

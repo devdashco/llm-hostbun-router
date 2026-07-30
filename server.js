@@ -134,11 +134,19 @@ const server = http.createServer(async (req, res) => {
   // repointed at /api/* first, because deleting a prefix your own tooling still calls is how a
   // cleanup becomes an outage.
   //
-  // The two carve-outs below are load-bearing. /api/v1/* is the OpenAI-compatible surface (a caller
-  // that sets base_url=https://llm.hostbun.cc/api reaches /api/v1/chat/completions), and /api/pricing
-  // is public. Routing either into the cookie-gated admin handler would 401 real inference traffic.
+  // The carve-out below is load-bearing: /api/v1/* is the OpenAI-compatible surface (a caller that
+  // sets base_url=https://llm.hostbun.cc/api reaches /api/v1/chat/completions), so routing it into
+  // the cookie-gated admin handler would 401 real inference traffic.
+  //
+  // `/api/pricing` used to be carved out beside it as "public". There is no such route and there
+  // never was one here — the exemption only let the path fall through to the MODEL ROUTER, which
+  // answered `model_not_routable: no model specified` and wrote it to the call log as blocked
+  // traffic (the same trap the /admin tombstone below exists to prevent). Verified 400 in prod
+  // 2026-07-30. It is not carved out any more, so it 401s/404s like every other unknown /api path.
+  // Not implemented deliberately: `prices.json` is crazyrouter's public price list with OUR group
+  // discount applied (gen-prices.sh), which is not something to serve unauthenticated.
   if (!host.startsWith("docs.")) {
-    if (path.startsWith("/api/") && !path.startsWith("/api/v1/") && path !== "/api/pricing")
+    if (path.startsWith("/api/") && !path.startsWith("/api/v1/"))
       return handleAdminApi(req, res, path, "/api/");
     // A tombstone, not a route. Without it /admin/* falls through to the model router and a stale
     // `POST /admin/api/login` is read as an inference request — answered "model_not_routable" and

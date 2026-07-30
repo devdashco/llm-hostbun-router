@@ -1,7 +1,9 @@
 {
   "claudectl": {
-    "type": "stdio",
-    "command": "sh",
-    "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/claudectl_launch.sh"]
+    "type": "http",
+    "url": "http://127.0.0.1:9150/mcp/",
+    "headers": {
+      "Authorization": "Bearer ddash"
+    }
   }
 }
