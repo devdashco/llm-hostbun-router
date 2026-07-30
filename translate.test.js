@@ -208,6 +208,29 @@ t("a caller's own cache_control is never overridden — and SURVIVES", () => {
   assert.ok(carried, "...on the block the caller put it on, not moved elsewhere");
 });
 
+t("the caller-breakpoint check reads KEYS, not the serialized text", () => {
+  // It was a substring search over JSON.stringify(body), which cannot tell a key from a value. A
+  // message whose content is literally the word `cache_control` — or a tool parameter NAMED that for
+  // an unrelated reason — tripped the guard, and tripping it means we mark nothing, so the request
+  // went out fully uncached. The failure is silent and points the wrong way: the caller looks like
+  // it opted out of our marking when it never mentioned caching at all.
+  const literal = { model: "m", messages: [
+    { role: "system", content: "cache_control" },
+    { role: "user", content: bigText(9000) },
+    { role: "assistant", content: "ok" },
+    { role: "user", content: "more" },
+  ] };
+  const a = T.openaiToAnthropic(literal);
+  assert.ok(JSON.stringify(a).split('"cache_control"').length - 1 > 0,
+    "a body that merely CONTAINS the word still gets our breakpoints");
+
+  // And a tool whose input_schema has a property of that name is not a breakpoint either.
+  const named = loopBody(4);
+  named.tools[0].function.parameters = { type: "object", properties: { cache_control: { type: "string" } } };
+  assert.ok(JSON.stringify(T.openaiToAnthropic(named)).split('"cache_control"').length - 1 > 1,
+    "a tool PARAMETER named cache_control does not read as one");
+});
+
 t("a caller's cache_control on a TOOL definition survives too", () => {
   // The largest stable prefix in an agent request is the tool list, so this is where a caller that
   // knows what it is doing marks. It was dropped by the tools .map(), same as the content blocks.

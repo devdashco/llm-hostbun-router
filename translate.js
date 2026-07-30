@@ -43,6 +43,28 @@ function anthropicHeaders(token, { extraBeta = "", userAgent = "claude-cli/1.0.0
   };
 }
 
+// Does the caller carry its OWN breakpoint? Checked in the four places Anthropic accepts one, not
+// by walking the whole body:
+//   - a message, or one of its content blocks
+//   - a system block
+//   - a tool definition (or the OpenAI-shaped `function` inside it)
+// It was `JSON.stringify(b).includes('"cache_control"')`, which cannot tell a key from a value: a
+// message whose content is literally the word tripped it. A recursive key-walk fixes that and
+// introduces the next false positive — a tool whose input_schema has a PROPERTY of that name is a
+// JSON-schema field, not a directive, and `{type:"string"}` is indistinguishable from
+// `{type:"ephemeral"}` by shape. Tripping this guard means we mark nothing, so every false positive
+// sends a request out fully uncached. Enumerating the legal positions is the only reading that
+// cannot be fooled by a caller's own vocabulary.
+const ccOn = (o) => !!(o && typeof o === "object" && o.cache_control);
+const ccInBlocks = (c) => Array.isArray(c) && c.some(ccOn);
+function hasCacheControl(b) {
+  if (!b || typeof b !== "object") return false;
+  if (ccInBlocks(b.system)) return true;
+  if (Array.isArray(b.tools) && b.tools.some((t) => ccOn(t) || ccOn(t && t.function))) return true;
+  if (Array.isArray(b.messages) && b.messages.some((m) => ccOn(m) || ccInBlocks(m && m.content))) return true;
+  return false;
+}
+
 // ── request: OpenAI → Anthropic ───────────────────────────────────────────
 function contentPartsToAnthropic(parts) {
   const out = [];
@@ -219,7 +241,7 @@ function openaiToAnthropic(body, opts) {
   // cache_control anywhere in the request — an explicit breakpoint is a deliberate choice about
   // where the stable prefix ends, and ours would both override it and risk a 5th breakpoint.
   const cache = !opts || opts.cache !== false;
-  if (cache && !JSON.stringify(b).includes('"cache_control"')
+  if (cache && !hasCacheControl(b)
       && JSON.stringify(out).length >= MIN_CACHEABLE_BYTES) {
     markCacheBreakpoints(out);
   }
