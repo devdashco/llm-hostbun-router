@@ -140,4 +140,14 @@ for (const [file, srcTxt] of [["health.tsx", src], ["accounts.tsx", accountsSrc]
   else ok("the panel distinguishes no-policy from allowed-by-policy");
 }
 
+// A counter nobody renders is a private variable. `disabled`/`dead` on an account were returned by
+// the API and shown nowhere for weeks; `telemetryShip` is the same shape and the worse case, because
+// what it counts is the ALERTS not arriving — the one failure whose only symptom is silence.
+{
+  const callLog = readFileSync(join(ROOT, "panel", "components", "panel", "pages", "call-log.tsx"), "utf8");
+  if (!/telemetryShip/.test(callLog)) fail("the panel shows failed alert deliveries", "adminState carries telemetryShip and nothing renders it");
+  else if (!/HyperDX/.test(callLog)) fail("...saying where the alerts were not delivered", "the banner does not name the destination");
+  else ok("the panel shows alerts that never reached HyperDX");
+}
+
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);

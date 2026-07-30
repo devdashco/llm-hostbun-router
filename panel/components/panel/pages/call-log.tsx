@@ -405,6 +405,18 @@ export function CallLog() {
               {state.loggingWrites.lastErrorAt ? ` · ${new Date(state.loggingWrites.lastErrorAt).toLocaleString()}` : ""}
             </div>
           )}
+          {/* The OTHER delivery path, and the one nobody would notice failing: WARN/ERROR events go
+              to HyperDX, which is where an operator sets an alert. A dead ingest or a rotated key
+              drops every one of them, and the only symptom is that alerts stop arriving — which
+              looks exactly like nothing being wrong. The counter exists so it does not have to. */}
+          {!!state.telemetryShip?.failures && (
+            <div className="mb-4 rounded-md border border-warn/30 bg-warn/5 px-3 py-2 text-ui text-warn">
+              {state.telemetryShip.failures.toLocaleString()} alert
+              {state.telemetryShip.failures === 1 ? "" : "s"} failed to reach HyperDX since boot — WARN/ERROR
+              events are not arriving where you would see them. last error: {state.telemetryShip.lastError}
+              {state.telemetryShip.lastErrorAt ? ` · ${new Date(state.telemetryShip.lastErrorAt).toLocaleString()}` : ""}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-4">
             <label className="flex items-center gap-2 text-body">
               <Checkbox checked={!!lg.enabled} onCheckedChange={(v) => setLg({ ...lg, enabled: !!v })} /> log calls
