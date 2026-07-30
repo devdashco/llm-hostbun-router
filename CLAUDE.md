@@ -640,14 +640,15 @@ per-machine credential is keyvault `gitlab/pbox` (user `philip-pbox`, scopes api
 A push to `origin` also fires Coolify's auto-deploy webhook, so a manual `?uuid=…&force=true` right
 after just queues a second, redundant build of the same commit behind the first.
 
-Pushing does **not** reliably auto-build — but read the CURRENT `watch_paths` before deciding, from
-the app object (`coolify_find` / `GET /api/v1/applications/<uuid>`), not from this file. **Verified
-2026-07-30** it is `server.js`, `Dockerfile`, `entrypoint.sh`, `gen-prices.sh`, `README.md`,
-`src/**`, `assets/**`, `panel/**`, `docs/**` — `src/**` and `assets/**` were added since this note
-first said otherwise, so a `src/` push DOES auto-build now and a manual force right after just
-queues a redundant 13-minute build of the same commit (measured — that is how this got corrected).
-Still **not** watched: `translate.js`, `archive/**`, `test/**`, `package.json`, `scripts/**`, so a
-push touching only the translator or the lockfile is silently ignored. Trigger the Coolify deploy for app uuid
+Pushing auto-builds when it touches a watched path — read the CURRENT `watch_paths` off the app
+object (`coolify_find` / `GET /api/v1/applications/<uuid>`), never from this file. **Set 2026-07-30
+to cover every file the Dockerfile actually COPIES**: `server.js`, `translate.js`, `package.json`,
+`package-lock.json`, `Dockerfile`, `entrypoint.sh`, `gen-prices.sh`, `README.md`, `src/**`,
+`assets/**`, `panel/**`, `docs/**`. Before that, `translate.js` and the lockfile were missing, so a
+change to the TRANSLATOR — the file that decides what the prompt cache does, i.e. the 12x — shipped
+nothing while the push reported success. Two such commits sat unshipped the day this was found.
+The rule to keep: **if the Dockerfile copies it, it belongs here.** Still unwatched on purpose:
+`archive/**`, `test/**`, `cccc/**`, `scripts/**` — none of them are in the image. Trigger the Coolify deploy for app uuid
 `d11s05nc130l2kjzr6anpebr` (token in keyvault `coolify/hostbun/api-token`;
 `curl "https://coolify.hostbun.cc/api/v1/deploy?uuid=d11s05nc130l2kjzr6anpebr&force=true" -H "Authorization: Bearer <tok>"`),
 then **verify — never stop at `git push`**: wait for
