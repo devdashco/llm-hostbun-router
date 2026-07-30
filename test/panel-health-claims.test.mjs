@@ -129,4 +129,15 @@ for (const [file, srcTxt] of [["health.tsx", src], ["accounts.tsx", accountsSrc]
   else ok(`${file} shows an account the pool will not serve`);
 }
 
+// `wouldBlock: null` from /api/consumers/clients means THERE IS NO POLICY, which is a different
+// answer from "this client is allowed" — the same null-is-not-zero rule as `limits` and `list_usd`.
+// A panel that renders a falsy check as "allowed" would tell an operator a key is protected when
+// nothing is guarding it, which is the worst direction for this particular field to be wrong in.
+{
+  const consumersSrc = readFileSync(join(ROOT, "panel", "components", "panel", "pages", "consumers.tsx"), "utf8");
+  if (!/wouldBlock/.test(consumersSrc)) fail("the panel shows which clients a lock would block", "consumers.tsx never reads wouldBlock");
+  else if (!/wouldBlock === null/.test(consumersSrc)) fail("the panel treats wouldBlock:null as NO POLICY", "null is rendered as if it were `false` — 'allowed' where the truth is 'unguarded'");
+  else ok("the panel distinguishes no-policy from allowed-by-policy");
+}
+
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);

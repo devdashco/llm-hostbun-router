@@ -23,6 +23,14 @@ export function Consumers() {
   const [nk, setNk] = useState("app");
   const [no, setNo] = useState("");
   const [issued, setIssued] = useState<any>(null);
+  // WHO is actually presenting each key: distinct user-agent + source IP per consumer, from
+  // GET /api/consumers/clients. A key is a bearer credential and nothing on the wire distinguishes
+  // "philip's laptop" from "an app holding philip's key" — measured in prod 2026-07-29, `pmac`'s key
+  // ran 11,485 calls from a production box while `bluebut` sat in the registry with a key of its
+  // own. Nothing was broken; the spend just landed under a person. This is the reading the docs call
+  // for BEFORE setting allowUa, because locking blind 403s a live caller.
+  const [clients, setClients] = useState<any>(null);
+  const [openFor, setOpenFor] = useState("");
   const load = useCallback(async () => {
     try {
       setReg(await api("consumers"));
@@ -36,6 +44,14 @@ export function Consumers() {
   }, [load]);
   const mode = (reg && reg.authMode) || "optional";
   const keyless = (reg && reg.keyless) || [];
+  async function showClients(name: string) {
+    if (openFor === name) { setOpenFor(""); return; }
+    setOpenFor(name);
+    if (clients) return;                                  // one fetch covers every consumer
+    try { setClients(await api("consumers/clients?days=7")); }
+    catch (e: any) { setErr(String(e && e.message ? e.message : e)); }
+  }
+
   async function issueKey(name: string, kind?: string, owner?: string) {
     setBusy(name);
     try {
@@ -314,13 +330,54 @@ export function Consumers() {
                         <Button variant="outline" size="sm" disabled={busy === c.name} onClick={() => issueKey(c.name)}>
                           New key
                         </Button>
+                        <Button variant="outline" size="sm" onClick={() => showClients(c.name)} title="which clients presented this key in the last 7 days — read this before locking one">
+                          {openFor === c.name ? "Hide clients" : "Clients"}
+                        </Button>
                         <Button variant="ghost" size="sm" disabled={busy === c.name} onClick={() => remove(c.name)}>
                           Delete
                         </Button>
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
+                )).flatMap((row: any, i: number) => {
+                  const c = regd[i];
+                  if (openFor !== c.name) return [row];
+                  const mine = clients ? (clients.clients || []).filter((x: any) => x.consumer === c.name) : null;
+                  return [row, (
+                    <TableRow key={c.name + "-clients"} className="bg-muted/30">
+                      <TableCell colSpan={8}>
+                        {!clients ? (
+                          <span className="text-meta text-muted-foreground">loading…</span>
+                        ) : !clients.available ? (
+                          // No DB is not "nobody called" — say which one it is.
+                          <span className="text-meta text-warn">no call log available — this is &quot;unknown&quot;, not &quot;no clients&quot;</span>
+                        ) : !mine || !mine.length ? (
+                          <span className="text-meta text-muted-foreground">no calls from this consumer in the last 7 days</span>
+                        ) : (
+                          <div className="space-y-1">
+                            <div className="text-micro text-muted-foreground">
+                              lock: {c.allowUa && c.allowUa.length
+                                ? <span className="font-mono">{c.allowUa.join(", ")}</span>
+                                : <span title="an empty policy is unrestricted, never a lockout">none — this key is accepted from any client</span>}
+                            </div>
+                            {mine.map((x: any, j: number) => (
+                              <div key={j} className="flex flex-wrap items-baseline gap-x-3 font-mono text-micro">
+                                <span className={x.wouldBlock ? "text-danger" : ""}>{x.ua || "(no user-agent)"}</span>
+                                <span className="text-muted-foreground">{x.ip || "(no ip)"}</span>
+                                <span className="text-muted-foreground">{nfmt(x.calls)} calls · {nfmt(x.tokens)} tok</span>
+                                <span className="text-muted-foreground">{since(x.lastTs)}</span>
+                                {/* null means NO POLICY, which is a different answer from "allowed". */}
+                                {x.wouldBlock === null ? null : x.wouldBlock
+                                  ? <span className="text-danger">would be blocked by the current lock</span>
+                                  : <span className="text-ok">allowed by the current lock</span>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )];
+                })
               ) : (
                 <TableRow>
                   <TableCell colSpan={8} className="text-ui text-muted-foreground">
