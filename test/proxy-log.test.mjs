@@ -399,5 +399,36 @@ console.log("proxy() early returns still record:");
   up.close();
 }
 
+// ── the json-enforce path records the reason too ────────────────────────────────────────────────
+// It has the whole body in hand and still wrote a bare `upstream 429` — indistinguishable from a 529
+// (overloaded) or a spent weekly window, which need opposite responses. proxy() learned this a few
+// commits earlier and this path did not, and it is the path redbut and global-ci actually run on:
+// every claudecode 4xx in the last day came through here.
+{
+  const { jsonEnforce } = req_(join(ROOT, "src/jsonenforce.js"));
+  const { CFG: C } = req_(join(ROOT, "src/config.js"));
+  const srv = http.createServer((rq, rs) => {
+    rs.writeHead(429, { "content-type": "application/json" });
+    rs.end(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "weekly limit reached" } }));
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const BASE429 = `http://127.0.0.1:${srv.address().port}`;
+  C.logging = { ...(C.logging || {}), enabled: true };
+  rows.length = 0;
+  const res = fakeRes();
+  const body = Buffer.from(JSON.stringify({ model: "gemini-2.5-flash", response_format: { type: "json_object" }, messages: [{ role: "user", content: "hi" }] }));
+  await jsonEnforce(fakeReq("/v1/chat/completions"), res, {
+    base: BASE429, target: BASE429 + "/v1/chat/completions", provider: "crazyrouter",
+    model: "gemini-2.5-flash", bodyBuf: body, project: "redbut", ip: "127.0.0.1",
+  });
+  if (rows.length !== 1) bad("a json-enforce upstream error records one row", `got ${rows.length} rows`);
+  else {
+    ok("a json-enforce upstream error records one row");
+    check("...naming the upstream's own reason, not just the status",
+      rows[0].error, "upstream 429: rate_limit_error: weekly limit reached");
+  }
+  srv.close();
+}
+
 upstream.close();
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);

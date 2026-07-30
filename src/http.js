@@ -427,7 +427,7 @@ function sendJson(res, status, obj, extraHeaders) {
 
 const mask = (s) => { const t = String(s || ""); return !t ? "" : t.length <= 6 ? "••••" : "••••" + t.slice(-4); };
 
-module.exports = {
+module.exports = { upstreamReason,
   readBody, readJson, sendFile, sendJson, mask, buildHeaders, proxy,
   hasImageContent, headroomCompress, HEADROOM_URL,
   // Exported for jsonenforce.js, which strips the same hop-by-hop headers on its own error path.

@@ -12,7 +12,7 @@ const TR = require("../translate");
 const { CFG } = require("./config");
 const { recordCall, recordLimits } = require("./db");
 const { noteAcctCooldown, clearAcctCooldown } = require("./routing");
-const { buildHeaders, HOP_RES } = require("./http");
+const { buildHeaders, HOP_RES, upstreamReason } = require("./http");
 const { keyLabel, extractReqAll, applyLocalThinkingDefault, shipError } = require("./telemetry");
 
 // True when the request asks the model to emit JSON (OpenAI `response_format`).
@@ -152,7 +152,13 @@ async function jsonEnforce(req, res, route) {
     if (up.status >= 400) {                                // upstream error — surfaced, never masked
       console.error(`[err] upstream=${up.status} provider=${curProvider} model=${model || "-"} ${target} (json-enforce)`);
       shipError(`upstream ${up.status} ${req.method} ${req.url} (json-enforce)`, { model: model || "-", provider: curProvider, ip, status: up.status, body: text });
-      recordCall({ ...logRec, status: up.status, ms: Date.now() - t0, error: `upstream ${up.status}`, respContent: text });
+      // The reason, not just the status. This path has the whole body in `text` already, and it was
+      // recording a bare `upstream 429` — indistinguishable from `upstream 529` (overloaded) or a
+      // spent weekly window, which need opposite responses. proxy() learned this a few commits ago
+      // and this one did not: the json-enforce path is where redbut and global-ci actually run, so
+      // it is the path most of those rows come from.
+      recordCall({ ...logRec, status: up.status, ms: Date.now() - t0, respContent: text,
+        error: `upstream ${up.status}${upstreamReason(text) ? `: ${upstreamReason(text)}` : ""}` });
       const rh = {}; up.headers.forEach((v, k) => { if (!HOP_RES.has(k.toLowerCase())) rh[k] = v; });
       res.writeHead(up.status, rh);
       return res.end(text);
