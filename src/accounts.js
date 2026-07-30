@@ -22,9 +22,19 @@ async function listAccounts(req, res) {
   }
   // Old rows label the account `anthropic:philip` / `wrappy:philip`; new ones `claudecode:philip`.
   // The name after the colon is the join key, so every era of the log counts toward the same account.
+  // BILLABLE tokens, not raw: `total - cache_read` is what actually draws down a Max window. A
+  // cached read costs about a tenth and barely moves it, so the raw number points at the wrong
+  // account — measured for the per-PROJECT view already (`wmac` looked like the biggest 24h spender
+  // at 78.2M raw while burning 2.8M billable, 96% cached), and routing.js's projectUsage was fixed
+  // for exactly this. The per-ACCOUNT view never got it, and it is the column an operator scans to
+  // answer "which subscription is closest to spent" — right beside the harvested 5h/7d bars, which
+  // are correct, so the two disagreed by ~6x and the wrong one is the one you read first.
+  // `tokensRaw` keeps the old number for anything that wants throughput rather than cost.
   const spendRows = await dbRows(
     `SELECT split_part(key_label, ':', 2) AS acct,
-       COUNT(*)::int AS calls, COALESCE(SUM(total_tokens),0)::bigint AS tokens, MAX(ts) AS last_ts,
+       COUNT(*)::int AS calls,
+       COALESCE(SUM(GREATEST(total_tokens - COALESCE(cache_read,0), 0)),0)::bigint AS tokens,
+       COALESCE(SUM(total_tokens),0)::bigint AS tokens_raw, MAX(ts) AS last_ts,
        COUNT(*) FILTER (WHERE status = 429)::int AS rate_limited,
        COUNT(*) FILTER (WHERE status >= 400)::int AS errors
      FROM calls WHERE key_label LIKE '%:%' GROUP BY 1`);
@@ -32,7 +42,8 @@ async function listAccounts(req, res) {
   const dayAgo = Date.now() - 86400000;
   const spend24Rows = await dbRows(
     `SELECT split_part(key_label, ':', 2) AS acct, COUNT(*)::int AS calls,
-       COALESCE(SUM(total_tokens),0)::bigint AS tokens
+       COALESCE(SUM(GREATEST(total_tokens - COALESCE(cache_read,0), 0)),0)::bigint AS tokens,
+       COALESCE(SUM(total_tokens),0)::bigint AS tokens_raw
      FROM calls WHERE key_label LIKE '%:%' AND ts >= $1 GROUP BY 1`, [dayAgo]);
   const spend24 = new Map(spend24Rows.map((r) => [String(r.acct), r]));
 
@@ -50,9 +61,9 @@ async function listAccounts(req, res) {
       projects: Object.keys(pins).filter((p) => pins[p] === a.name).sort(),
       limits: l ? { ts: Number(l.ts) || 0, u5: l.u5, u7: l.u7, reset5: l.reset5, reset7: l.reset7,
         status: l.status, s5: l.s5, s7: l.s7, lastProject: l.project, lastModel: l.model } : null,
-      usage: { calls: s.calls || 0, tokens: Number(s.tokens) || 0, lastTs: Number(s.last_ts) || 0,
-        rateLimited: s.rate_limited || 0, errors: s.errors || 0,
-        calls24h: s24.calls || 0, tokens24h: Number(s24.tokens) || 0 },
+      usage: { calls: s.calls || 0, tokens: Number(s.tokens) || 0, tokensRaw: Number(s.tokens_raw) || 0,
+        lastTs: Number(s.last_ts) || 0, rateLimited: s.rate_limited || 0, errors: s.errors || 0,
+        calls24h: s24.calls || 0, tokens24h: Number(s24.tokens) || 0, tokensRaw24h: Number(s24.tokens_raw) || 0 },
     };
   });
   accounts.sort((x, y) => x.name.localeCompare(y.name));

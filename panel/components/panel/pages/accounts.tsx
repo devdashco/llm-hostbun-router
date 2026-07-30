@@ -426,7 +426,12 @@ export function Accounts() {
                       <TableCell className="whitespace-nowrap font-mono text-ui align-top">
                         {nfmt(a.usage.calls)} calls
                         <br />
-                        <span className="text-muted-foreground">{nfmt(a.usage.tokens)} tok</span>
+                        {/* BILLABLE (total - cache_read) — what actually draws down the Max window.
+                            The raw number is ~6x larger on a well-cached consumer and points at the
+                            wrong account, right beside the 5h/7d bars that are correct. */}
+                        <span className="text-muted-foreground" title={`billable (total − cache reads); raw total ${nfmt(a.usage.tokensRaw || 0)}`}>
+                          {nfmt(a.usage.tokens)} tok billable
+                        </span>
                         {a.usage.rateLimited > 0 && (
                           <>
                             <br />
@@ -441,7 +446,9 @@ export function Accounts() {
                           <>
                             {nfmt(a.usage.calls24h)} calls
                             <br />
-                            <span className="text-muted-foreground">{nfmt(a.usage.tokens24h)} tok</span>
+                            <span className="text-muted-foreground" title={`billable (total − cache reads); raw total ${nfmt(a.usage.tokensRaw24h || 0)}`}>
+                              {nfmt(a.usage.tokens24h)} tok billable
+                            </span>
                           </>
                         ) : (
                           <span className="text-muted-foreground">idle</span>

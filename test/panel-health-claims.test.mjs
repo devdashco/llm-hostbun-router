@@ -173,4 +173,20 @@ for (const [file, srcTxt] of [["health.tsx", src], ["accounts.tsx", accountsSrc]
   else ok("the usage table names which models a consumer ran, not how many");
 }
 
+// The per-account token column must be BILLABLE (total − cache_read), and say so. A cached read
+// costs about a tenth and barely moves the Max window, so the raw number points at the wrong
+// account — measured for the per-project view at ~6x — and it sits right beside the harvested 5h/7d
+// bars, which are correct. The one an operator reads first should not be the one that lies.
+{
+  const acct = readFileSync(join(ROOT, "panel", "components", "panel", "pages", "accounts.tsx"), "utf8");
+  const src = readFileSync(join(ROOT, "src", "accounts.js"), "utf8");
+  // BOTH queries — the all-time one and the 24h one. Checking "somewhere in the file" passed with
+  // one of the two reverted, which is how a half-fix ships looking whole.
+  const billable = (src.match(/GREATEST\(total_tokens - COALESCE\(cache_read,0\), 0\)/g) || []).length;
+  if (billable < 2)
+    fail("per-account spend is billable, not raw", `only ${billable} of the 2 spend queries subtract cache_read`);
+  else if (!/tok billable/.test(acct)) fail("...and the panel says which it is", "the column reads a bare 'tok'");
+  else ok("the per-account token column is billable and labelled");
+}
+
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
