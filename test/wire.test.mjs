@@ -223,6 +223,20 @@ for (const path of ["/api/machines", "/api/projects"]) {
   await expect("...and the server is still healthy after it", "/v1/models", 200);
 }
 
+// A malformed numeric filter must be an ERROR, not "zero calls match". parseInt("abc") is NaN, pg
+// sends it as the string "NaN", Postgres rejects it for a bigint column, and dbRows swallows that
+// into [] — so `?since=abc` answered `{rows: [], total: 0}`, indistinguishable from a quiet window.
+// During an incident that is the worst wrong answer available: it looks like the news you wanted.
+// This suite runs without a DB, so `/api/calls` normally answers dbReady:false — a 400 here proves
+// the check runs BEFORE the query, which is the point.
+for (const badq of ["since=abc", "minTok=lots", "afterId=x1", "minMs=soon", "status=weird"]) {
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/calls?${badq}`, { headers: { cookie } });
+  const body = await r.json().catch(() => ({}));
+  if (r.status !== 400) bad(`?${badq} is refused, not silently empty`, `got ${r.status} ${JSON.stringify(body).slice(0, 80)}`);
+  else if (!new RegExp(badq.split("=")[0]).test(JSON.stringify(body))) bad(`?${badq} names the offending parameter`, JSON.stringify(body).slice(0, 120));
+  else ok(`?${badq} -> 400 naming the parameter`);
+}
+
 await expect("GET  /admin/api/state is GONE", "/admin/api/state", 404);
 await expect("GET  /admin is GONE", "/admin", 404);
 await expect("GET  /api/v1/models still routes to the catalog", "/api/v1/models", 200);

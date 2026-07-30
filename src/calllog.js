@@ -15,7 +15,9 @@ const { sendJson } = require("./http");
 
   // ── call log ──
 async function listCalls(req, res) {
-  if (!dbUp()) return sendJson(res, 200, { rows: [], total: 0, dbReady: false });
+  // The dbUp() gate is BELOW the filter validation, deliberately: a malformed filter is wrong
+  // whatever the database is doing, and answering `dbReady:false` to it would tell the operator to
+  // check the wrong thing. Same ordering the registry writers use, and for the same reason.
   const q = url.parse(req.url, true).query;
   const where = [], params = [];
   const ph = (v) => { params.push(v); return `$${params.length}`; };   // positional, in push order
@@ -32,10 +34,19 @@ async function listCalls(req, res) {
     else if (pj.includes(":")) where.push(`project = ${ph(pj)}`);
     else where.push(`(project = ${ph(pj)} OR project LIKE ${ph(pj + ":%")})`);
   }
+  // A malformed number must be an ERROR, not a filter that matches nothing. `parseInt("abc")` is
+  // NaN, pg serialises that as the string "NaN", Postgres rejects it for a bigint column, and
+  // dbRows swallows the error into [] — so `?since=abc` answered `{rows: [], total: 0}`, which is
+  // indistinguishable from "nothing happened in that window". During an incident that is the worst
+  // possible wrong answer: it looks like the quiet you were hoping for. `bad` collects the names so
+  // the caller is told which parameter, not just that something was wrong.
+  const bad = [];
+  const num = (name, v) => { const n = parseInt(v, 10); if (Number.isFinite(n)) return n; bad.push(name); return null; };
+
   if (q.status === "error") where.push("status >= 400");
   else if (q.status === "ok") where.push("status < 400");
-  else if (q.status) where.push(`status = ${ph(parseInt(q.status, 10))}`);
-  if (q.since) where.push(`ts >= ${ph(parseInt(q.since, 10))}`);
+  else if (q.status) { const n = num("status", q.status); if (n != null) where.push(`status = ${ph(n)}`); };
+  if (q.since) { const n = num("since", q.since); if (n != null) where.push(`ts >= ${ph(n)}`); };
   // Tri-state facets. "" = don't filter; the columns are nullable, so the negative
   // arm must spell out IS NULL or it silently drops every un-stamped row.
   if (q.effort === "(none)") where.push("(effort IS NULL OR effort = '')");
@@ -50,16 +61,23 @@ async function listCalls(req, res) {
   else if (q.cached === "0") where.push("(cache_read IS NULL OR cache_read = 0)");
   if (q.client) where.push(`ua ILIKE ${ph("%" + String(q.client) + "%")}`);
   if (q.stop) where.push(`stop_reason = ${ph(String(q.stop))}`);
-  if (q.minTok) where.push(`total_tokens >= ${ph(parseInt(q.minTok, 10))}`);
-  if (q.minMs) where.push(`duration_ms >= ${ph(parseInt(q.minMs, 10))}`);
+  if (q.minTok) { const n = num("minTok", q.minTok); if (n != null) where.push(`total_tokens >= ${ph(n)}`); };
+  if (q.minMs) { const n = num("minMs", q.minMs); if (n != null) where.push(`duration_ms >= ${ph(n)}`); };
   // Live-tail cursor: only rows newer than what the client already holds. `total` then
   // means "new since afterId", not "matching overall" — the SPA adds it to its own count.
-  if (q.afterId) where.push(`id > ${ph(parseInt(q.afterId, 10))}`);
+  if (q.afterId) { const n = num("afterId", q.afterId); if (n != null) where.push(`id > ${ph(n)}`); };
   if (q.q) {
     const like = ph("%" + String(q.q) + "%");   // one placeholder, reused across the OR
     where.push(`(req_model ILIKE ${like} OR sent_model ILIKE ${like} OR ip ILIKE ${like}
       OR ua ILIKE ${like} OR req_content ILIKE ${like} OR resp_content ILIKE ${like})`);
   }
+  // Refuse before querying. Answering rows for a filter we could not apply is the same lie in a
+  // different shape: the operator asked a narrower question than the one we answered.
+  if (bad.length) return sendJson(res, 400, { error: {
+    type: "invalid_request_error", code: "bad_filter",
+    message: `not a number: ${bad.join(", ")} — a malformed filter would have quietly matched everything or nothing`,
+  } });
+  if (!dbUp()) return sendJson(res, 200, { rows: [], total: 0, dbReady: false });
   const w = where.length ? "WHERE " + where.join(" AND ") : "";
   const limit = Math.min(parseInt(q.limit, 10) || 100, 500);
   const offset = parseInt(q.offset, 10) || 0;
