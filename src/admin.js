@@ -181,18 +181,18 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     console.log(`[admin] login ok ip=${ip}`);
     return sendJson(res, 200, { ok: true }, { "set-cookie": cookie });
   }
-  if (sub === "logout") {
-    // Telling the CLIENT to drop the cookie is not logging out: the token is a stateless signature
-    // and replaying the old value authenticated every gated route for the rest of its 7-day life.
-    // Bumping the epoch changes the signing key, so the handed-back cookie stops verifying. Global
-    // by design — there is one admin password and one logout button.
+  if (!isAuthed(req)) return sendJson(res, 401, { error: "unauthorized" });
+
+  // Logout sits BELOW the gate and is POST-only: it bumps the global signing epoch and writes to
+  // disk — ungated it threw every operator out with no password, and on GET an `<img>` tag did it.
+  if (sub === "logout" && req.method === "POST") {
+    // Telling the CLIENT to drop the cookie is not logging out: the token is a stateless signature,
+    // so replaying it authenticated every gated route for 7 days. The epoch IS the revocation.
     CFG.sessionEpoch = (CFG.sessionEpoch || 1) + 1;
     persistConfig();
     const secure = process.env.SESSION_INSECURE === "1" ? "" : " Secure;";
     return sendJson(res, 200, { ok: true }, { "set-cookie": `${COOKIE}=; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=0` });
   }
-
-  if (!isAuthed(req)) return sendJson(res, 401, { error: "unauthorized" });
 
   if (sub === "state" && req.method === "GET") return sendJson(res, 200, adminState());
 
@@ -466,8 +466,8 @@ async function registryRoutes(req, res, sub, ip) {
       return sendJson(res, 200, { ok: true, developers: await REG.listDevelopers() });
     });
 
-  // machines and projects are the same table; the route fixes `kind` so a caller cannot create a
-  // project that owns a developer, or a machine that owns nobody.
+  // machines and projects are one table; the route fixes `kind` so a caller cannot create a project
+  // that owns a developer, or a machine that owns nobody.
   for (const [path, kind] of [["machines", "machine"], ["projects", "project"]]) {
     if (sub === path && req.method === "GET")
       return guard(async () => {

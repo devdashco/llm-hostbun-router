@@ -687,9 +687,24 @@ console.log("admin — logout, the last route with no test:");
   const logoutOut = curl([`${BASE}/api/logout`, "-X", "POST", "-H", `cookie: hb_admin=${oldCookie}`]);
   check("logout answers ok", JSON.parse(logoutOut.split("\n<")[0]).ok, true);
 
-  const logoutRaw = curl(["-i", `${BASE}/api/logout`, "-X", "POST", "-H", `cookie: hb_admin=${oldCookie}`]);
+  // The clearing header has to be read from a session that is still VALID. This used to log out
+  // twice with the same cookie, which worked only while logout was a client-side courtesy: now that
+  // it bumps the signing epoch AND sits below the auth gate, the first call kills that cookie and
+  // the second is answered 401 with no Set-Cookie at all. Two things landed together and the test
+  // was written against neither.
+  const secondRaw = curl(["-i", "-X", "POST", `${BASE}/api/login`, "-d", '{"password":"ddash"}']);
+  const secondCookie = (secondRaw.match(/hb_admin=([^;]+)/) || [])[1] || "";
+  const logoutRaw = curl(["-i", `${BASE}/api/logout`, "-X", "POST", "-H", `cookie: hb_admin=${secondCookie}`]);
   check("logout's Set-Cookie clears the cookie client-side (empty value, Max-Age=0)",
     /hb_admin=;[^\r\n]*Max-Age=0/i.test(logoutRaw), true);
+  // And the gate itself: logout revokes every session and writes config to disk, so it must not be
+  // reachable without one. Nobody is "logged out" by a request that had no session to begin with.
+  const anonLogout = curl(["-o", "/dev/null", "-X", "POST", `${BASE}/api/logout`]).trim().replace(/[<>]/g, "");
+  check("an unauthenticated logout is refused, not a free lever on everyone else's session", anonLogout, "401");
+  // GET must not do it either: an `<img src=".../api/logout">` on any page the operator visits would
+  // otherwise throw them out of the panel.
+  const getLogout = curl(["-o", "/dev/null", `${BASE}/api/logout`, "-H", `cookie: hb_admin=${cookie}`]).trim().replace(/[<>]/g, "");
+  check("a GET cannot log anyone out", getLogout !== "200", true);
 
   // BUG, asserted precisely rather than papered over: sessions are a stateless HMAC-signed token
   // (sign() over CFG.adminPassword + an `exp=` payload — see makeSession()/validSession() in
