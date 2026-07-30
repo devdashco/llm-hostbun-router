@@ -16,12 +16,15 @@ export function foldConsumers(rows: any[]) {
     const consumer = i < 0 ? p : p.slice(0, i);
     let g = map.get(consumer);
     if (!g) {
-      g = { project: consumer, n: 0, tok: 0, ptok: 0, ctok: 0, cr: 0, cw: 0, usd: 0, errors: 0, last: 0, msSum: 0, prov: new Set<string>(), jobs: [], self: null };
+      g = { project: consumer, n: 0, tok: 0, ptok: 0, ctok: 0, cr: 0, cw: 0, usd: 0, errors: 0, last: 0, msSum: 0, prov: new Set<string>(), models: new Map<string, number>(), jobs: [], self: null };
       map.set(consumer, g);
     }
     g.n += r.n || 0; g.tok += r.tok || 0; g.ptok += r.ptok || 0; g.ctok += r.ctok || 0; g.cr += r.cr || 0; g.cw += r.cw || 0;
     g.usd += r.usd || 0; g.errors += r.errors || 0; g.last = Math.max(g.last, r.last || 0); g.msSum += (r.avg_ms || 0) * (r.n || 0);
     String(r.providers || "").split(",").filter(Boolean).forEach((x: string) => g.prov.add(x));
+    // `topModels` is per ROW (a consumer and each of its jobs), so it has to be summed the same way
+    // the tokens are — a consumer's answer is its jobs' models folded together, not the first row's.
+    for (const m of r.topModels || []) if (m && m.m) g.models.set(m.m, (g.models.get(m.m) || 0) + (m.tok || 0));
     if (i < 0) g.self = r;
     else g.jobs.push(r);
   }
@@ -29,6 +32,7 @@ export function foldConsumers(rows: any[]) {
     ...g,
     avg_ms: g.n ? g.msSum / g.n : null,
     providers: [...g.prov].join(","),
+    models: [...g.models.entries()].sort((a, b) => b[1] - a[1]),
     limit: g.self && g.self.limit,
     limitPct: g.self && g.self.limitPct,
     jobs: g.jobs.sort((a: any, b: any) => (b.tok || 0) - (a.tok || 0)),
@@ -68,7 +72,7 @@ export function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any
     return dir * (x > y ? 1 : x < y ? -1 : 0);
   });
   const cols: [string | null, string][] = [
-    ["project", "consumer"], ["n", "calls"], ["tok", "tokens"], ["io", "in → out"], ["cr", "cache↓"], ["usd", "est $"], ["avg_ms", "avg"], ["errors", "err%"], [null, "providers"], ["last", "last seen"], [null, "share"],
+    ["project", "consumer"], ["n", "calls"], ["tok", "tokens"], ["io", "in → out"], ["cr", "cache↓"], ["usd", "est $"], ["avg_ms", "avg"], ["errors", "err%"], [null, "models"], [null, "providers"], ["last", "last seen"], [null, "share"],
   ];
   const onSort = (key: string | null) => {
     if (!key) return;
@@ -90,6 +94,18 @@ export function ProjectTable({ s, sort, setSort, gotoCalls, open, setOpen }: any
         <TableCell className="font-mono">{fmtMs(r.avg_ms)}</TableCell>
         <TableCell className="font-mono" style={r.errors > 0 ? { color: "var(--danger)", fontWeight: 700 } : { color: "var(--muted-foreground)" }}>
           {errPct.toFixed(errPct && errPct < 10 ? 1 : 0)}%
+        </TableCell>
+        {/* WHICH models, not how many. `byProject.topModels` has been on /api/stats since it was
+            added to answer "is this app on opus" and nothing rendered it — the row said "8 models"
+            and an operator still had to open the call log to find out whether any of them was a
+            premium one. Token-weighted, so the first name is where the spend actually went. */}
+        <TableCell className="text-meta text-muted-foreground">
+          {(r.models || []).slice(0, 3).map(([m, tok]: [string, number], i: number) => (
+            <span key={m} className={i === 0 ? "text-foreground" : ""} title={`${nfmt(tok)} tokens`}>
+              {i ? " · " : ""}{m}
+            </span>
+          ))}
+          {(r.models || []).length > 3 ? <span> +{(r.models || []).length - 3}</span> : null}
         </TableCell>
         <TableCell className="text-meta">{String(r.providers || "").split(",").join(" ")}</TableCell>
         <TableCell className="font-mono text-meta text-muted-foreground">{ago(r.last)}</TableCell>

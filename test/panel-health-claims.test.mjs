@@ -162,4 +162,15 @@ for (const [file, srcTxt] of [["health.tsx", src], ["accounts.tsx", accountsSrc]
   else ok("the panel says when app traffic is auto-routed, and to where");
 }
 
+// `byProject.topModels` was added to /api/stats to answer "is this app on opus" and the usage table
+// rendered a COUNT ("8 models") instead — which is the question it was explicitly not meant to
+// answer. A field computed on every stats request and shown nowhere is the same class as the
+// disabled/dead flags, the ship counter and the auto-account strategy: four in one day.
+{
+  const table = readFileSync(join(ROOT, "panel", "components", "panel", "pages", "usage-table.tsx"), "utf8");
+  if (!/topModels/.test(table)) fail("the usage table names a consumer's models", "byProject.topModels is computed per request and never read");
+  else if (!/models: \[\.\.\.g\.models/.test(table)) fail("...folded across its jobs", "a consumer's models must sum its jobs' rows, not take one row's list");
+  else ok("the usage table names which models a consumer ran, not how many");
+}
+
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
