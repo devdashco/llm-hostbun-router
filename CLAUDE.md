@@ -616,15 +616,25 @@ so no DB access. It is *meant* to run hourly as a **Coolify scheduled task** on 
 a crontab — control-plane policy), against the LAN MinIO endpoint, beacon-monitored as
 `llm-hostbun-archive`.
 
-> **⚠ IT IS NOT RUNNING, and has not since the 2026-07-12 backfill. Verified 2026-07-26.** The cursor
-> at `llmrouter/_state.json` still reads `updatedAt 2026-07-12T17:17:59Z, rows 123035`, while `calls`
-> holds **481,520** rows from 2026-07-06 on — so **~358k rows, 74% of the log and every one of the
-> last 14 days, exist only on the app's single un-backed-up volume.** Nothing schedules it: it is
-> absent from scriptbox-pbox's 17 Coolify tasks, from `crontab -l`, and from `systemctl list-timers`.
-> Nothing has been LOST yet — pruning only touches non-claudecode rows above `retain` (50,000) and
-> there are ~31k of those — but that margin is finite, and claudecode rows are exempt from pruning
-> only, not from losing the volume. Re-create the scheduled task (`archive/run.sh`, `17 * * * *`) to
-> restore it; the config it needs is in keyvault at `llm-archive/config`.
+**It IS running again — verified live 2026-07-30.** It was dead from the 2026-07-12 backfill until
+**2026-07-28**, when the Coolify scheduled task **`llm-archive`** was created on `scriptbox-pbox`
+(app `s18pl11n8t4v8i4jshsy39rg`, task `om1irhhlxfglyxa6dx7v7ru9`, `17 * * * *`, enabled, running
+`/home/philip/.llm-hostbun-router/archive/run.sh` — a checkout on **pbox**, not this repo). Today's
+evidence, from `~/.llm-archive/archive.log` on pbox: 24 runs `rc=0` against 2 `rc=1`, the 13:17 run
+finishing `{"archived_rows":22,"cursor":2331107}` against `MAX(id)=2331112` in `calls` — i.e. current
+to the last few rows, not lagging. Check those two things (the task exists AND the log's last line
+is `rc=0` with a cursor near `MAX(id)`) rather than trusting this paragraph; it has been wrong in
+both directions.
+
+Its failure mode is worth knowing: the two `rc=1` runs are `NoSuchBucket` on bucket `archive` —
+the archiver retried 4×, failed the whole run, and the NEXT hour resumed from the same cursor and
+caught up. So a single red run is not data loss, but a *streak* of them is the signal, and nothing
+pages on it — the beacon (`llm-hostbun-archive`, via `BEACON_URL`/`BEACON_KEY` in `archive/run.sh`)
+is the only monitor. Config in keyvault at `llm-archive/config`.
+
+The earlier warning here — "NOT RUNNING, ~358k rows exist only on one un-backed-up volume" — was
+true when written on 2026-07-26 and stale two days later. A stale alarm costs a re-investigation
+every time someone reads it.
 
 ## Gotchas that will cost you a day
 
