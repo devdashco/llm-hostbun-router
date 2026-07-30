@@ -46,7 +46,7 @@ const nodePath = require("node:path");
 
 const { CFG, loadConfig, UI_ROUTES } = require("./src/config");
 const { initDb, primeAcctCacheSoon, recordCall } = require("./src/db");
-const { extractProject, parseConsumer, authenticate, consumerEntry, startKeyUseFlush, uaAllowed } = require("./src/identity");
+const { extractProject, parseConsumer, authenticate, consumerEntry, credentialHint, startKeyUseFlush, uaAllowed } = require("./src/identity");
 const { resolveRoute, accountFor, usageVerdict, sleep, isGated, throttleDelay } = require("./src/routing");
 const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL } = require("./src/http");
 const { jsonEnforce, wantsJsonFormat } = require("./src/jsonenforce");
@@ -338,7 +338,10 @@ const server = http.createServer(async (req, res) => {
   if (auth && !auth.ok && isInference) return keyFail(auth.why);
   // `required`: no key, no service. This is the mode where the self-asserted X-Project header stops
   // being an identity and becomes a mere label.
-  if (authMode === "required" && isInference && !(auth && auth.ok)) return keyFail("missing API key");
+  // credentialHint, not a flat "missing API key": a caller that presented a credential meant for
+  // another backend used to be told none was sent, which sends whoever is debugging to the wrong
+  // side of the wire. See the OTel case — the same word cost a day there.
+  if (authMode === "required" && isInference && !(auth && auth.ok)) return keyFail(credentialHint(req));
 
   // A valid key, presented by a client this consumer is not supposed to be. `allowUa` exists because
   // a key is a bearer credential and nothing stops a developer pasting theirs into an app: `pmac`'s

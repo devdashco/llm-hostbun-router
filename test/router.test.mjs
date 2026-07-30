@@ -202,6 +202,14 @@ console.log("admin — the switch that decides whether anyone needs a key:");
   check("no key on a path OUTSIDE the old regex is refused by the same gate",
     refusal("/v1/embeddings"), "401 invalid_api_key");
   check("...on any unlisted path that still carries a model", refusal("/v1/rerank"), "401 invalid_api_key");
+  // A credential meant for another backend must not be reported as "no key" — that sends whoever is
+  // debugging to the wrong side of the wire, which is exactly what happened with the OTel ingest.
+  const foreign = curl(["-m", "4", "-X", "POST", `${BASE}/v1/chat/completions`,
+    "-H", "content-type: application/json", "-H", "authorization: Bearer 3b1c3830-dead-beef-0000-000000000000",
+    "-d", '{"model":"gemini-2.5-flash","messages":[]}']).split("\n<")[0];
+  check("a foreign credential is refused as NOT OURS, not as none-sent",
+    /not one of ours/.test(foreign), true);
+  check("...and the credential is never echoed back", /3b1c3830-dead/.test(foreign), false);
   api("auth", { mode: before || "optional" });                 // leave the harness as we found it
   check("the mode was restored for the rest of this suite", api("state").authMode, before);
 }
