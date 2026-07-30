@@ -335,6 +335,25 @@ console.log("accounts — create / email / disable:");
   api("config", { projectAccounts: {} });
 }
 
+console.log("config — every base the panel offers is a base this handler accepts:");
+// The panel renders an editable base URL per provider and posts all three in one `bases` object.
+// The handler read `local` and `crazyrouter` and dropped `claudecode`, answering {ok:true,
+// persisted:true} — a save that reports success, changes nothing, and reverts on the next state
+// load. A save that lies is worse than a save that refuses.
+{
+  const before = api("state").bases || {};
+  const r = api("config", { bases: { ...before, claudecode: "http://127.0.0.1:1/pinned" } });
+  check("the save reports ok", !!r.ok, true);
+  check("...and the claudecode base actually changed", (api("state").bases || {}).claudecode, "http://127.0.0.1:1/pinned");
+  check("...without disturbing the others", (api("state").bases || {}).local, before.local);
+  // `anthropic` is the pre-rename spelling and still arrives from older callers and config files.
+  api("config", { bases: { anthropic: "http://127.0.0.1:1/legacy" } });
+  check("the legacy `anthropic` spelling lands on claudecode too",
+    (api("state").bases || {}).claudecode, "http://127.0.0.1:1/legacy");
+  api("config", { bases: before });                       // leave the harness as we found it
+  check("the base was restored for the rest of this suite", (api("state").bases || {}).claudecode, before.claudecode);
+}
+
 console.log("config — POST config REPLACES projectRoutes (documented, load-bearing):");
 api("config", { projectRoutes: { z: { provider: "local", model: "qwen3.5-9b", allowModels: ["qwen3.5-9b"] } } });
 check("siblings are gone", Object.keys(api("state").projectRoutes), ["z"]);

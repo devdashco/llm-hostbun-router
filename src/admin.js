@@ -204,6 +204,12 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     if (patch.bases) {
       if (typeof patch.bases.local === "string") next.bases.local = patch.bases.local;
       if (typeof (patch.bases.crazyrouter ?? patch.bases.crazy) === "string") next.bases.crazyrouter = patch.bases.crazyrouter ?? patch.bases.crazy;
+      // The panel renders an editable claudecode base (rules-advanced.tsx) and posts it here, and
+      // this handler dropped it while answering `{ok:true, persisted:true}` — a save that reports
+      // success and changes nothing, with the field reverting on the next state load. `anthropic`
+      // is the pre-rename spelling, accepted for the same reason mergeConfig() accepts it on disk.
+      const cc = patch.bases.claudecode ?? patch.bases.anthropic;
+      if (typeof cc === "string") next.bases.claudecode = cc;
     }
     if (patch.localMap) next.localMap = patch.localMap;
     if (patch.gatedModels) next.gatedModels = patch.gatedModels;
