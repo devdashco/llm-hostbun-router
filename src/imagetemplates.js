@@ -24,7 +24,7 @@ const { CFG, CONFIG_FILE, persistConfig, IMAGE_MODEL_IDS } = require("./config")
 const { sanitizeImageTemplate, IMAGE_TEMPLATE_MODELS } = require("./config-schema");
 const { readJson, sendJson, proxy } = require("./http");
 const { recordCall } = require("./db");
-const { authenticate, extractProject, parseConsumer, uaAllowed } = require("./identity");
+const { authenticate, extractProject, parseConsumer, uaAllowed, credentialHint } = require("./identity");
 
 // Beside config.json on the same persistent volume: one thing to back up, one thing to lose.
 const TPL_DIR = process.env.IMAGE_TEMPLATE_DIR || path.join(path.dirname(CONFIG_FILE), "image-templates");
@@ -241,7 +241,11 @@ function authForTemplate(req, res, docsUrl, ip) {
   if (mode === "off") return extractProject(req, Buffer.alloc(0)) || "";
   const auth = authenticate(req);
   if (!auth || !auth.ok) {
-    const why = auth ? auth.why : "no API key";
+    // credentialHint, not a flat "no API key": this route is the paid one, so a refusal here is
+    // either a caller who needs a key or one presenting a credential for somewhere else, and those
+    // send you to opposite ends of the wire. It was the third spelling of the same condition —
+    // "no key", "no API key", "missing API key" — which also made the error rollups split it.
+    const why = auth ? auth.why : credentialHint(req);
     // The name the caller ASSERTED, not an identity — same as keyFail() in server.js. It is the
     // only handle on who was probing, and it is exactly why the row must not be trusted as billing.
     recordRefusal(req, ip, 401, why, parseConsumer(extractProject(req, Buffer.alloc(0))).consumer, null);

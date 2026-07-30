@@ -237,6 +237,19 @@ console.log("proxy() early returns still record:");
       check("...as blocked, since nothing reached an upstream", rows[0].provider, "blocked");
       check("...carrying the status a reader would filter on", rows[0].status, 401);
       check("...and the ip that was probing", rows[0].ip, "203.0.113.9");
+      check("...and says a key is absent, in the one spelling the whole router uses", rows[0].error, "no key");
+    }
+    // The paid route must distinguish the two the same way the text paths and the ingest do: a
+    // caller who needs a key, and a caller holding one for somewhere else. Three spellings of the
+    // same condition also split it across three rows in the error rollups.
+    {
+      const rq2 = fakeReq("/v1/images/generations");
+      rq2.headers = { ...rq2.headers, authorization: "Bearer 3b1c3830-dead-beef-0000-000000000000" };
+      rows.length = 0;
+      const res2b = fakeRes();
+      await IT.generate(rq2, res2b, { tpl, body: { template: slug, prompt: "a cat" }, ip: "203.0.113.9", docsUrl: "https://docs.invalid" });
+      check("a foreign credential on the paid image route says so", /not one of ours/.test(rows[0] ? rows[0].error : ""), true);
+      check("...and never echoes the credential", /3b1c3830-dead/.test(JSON.stringify(rows[0] || {})), false);
     }
 
     // An AUTHENTICATED caller asking for a model this router will not render a template with. It
