@@ -34,6 +34,12 @@ function priceMap() {
 // model catalog (fable-5 $10/$50; current opus 4.6/4.7/4.8 $5/$25 — only the legacy opus-4-1 is the
 // old $15/$75 Opus tier). Keep an entry per advertised id; test/router.test.mjs fails the build if a
 // seeded/aliased model has no cost here.
+// Anthropic's cache multipliers on the base INPUT rate: a read is a tenth, a 5-minute write is
+// 1.25x. Named rather than inlined because they are the two numbers that decide whether a cached
+// consumer looks cheap or expensive, and a reader has to be able to find them.
+const CACHE_READ_RATE = 0.1;
+const CACHE_WRITE_RATE = 1.25;
+
 const MODEL_COST = {
   // haiku — cheap
   "claude-haiku-4-5":            { in: 1,  out: 5,  tier: "haiku" },
@@ -79,10 +85,25 @@ const isPremiumModel = (id) => PREMIUM_TIERS.has(modelTier(id));
 // spend, reporting the premium spend as nothing. `modelTier`'s prefix classifier still tags it opus,
 // so the row is flagged premium; only the money was a fabrication. Callers must render null as
 // unknown, never coerce it with `|| 0`.
-function listCostUsd(id, ptok, ctok) {
+// Anthropic does not charge one rate for prompt tokens. A cache READ is 0.1x the input rate and a
+// cache WRITE is 1.25x, and `ptok` here is the TOTAL — fresh input plus both cache classes, the way
+// normalizeUsage sums them. Pricing all of it at the full input rate overstated every cached
+// consumer, and the overstatement scales with how well they cache: measured on the pool the same
+// day, cache reads were 96% of wmac's prompt tokens, so its list cost was inflated roughly 8x.
+// That number exists to make premium spend visible; one that is wrong in the alarming direction
+// gets discounted, and then the real alarm gets discounted with it.
+//
+// cr/cw are optional: a caller with no cache breakdown gets the old whole-thing-at-input-rate
+// answer, which is correct when there is no caching to account for.
+function listCostUsd(id, ptok, ctok, cr, cw) {
   const p = MODEL_COST[String(id || "").toLowerCase()];
   if (!p) return null;
-  return (ptok || 0) / 1e6 * p.in + (ctok || 0) / 1e6 * p.out;
+  const read = Math.max(0, cr || 0), write = Math.max(0, cw || 0);
+  const fresh = Math.max(0, (ptok || 0) - read - write);
+  return (fresh / 1e6) * p.in
+       + (read / 1e6) * p.in * CACHE_READ_RATE
+       + (write / 1e6) * p.in * CACHE_WRITE_RATE
+       + (ctok || 0) / 1e6 * p.out;
 }
 // Advertised claudecode ids with no MODEL_COST entry — the coverage warning surfaced in adminState so
 // a newly-shipped Anthropic id without a price is visible instead of silently reading as $0/no-tier.

@@ -34,7 +34,7 @@ function foldServedByModel(costRows) {
     e.tokens[m] = (e.tokens[m] || 0) + Number(r.tok || 0);
     if (isPremiumModel(m)) e.premium = true;
     if (r.provider !== "claudecode") continue;
-    const lc = listCostUsd(m, r.ptok, r.ctok);
+    const lc = listCostUsd(m, r.ptok, r.ctok, r.cr, r.cw);
     if (lc == null) e.unknown = true; else e.listUsd += lc;
   }
   for (const e of Object.values(out)) {
@@ -233,9 +233,13 @@ async function statsSummary(req, res) {
       FROM calls WHERE ${W} GROUP BY 1 ORDER BY tok DESC LIMIT 60`, P);
     // Cost estimate: group by (project, sent_model, provider) to price each cohort, then fold into project/model.
     const prices = priceMap();
-    const costRows = await dbRows(`SELECT COALESCE(NULLIF(project,''),'(none)') AS project, req_model, sent_model, provider,
+    // cr/cw ride along because list cost needs them: Anthropic bills a cache READ at 0.1x the input
+  // rate and a WRITE at 1.25x, and `ptok` is the total of all three. Without the split, a 96%-cached
+  // consumer's list cost came out ~8x high.
+  const costRows = await dbRows(`SELECT COALESCE(NULLIF(project,''),'(none)') AS project, req_model, sent_model, provider,
       COALESCE(SUM(total_tokens),0) AS tok,
-      COALESCE(SUM(prompt_tokens),0) AS ptok, COALESCE(SUM(completion_tokens),0) AS ctok
+      COALESCE(SUM(prompt_tokens),0) AS ptok, COALESCE(SUM(completion_tokens),0) AS ctok,
+      COALESCE(SUM(cache_read),0) AS cr, COALESCE(SUM(cache_write),0) AS cw
       FROM calls WHERE ${W} GROUP BY 1, sent_model, req_model, provider`, P);
     let windowCost = 0; const costByProject = {}, costByModel = {};
     // WHICH MODELS each project ran, and how much of its spend went to each. byProject only ever
@@ -300,14 +304,15 @@ async function statsSummary(req, res) {
     // Built from the served model so a rewrite is judged by what actually ran.
     const premRows = await dbRows(`SELECT COALESCE(NULLIF(project,''),'(none)') AS project, sent_model,
       COUNT(*)::int AS n, COALESCE(SUM(total_tokens),0) AS tok, COALESCE(SUM(prompt_tokens),0) AS ptok,
-      COALESCE(SUM(completion_tokens),0) AS ctok, MAX(ts) AS last
+      COALESCE(SUM(completion_tokens),0) AS ctok, COALESCE(SUM(cache_read),0) AS cr,
+      COALESCE(SUM(cache_write),0) AS cw, MAX(ts) AS last
       FROM calls WHERE ${W} AND provider='claudecode' AND sent_model IS NOT NULL
       GROUP BY 1, sent_model ORDER BY tok DESC`, P);
     const premiumUsage = [];
     for (const r of premRows) {
       if (!isPremiumModel(r.sent_model)) continue;
       const reg = r.project && r.project !== "(none)" ? consumerEntry(r.project) : null;
-      const premListUsd = listCostUsd(r.sent_model, r.ptok, r.ctok);
+      const premListUsd = listCostUsd(r.sent_model, r.ptok, r.ctok, r.cr, r.cw);
       premiumUsage.push({ project: r.project, kind: reg ? reg.kind : null, model: r.sent_model,
         tier: modelTier(r.sent_model), calls: r.n, tokens: r.tok,
         list_usd: premListUsd == null ? null : +premListUsd.toFixed(4), last: r.last });

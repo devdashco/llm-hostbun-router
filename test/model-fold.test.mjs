@@ -29,7 +29,7 @@ console.log("foldServedByModel");
     row("claude-sonnet-5", "claude-sonnet-5", "claudecode", 9000, 8000, 1000),
   ])["claude-sonnet-5 claudecode"];
   check("tier speaks for the model carrying the most tokens, not the first in the agg", f.served === "claude-sonnet-5");
-  const perModel = listCostUsd("claude-haiku-4-5", 900, 100) + listCostUsd("claude-sonnet-5", 8000, 1000);
+  const perModel = listCostUsd("claude-haiku-4-5", 900, 100, 0, 0) + listCostUsd("claude-sonnet-5", 8000, 1000, 0, 0);
   check("list cost is the SUM of each served model priced at its own rate", Math.abs(f.listUsd - perModel) < 1e-9);
   check("...which is not the whole group priced at one model's rate",
     Math.abs(f.listUsd - listCostUsd("claude-haiku-4-5", 8900, 1100)) > 1e-6);
@@ -86,6 +86,23 @@ console.log("foldServedByModel");
   ])["claude-opus-5 claudecode"];
   check("rows from different projects add up rather than overwrite",
     Math.abs(f.listUsd - 2 * listCostUsd("claude-opus-5", 90, 10)) < 1e-9);
+}
+
+
+// Anthropic bills a cache READ at 0.1x the input rate and a WRITE at 1.25x, and `ptok` is the total
+// of fresh + read + write. Pricing all of it at the input rate overstated every cached consumer —
+// wmac's opus-5 list cost read $1,165.51 for a window that is 96% cache reads, against $177.52 when
+// the classes are priced apart. The number exists to make premium spend visible; one that is wrong
+// in the alarming direction gets discounted, and the real alarm goes with it.
+{
+  const flat = listCostUsd("claude-opus-5", 1_000_000, 0);                       // no split given
+  const cached = listCostUsd("claude-opus-5", 1_000_000, 0, 900_000, 0);         // 90% cache reads
+  check("with no cache split, every prompt token is priced at the input rate", Math.abs(flat - 5) < 1e-9);
+  // 100k fresh at $5/M + 900k reads at $0.50/M = 0.5 + 0.45
+  check("a cache READ is priced at a tenth", Math.abs(cached - 0.95) < 1e-9);
+  const written = listCostUsd("claude-opus-5", 1_000_000, 0, 0, 1_000_000);      // all cache writes
+  check("a cache WRITE is priced at 1.25x", Math.abs(written - 6.25) < 1e-9);
+  check("...so a heavily cached window costs a fraction of the flat reading", cached < flat / 5);
 }
 
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");
