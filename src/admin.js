@@ -42,7 +42,11 @@ const IT = require("./imagetemplates");
 
 // ─────────────────────────────────────────────────────────────────────────────
 const COOKIE = "hb_admin";
-const sign = (payload) => crypto.createHmac("sha256", CFG.adminPassword).update(payload).digest("hex");
+// The key carries `sessionEpoch`, so bumping it (logout) invalidates every cookie already issued.
+// Read at CALL time, never captured: CFG is mutated in place and a captured value would keep
+// validating tokens minted before the logout that was supposed to kill them.
+const sign = (payload) =>
+  crypto.createHmac("sha256", `${CFG.adminPassword}:${CFG.sessionEpoch || 1}`).update(payload).digest("hex");
 function makeSession(ttlMs = 7 * 24 * 3600 * 1000) {
   const payload = `exp=${Date.now() + ttlMs}`;
   return `${Buffer.from(payload).toString("base64url")}.${sign(payload)}`;
@@ -178,6 +182,12 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     return sendJson(res, 200, { ok: true }, { "set-cookie": cookie });
   }
   if (sub === "logout") {
+    // Telling the CLIENT to drop the cookie is not logging out: the token is a stateless signature
+    // and replaying the old value authenticated every gated route for the rest of its 7-day life.
+    // Bumping the epoch changes the signing key, so the handed-back cookie stops verifying. Global
+    // by design — there is one admin password and one logout button.
+    CFG.sessionEpoch = (CFG.sessionEpoch || 1) + 1;
+    persistConfig();
     const secure = process.env.SESSION_INSECURE === "1" ? "" : " Secure;";
     return sendJson(res, 200, { ok: true }, { "set-cookie": `${COOKIE}=; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=0` });
   }
@@ -230,8 +240,14 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   }
 
   if (sub === "reset" && req.method === "POST") {
+    // The session epoch is the ONE field a reset must carry forward rather than restore. Restoring
+    // it walks the counter BACKWARDS, so every cookie revoked by an earlier logout starts verifying
+    // again — a reset would resurrect exactly the sessions someone logged out to kill. Carrying it
+    // also means the operator running the reset is not thrown out of the panel mid-change.
+    const epoch = CFG.sessionEpoch || 1;
     try { fs.unlinkSync(CONFIG_FILE); } catch {}
     setCFG(envDefaults());
+    CFG.sessionEpoch = epoch;
     reindexKeys();
     console.log(`[admin] config reset to env defaults ip=${ip}`);
     return sendJson(res, 200, { ok: true, state: adminState() });

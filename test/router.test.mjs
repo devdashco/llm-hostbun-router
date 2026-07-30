@@ -53,7 +53,7 @@ await sleep(2500);
 // If login fails, every later assertion would compare against a 401 body and quietly "pass" the ones
 // that expect an error. Bail loudly instead.
 const rawLogin = curl(["-i", "-X", "POST", `${BASE}/api/login`, "-d", '{"password":"ddash"}']);
-const cookie = (rawLogin.match(/hb_admin=([^;]+)/) || [])[1] || "";
+let cookie = (rawLogin.match(/hb_admin=([^;]+)/) || [])[1] || "";
 if (!cookie) { console.error(`harness: login failed, refusing to report passes\n${rawLogin.slice(0, 300)}`); server.kill(); process.exit(2); }
 const api = (path, body) => {
   const a = [`${BASE}/api/${path}`, "-H", `cookie: hb_admin=${cookie}`];
@@ -68,6 +68,7 @@ let pass = 0, fail = 0;
 // case appended below would run against a blank router and either pass vacuously or fail for a
 // reason that has nothing to do with what it is testing. The ordering was a comment; now it trips.
 let fixtureDestroyed = false;
+let revokedCookie = "";
 function check(label, actual, expected) {
   if (fixtureDestroyed) {
     fail++;
@@ -623,10 +624,20 @@ console.log("admin — logout, the last route with no test:");
   // itself. Replaying the OLD cookie value after "logout" still authenticates every cookie-gated
   // route, right up to its 7-day expiry.
   const afterLogout = curl([`${BASE}/api/state`, "-H", `cookie: hb_admin=${oldCookie}`]);
-  const [stateBody, stateStatus] = afterLogout.split("\n<");
-  check("BUG: the OLD cookie still authenticates after logout (no server-side revocation)",
-    stateStatus.replace(/[<>]/g, ""), "200");
-  check("...and it's real state, not an error body", typeof JSON.parse(stateBody).projectRoutes, "object");
+  const [, stateStatus] = afterLogout.split("\n<");
+  check("the OLD cookie no longer authenticates after logout", stateStatus.replace(/[<>]/g, ""), "401");
+  // Logging out must not lock the operator out: a NEW login still works, and it is the same
+  // password — the epoch changes the signing key, it does not change the credential.
+  const reLoginRaw = curl(["-i", "-X", "POST", `${BASE}/api/login`, "-d", '{"password":"ddash"}']);
+  const newCookie = (reLoginRaw.match(/hb_admin=([^;]+)/) || [])[1] || "";
+  check("logging in again after a logout still works", newCookie.length > 0, true);
+  check("...and the new cookie authenticates",
+    curl([`${BASE}/api/state`, "-H", `cookie: hb_admin=${newCookie}`, "-o", "/dev/null"]).trim().replace(/[<>]/g, ""), "200");
+  check("...and it is a DIFFERENT token than the revoked one", newCookie !== oldCookie, true);
+  // The suite-wide `cookie` was minted before this logout, so it died too — re-point it, or every
+  // assertion below this block silently tests the 401 path instead of what it says it tests.
+  cookie = newCookie;
+  revokedCookie = oldCookie;   // the reset block below checks it stays dead
 }
 
 // ── POST /api/reset — LAST, because it destroys the fixture everything above reads ──────────────
@@ -654,6 +665,13 @@ console.log("admin — reset, run last because it wipes the fixture:");
   // environment, not a blank slate.
   check("the env-provided account pool survives", (after.claudecodeAccountPool || []).map((a) => a.name), ["acctA", "acctB"]);
   check("the config file was actually unlinked", existsSync(CFG_PATH), false);
+  // A reset restores env defaults, and the session epoch is the one field that must NOT go back:
+  // restoring it walks the revocation counter backwards and every cookie an earlier logout killed
+  // starts working again. `revokedCookie` was minted before the logout block above.
+  check("a reset does not resurrect a cookie revoked by an earlier logout",
+    curl(["-o", "/dev/null", `${BASE}/api/state`, "-H", `cookie: hb_admin=${revokedCookie}`]).trim().replace(/[<>]/g, ""), "401");
+  check("...while the operator's current session still works after the reset",
+    curl(["-o", "/dev/null", `${BASE}/api/state`, "-H", `cookie: hb_admin=${cookie}`]).trim().replace(/[<>]/g, ""), "200");
 }
 
 fixtureDestroyed = true;   // anything asserting past this point is in the wrong place — see check()

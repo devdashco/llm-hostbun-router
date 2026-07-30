@@ -217,6 +217,11 @@ function envDefaults() {
     auth: { mode: process.env.AUTH_MODE || "optional" },
     // Admin password (HMAC secret + login check). Weak default per request — rotate via the UI.
     adminPassword: process.env.ADMIN_PASSWORD || "ddash",
+    // Bumped by POST /api/logout and mixed into the session signature, so a cookie handed back at
+    // logout stops authenticating. Sessions are a stateless signed token with no store to revoke
+    // from; this is the revocation. It is global — one admin password, so "log out" means all
+    // sessions, which is the honest reading of the only logout button there is.
+    sessionEpoch: 1,
     // Call logging → the `llmrouter` Postgres (DATABASE_URL). enabled: record any call metadata at all;
     // content: also store the prompt + the model's reply text (uncapped unless CONTENT_CAP > 0);
     // retain: keep at most this many rows (oldest pruned). 0 = keep every row forever, no pruning.
@@ -310,6 +315,9 @@ function mergeConfig(base, saved) {
   if (typeof saved.imageTemplateKey === "string") c.imageTemplateKey = saved.imageTemplateKey;
   for (const k of ["oblitToken", "adminPassword"])
     if (typeof saved[k] === "string") c[k] = saved[k];
+  // Must survive the sanitizer or every logout is undone by the next config load — the same way
+  // `allowUa` was silently dropped here and took the key policy with it.
+  if (Number.isInteger(saved.sessionEpoch) && saved.sessionEpoch > 0) c.sessionEpoch = saved.sessionEpoch;
   if (typeof saved.jsonEnforce === "boolean") c.jsonEnforce = saved.jsonEnforce;
   if (Number.isInteger(saved.jsonMaxRetries) && saved.jsonMaxRetries >= 0 && saved.jsonMaxRetries <= 5)
     c.jsonMaxRetries = saved.jsonMaxRetries;
