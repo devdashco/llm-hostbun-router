@@ -78,7 +78,13 @@ async function fetchAccountModels(acct) {
 }
 
 async function fetchAnthropicModels() {
-  const pool = CFG.claudecodeAccountPool || [];
+  // Skip the logins the router has already given up on. A disabled account is never served
+  // (accountFor returns null for a project pinned to it), and its catalog read fails forever — an
+  // OAuth-disabled subscription answers 403 permission_error on every request, by definition. Left
+  // in, it lands in `failedAccounts` on every 6h sweep, so the panel permanently warns "could not
+  // read the catalog on william (HTTP 403)" about a login nobody expects to work. That is a warning
+  // that means nothing, sitting next to the ones that mean something.
+  const pool = (CFG.claudecodeAccountPool || []).filter((a) => !a.disabled);
   const settled = await Promise.all(pool.map(async (a) => {
     try { return { account: a.name, models: await fetchAccountModels(a) }; }
     catch (e) { return { account: a.name, error: e.message }; }

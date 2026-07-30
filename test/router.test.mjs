@@ -452,6 +452,28 @@ const rawPost = (path, raw) => {
   CFG.accountStrategy = "soonest-weekly-reset";
   for (const n of ["early", "late", "spent"]) ORG_OF_ACCOUNT.set(n, "org-" + n);
 
+  // A disabled login is never contacted for the model catalog either. It is never SERVED
+  // (accountFor returns null for a project pinned to it) and its read fails forever — an
+  // OAuth-disabled subscription answers 403 on every request — so sweeping it every 6h puts a
+  // permanent "could not read the catalog on <name>" warning in the panel about a login nobody
+  // expects to work. A warning that always fires is one nobody reads.
+  {
+    const { fetchAnthropicModels } = req(join(ROOT, "src/claudecode.js"));
+    const savedPool = CFG.claudecodeAccountPool, savedFetch = globalThis.fetch;
+    // A failed read returns null too, so "it came back null" cannot tell "skipped it" from "tried
+    // and failed" — which is the whole change. Count the outbound requests instead: zero is the
+    // assertion. (Timing would say the same thing and say it flakily; a refused connection on a
+    // dead port is as fast as not dialling at all.)
+    let calls = 0;
+    globalThis.fetch = (...a) => { calls++; return savedFetch(...a); };
+    CFG.claudecodeAccountPool = [{ name: "gone", token: "sk-ant-oat-x", disabled: true }];
+    const hit = await fetchAnthropicModels();
+    globalThis.fetch = savedFetch;
+    check("a pool of only disabled logins yields no catalog", hit, null);
+    check("...without contacting any of them", calls, 0);
+    CFG.claudecodeAccountPool = savedPool;
+  }
+
   // No readings at all → never hop blind: the pin decides, exactly as before.
   check("no weekly reading anywhere → the pin decides", accountFor("someapp").name, "late");
 
