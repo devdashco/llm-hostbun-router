@@ -87,7 +87,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (21 suites, ~535 checks, ~60s)
+## Tests — `npm test` (22 suites, ~545 checks, ~60s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -263,6 +263,15 @@ so this is recorded as a fact with a date rather than automated.
 - `test/module-size.test.mjs` — the 500-line module budget, as a ratchet. `server.js` and `admin.js`
   are already over and carry ceilings they may only shrink; a file that shrinks without lowering its
   ceiling fails too, with the number to write.
+
+- `test/registry-refresh.test.mjs` — a refresh that cannot READ must not WRITE. `refresh()` projects
+  the Postgres registry into `CFG` and the `/data/config.json` mirror, and it read through `dbRows`,
+  which swallows a query error and returns `[]` — indistinguishable from "no rows". One transient
+  failure on the api_keys SELECT therefore emptied every consumer's key list, wiped `KEY_INDEX`, and
+  PERSISTED that: every caller 401s `unknown or revoked key`, and a restart does not recover it
+  because the mirror is now the blank version. Pins that a failed read leaves the previous projection
+  alone, that this holds for the consumers query too, and that a later successful refresh still
+  applies — a guard that latched on the first error would be its own outage.
 
 - `test/test-helpers.test.mjs` — a suite may not call an assertion helper it does not define. No two
   suites here agree on the names — `check(name, actual, expected)` in some, `check(name, bool)` in

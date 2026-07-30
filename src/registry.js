@@ -141,13 +141,29 @@ async function upsertDeveloper(name, email) {
 // ── projection: DB -> CFG (what requests read) -> /data/config.json (the mirror) ──
 // `kind` is projected back to the old dev/app words because identity.js, the pins and the panel all
 // speak those. The DB is where the three-entity truth lives; this is its shadow.
+// Read with dbExec, NOT dbRows. dbRows swallows a query error and returns [], which this function
+// cannot tell apart from "no rows" — and it overwrites CFG.consumers unconditionally, then persists
+// that to /data/config.json. So one transient failure on the api_keys SELECT (a link this repo's own
+// notes flag as crossing the WAN) emptied every consumer's key list, wiped KEY_INDEX, and WROTE THAT
+// TO DISK: every caller 401s with "unknown or revoked key", looking exactly like a mass revocation,
+// and a restart does not recover it because the mirror is now the empty version. Reproduced.
+// A refresh that cannot read is a refresh that must not write — the previous projection is stale at
+// worst, and stale beats blank in the only direction that matters here.
+const rowsOrThrow = async (sql) => (await dbExec(sql)).rows;
+
 async function refresh() {
   if (!dbUp()) return;
-  const devs = await dbRows("SELECT id, name FROM developers WHERE disabled_at IS NULL");
+  let devs, cons, keys, aliases;
+  try {
+    devs = await rowsOrThrow("SELECT id, name FROM developers WHERE disabled_at IS NULL");
+    cons = await rowsOrThrow("SELECT id, name, kind, developer_id, note, allow_ua FROM consumers WHERE disabled_at IS NULL");
+    keys = await rowsOrThrow("SELECT id, consumer_id, hash, created_at, last_used_at, revoked_at, note FROM api_keys");
+    aliases = await rowsOrThrow("SELECT alias, target FROM consumer_aliases");
+  } catch (e) {
+    console.error(`[registry] refresh FAILED (${e.message}) — keeping the previous projection; CFG and the mirror are unchanged, so authentication keeps working on what we last read`);
+    return;
+  }
   const byId = new Map(devs.map((d) => [String(d.id), d.name]));
-  const cons = await dbRows("SELECT id, name, kind, developer_id, note, allow_ua FROM consumers WHERE disabled_at IS NULL");
-  const keys = await dbRows("SELECT id, consumer_id, hash, created_at, last_used_at, revoked_at, note FROM api_keys");
-  const aliases = await dbRows("SELECT alias, target FROM consumer_aliases");
 
   const keysOf = new Map();
   for (const k of keys) {
