@@ -6,6 +6,7 @@
 // consumer on the fleet) are the two that would make this thing cry wolf, and both are wired here
 // as must-not-fire.
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 const require = createRequire(import.meta.url);
 const { evaluate, COOLDOWN, SPIKE_BASE_MIN } = require("../src/waste.js");
 
@@ -98,6 +99,20 @@ check("a row with no consumer is skipped", ev([{ consumer: "", calls: 9, billabl
 // null — every field has to survive that without throwing.
 check("null aggregates do not throw",
   ev([{ consumer: "empty", calls: 0, billable: null, prompt: null, cread: null, tools_kb: null }]).length === 0);
+
+// The cooldowns are calibrated NUMBERS, not a vibe, and the comment above them said "both back off
+// to a working day" while burn was 6h and bloat 24h — a 4x difference described as the same thing.
+// A reader tuning one of these off that sentence edits the wrong constant. Pinned here so the prose
+// and the constants have to move together.
+{
+  const H = 3600e3;
+  check("burn backs off 6 hours", COOLDOWN.burn === 6 * H);
+  check("a spike stays per-hour", COOLDOWN.spike === H);
+  check("bloat backs off a full day", COOLDOWN.bloat === 24 * H);
+  const src = readFileSync(new URL("../src/waste.js", import.meta.url), "utf8");
+  const prose = (src.match(/\/\/ A standing condition[\s\S]*?const COOLDOWN/) || [""])[0];
+  check("the comment does not claim one backoff for two different numbers", !/back off to a working day/.test(prose));
+}
 
 console.log(`waste: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
