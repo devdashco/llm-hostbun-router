@@ -12,11 +12,15 @@ upstream is billed **out**. Old slugs (`/identity`, `/settings`, `/stats`, `/acc
 | Overview | Health · Usage | Provider health, recent calls, activity; usage by project, model, provider |
 | Call log | — | Every request with its full prompt and reply, searchable |
 | Routing | Rules · Models | Per-project pins and allowlists, usage limits, resolve tracer; merged catalog + one-shot test call |
-| Consumers | Consumers · Access | **Inbound.** The registry (who calls, what it costs, who holds a key); the auth gate, the local model gate, the panel password |
-| Providers | Accounts · Crazyrouter | **Outbound.** Per-account 5h/7d usage windows, project pins, live limit refresh; crazyrouter key status/credit and rotation |
+| Callers | Callers · Secrets | **Inbound.** The registry (who calls, what it costs, who holds a key, and which clients present it); the auth gate, the local model gate, the panel password |
+| Upstreams | Accounts · Crazyrouter · Image templates | **Outbound.** Per-account 5h/7d usage windows, project pins, live limit refresh; crazyrouter key status/credit and rotation; the reference-picture templates rendered on crazyrouter |
 
 Renamed 2026-07-26. "Identity" used to hold the outbound Claude Max account pool and "Settings"
-opened on a provider's API key, so neither name told you what was on the page.
+opened on a provider's API key, so neither name told you what was on the page. Renamed again
+2026-07-27 to **Callers** and **Upstreams**: in a list, "Consumers" and "Providers" are nine-letter
+latinate twins ending in -ers and neither says which way the wire points. The URLs did not change —
+`/consumers/` and `/providers/` are still the slugs, and the page bodies still say consumer and
+provider, because those are the registry entity and the call-log column.
 
 Secrets are masked everywhere. The API never returns a key hash, a Max token, or a password.
 

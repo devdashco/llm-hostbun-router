@@ -117,6 +117,28 @@ check("the sidebar rendered", await until(() => /Routing and providers/.test(win
     check(`every image model id is documented (${ids.length} ids)`, missing.length === 0, `missing: ${missing.join(", ")}`);
   }
 
+  // The docs' page table drifted a full rename behind the panel — it still said Consumers/Providers
+  // with tabs "Consumers · Access" after the 2026-07-27 rename to Callers/Upstreams, and never
+  // learned about the Image templates tab. panel-nav.test.mjs keeps the five files INSIDE the panel
+  // agreeing; nothing kept the published description honest, and a reader following it looks for a
+  // nav entry that is not there.
+  {
+    const adminDoc = readFileSync(join(ROOT, "docs", "admin.md"), "utf8");
+    const shell = readFileSync(join(ROOT, "panel", "components", "panel", "shell.tsx"), "utf8");
+    const navNames = [...shell.matchAll(/\{\s*name:\s*"([^"]+)",\s*slug:/g)].map((m) => m[1]);
+    const missing = navNames.filter((n) => !adminDoc.includes(`| ${n} |`));
+    check(`the published page table names the panel's pages (${navNames.length})`, missing.length === 0,
+      `missing rows for: ${missing.join(", ")}`);
+  }
+
+  // A documented URL on THIS host that this host does not serve sends a reader to a 400.
+  {
+    const all = readdirSync(join(ROOT, "docs")).filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(ROOT, "docs", f), "utf8")).join("\n");
+    check("no doc points a reader at llm.hostbun.cc/dashboard/* — that is crazyrouter's API, not ours",
+      !/llm\.hostbun\.cc\/dashboard\//.test(all));
+  }
+
   // And the quickstart's first example must actually work: no key, no service.
   const qs = readFileSync(join(ROOT, "docs", "quickstart.md"), "utf8");
   const firstCurl = (qs.match(/```bash[\s\S]*?```/) || [""])[0];

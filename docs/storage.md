@@ -37,7 +37,11 @@ curl https://llm.hostbun.cc/prices.json
 Token models are USD per 1M tokens (in/out). Image, video and audio models are USD per call. The feed
 self-refreshes every 6h.
 
+Crazyrouter's own balance is not on this router. `/dashboard/billing/*` belongs to crazyrouter and
+is called server-side by the admin health check; this page used to show those two URLs against
+`llm.hostbun.cc`, where they have never existed — a GET there falls through to the model router and
+answers `400 model_not_routable`. The reading is behind the panel's cookie:
+
 ```bash
-curl https://llm.hostbun.cc/dashboard/billing/subscription   # {"hard_limit_usd":13,…}
-curl https://llm.hostbun.cc/dashboard/billing/usage          # {"total_usage":…}
+curl https://llm.hostbun.cc/api/crazyrouter -H "cookie: hb_admin=…"   # {"hardLimitUsd":…,"totalUsageUsd":…}
 ```
