@@ -466,15 +466,15 @@ async function registryRoutes(req, res, sub, ip) {
       return sendJson(res, 200, { ok: true, developers: await REG.listDevelopers() });
     });
 
-  // machines and projects are the same table; the route just fixes `kind` so a caller cannot create
-  // a project that owns a developer, or a machine that owns nobody.
   // machines and projects are the same table; the route fixes `kind` so a caller cannot create a
   // project that owns a developer, or a machine that owns nobody.
   for (const [path, kind] of [["machines", "machine"], ["projects", "project"]]) {
     if (sub === path && req.method === "GET")
       return guard(async () => {
         const list = await REG.listConsumers(kind);
-        const stale = list.some((x) => x.stale);
+        // Staleness belongs to the SOURCE, not the rows: an empty mirror answered a bare
+        // `{machines: []}` — "nothing is registered", not "I cannot see". See listConsumers().
+        const stale = !DB.dbUp() || list.some((x) => x.stale);
         return sendJson(res, 200, { [path]: list, ...(stale ? { stale: true, warning: "registry DB unreachable — this is the /data/config.json mirror, possibly out of date" } : {}) });
       });
     if (sub === path && req.method === "POST")

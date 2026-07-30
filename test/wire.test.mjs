@@ -173,8 +173,11 @@ routes.push(
   ["POST /api/crazyrouter/test", () => adminPost("/api/crazyrouter/test", { key: "sk-test-not-a-real-key" })],
   ["GET  /api/consumers", () => adminGet("/api/consumers")],
   ["GET  /api/developers", () => adminGet("/api/developers")],
-  // The registry's read surface. Without a DB these answer 503, not 500 or a hang — a caller must be
-  // able to tell "the registry is down" from "you asked wrong".
+  // The registry's read surface. Without a DB these do NOT 503 — they answer 200 from the
+  // /data/config.json mirror and SAY so (`stale: true` + a warning). That is deliberate: a cold boot
+  // with the DB down must still authenticate. The comment here claimed 503 for a long time; the
+  // status-only loop below could not tell the difference, so the real invariant is asserted
+  // separately underneath — a caller must be able to tell a mirror read from a live one.
   ["GET  /api/machines", () => adminGet("/api/machines")],
   ["GET  /api/projects", () => adminGet("/api/projects")],
 );
@@ -187,6 +190,19 @@ const expect = async (name, p, want, init) => {
   if (got === want) ok(`${name} -> ${got}`);
   else bad(name, `expected ${want}, got ${got}`);
 };
+// The registry read surface, on the invariant the status loop above cannot see. With no DB the
+// answer is the config mirror, and a caller who cannot tell that from a live read will act on data
+// that is "possibly out of date" believing it is current — which is the same failure as a confident
+// zero. This suite runs with DATABASE_URL unset, so this IS the DB-down case.
+for (const path of ["/api/machines", "/api/projects"]) {
+  const r = await fetch(`http://127.0.0.1:${PORT}${path}`, { headers: { cookie } });
+  const body = await r.json().catch(() => ({}));
+  if (r.status !== 200) bad(`${path} serves the mirror when the DB is down`, `status ${r.status}`);
+  else if (body.stale !== true) bad(`${path} SAYS it is serving the mirror`, `no stale flag: ${JSON.stringify(body).slice(0, 120)}`);
+  else if (!/mirror/i.test(body.warning || "")) bad(`${path}'s warning names what the reader is looking at`, body.warning || "(none)");
+  else ok(`${path} answers from the mirror and says so`);
+}
+
 await expect("GET  /admin/api/state is GONE", "/admin/api/state", 404);
 await expect("GET  /admin is GONE", "/admin", 404);
 await expect("GET  /api/v1/models still routes to the catalog", "/api/v1/models", 200);
