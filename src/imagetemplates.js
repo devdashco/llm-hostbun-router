@@ -23,7 +23,7 @@ const path = require("node:path");
 const { CFG, CONFIG_FILE, persistConfig, IMAGE_MODEL_IDS } = require("./config");
 const { sanitizeImageTemplate, IMAGE_TEMPLATE_MODELS } = require("./config-schema");
 const { readJson, sendJson, proxy } = require("./http");
-const { authenticate, extractProject, parseConsumer } = require("./identity");
+const { authenticate, extractProject, parseConsumer, uaAllowed } = require("./identity");
 
 // Beside config.json on the same persistent volume: one thing to back up, one thing to lose.
 const TPL_DIR = process.env.IMAGE_TEMPLATE_DIR || path.join(path.dirname(CONFIG_FILE), "image-templates");
@@ -233,6 +233,20 @@ function authForTemplate(req, res, docsUrl) {
       message: `${why}. Templated image generation runs on a paid upstream, so it needs an API key: send it as \`Authorization: Bearer sk-llm-…\`. Untemplated /v1/images/generations still goes to our own GPU and stays open.`,
       docs: `${docsUrl}#/images`,
     } }, { "www-authenticate": `Bearer realm="llm.hostbun.cc"` });
+    return null;
+  }
+  // The same client lock the text paths enforce (see uaAllowed in identity.js). This route is where
+  // it matters MOST and was the one place it was missing: everything else a locked developer key can
+  // reach is a flat subscription or our own GPU, and this one bills crazyrouter per token. A key
+  // locked to `claude-cli/` that still buys images is a lock in name only.
+  if (!uaAllowed(auth.entry, req.headers["user-agent"])) {
+    const ua = String(req.headers["user-agent"] || "(none)").slice(0, 80);
+    console.error(`[err] 403 ua not allowed for ${auth.consumer} ua="${ua}" path=images`);
+    sendJson(res, 403, { error: {
+      type: "permission_error", code: "client_not_allowed_for_key",
+      message: `this key belongs to \`${auth.consumer}\`, which only accepts calls from ${(auth.entry.allowUa || []).map((p) => `\`${p}…\``).join(" or ")} — yours says \`${ua}\`. Templated image generation is paid, so it must be billed to the caller that actually ran it.`,
+      docs: `${docsUrl}#/identity?id=one-key-per-consumer`,
+    } });
     return null;
   }
   const job = String(req.headers["x-job"] || "").trim().toLowerCase() || parseConsumer(extractProject(req, Buffer.alloc(0))).job;

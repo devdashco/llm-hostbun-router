@@ -65,7 +65,12 @@ fs.writeFileSync(cfgPath, JSON.stringify({
   crazyrouterKey: "crazy-test-key", imageTemplateKey: "image-only-key",
   requireProject: false, requireRegisteredConsumer: false,
   auth: { mode: "required" }, logging: { enabled: false, content: false },
-  consumers: { tester: { kind: "app", keys: [{ id: "testkey1", hash: sha256("s3cret"), created: 1 }] } },
+  consumers: {
+    tester: { kind: "app", keys: [{ id: "testkey1", hash: sha256("s3cret"), created: 1 }] },
+    // Locked to the interactive client, same shape test/keypolicy.test.mjs ships as the fix. This is
+    // the one route under /v1/images/* that spends money, so it is the one place that lock matters most.
+    uatester: { kind: "app", keys: [{ id: "uakey0001", hash: sha256("uasecret"), created: 1 }], allowUa: ["claude-cli/"] },
+  },
   consumerAliases: {},
 }));
 
@@ -139,6 +144,37 @@ const sdAnon = await call("/v1/images/generations", {
 check("an untemplated generation stays open (our GPU, free)", sdAnon.status === 200, `status ${sdAnon.status}`);
 check("...and reaches SD-Turbo, not the paid upstream", seen.sd.length === 1 && seen.crazy.length === 0,
   `sd=${seen.sd.length} crazy=${seen.crazy.length}`);
+
+// ── the client lock (allowUa) ────────────────────────────────────────────────
+// The same lock the text paths enforce (test/keypolicy.test.mjs) — this route is where it matters
+// MOST, because it is the only route under /v1/images/* that spends real money. A key locked to
+// `claude-cli/` that still buys images from a `node` client is a lock in name only.
+console.log("\nthe client lock:");
+const UAKEY = "sk-llm-uakey0001-uasecret";
+const uakeyed = (ua) => (body) => ({
+  method: "POST",
+  headers: { "content-type": "application/json", authorization: `Bearer ${UAKEY}`, "user-agent": ua },
+  body: JSON.stringify(body),
+});
+seen.crazy.length = 0; seen.sd.length = 0;
+const uaBlocked = await call("/v1/images/generations", uakeyed("node")({ model: "nano-banana", template: "bobbo", prompt: "a locked key, used by an app" }));
+check("a locked key presented by a non-matching client is refused", uaBlocked.status === 403, `status ${uaBlocked.status} ${uaBlocked.text.slice(0, 160)}`);
+check("...as the client lock specifically", uaBlocked.json && uaBlocked.json.error && uaBlocked.json.error.code === "client_not_allowed_for_key",
+  JSON.stringify(uaBlocked.json));
+check("...and nothing was sent upstream on our bill — a 403 that still billed would be worthless",
+  seen.crazy.length === 0, `${seen.crazy.length} upstream call(s)`);
+
+seen.crazy.length = 0;
+const uaAllowed = await call("/v1/images/generations", uakeyed("claude-cli/2.1.220 (external, cli)")({ model: "nano-banana", template: "bobbo", prompt: "the same key, its own client" }));
+check("the SAME key with a matching client still succeeds (an over-strict lock is an outage)",
+  uaAllowed.status === 200, `status ${uaAllowed.status} ${uaAllowed.text.slice(0, 160)}`);
+check("...and reached the paid upstream", seen.crazy.length === 1, `${seen.crazy.length} upstream call(s)`);
+
+seen.crazy.length = 0;
+const uaUnrestricted = await call("/v1/images/generations", keyed({ model: "nano-banana", template: "bobbo", prompt: "no policy on this key at all" }));
+check("a consumer with an EMPTY/absent allowUa is unrestricted, not a lockout",
+  uaUnrestricted.status === 200, `status ${uaUnrestricted.status} ${uaUnrestricted.text.slice(0, 160)}`);
+check("...and reached the paid upstream", seen.crazy.length === 1, `${seen.crazy.length} upstream call(s)`);
 
 // ── what actually reaches the model ──────────────────────────────────────────
 console.log("\nthe request the model sees:");
