@@ -9,7 +9,9 @@
 const { CFG } = require("./config");
 const { dbRows, ACCT_DEAD } = require("./db");
 const { sendJson, readBody, readJson, mask } = require("./http");
-const { resolveRoute, isGated } = require("./routing");
+const { resolveRoute, isGated, accountFor } = require("./routing");
+const { recordCall } = require("./db");
+const TR = require("../translate");
 const { upstreamCatalogs, localModelEntries } = require("./claudecode");
 
 async function probe(base, authToken) {
@@ -52,21 +54,51 @@ async function crazyCheck(key) {
 }
 
 // Run a chat completion through current routing (admin is trusted → auto-injects the gate token).
+// The panel's "test call". It does NOT go through proxy() — there is no caller request to forward,
+// only a form — which is why the two things below had to be done by hand here.
+//
+// 1. claudecode needs its own dialect. This posted /v1/chat/completions to api.anthropic.com with
+//    no Authorization at all, so a test of ANY Claude model failed and reported the upstream's
+//    complaint as though the router were broken. Anthropic wants /v1/messages, a pinned account's
+//    token, the oauth beta headers and a translated body — the router has all four already.
+// 2. It spends. crazyrouter is billed per token and claudecode draws a real subscription window, so
+//    a test that leaves no call-log row is spend nobody can see — the same gap the image-template
+//    render had. `admin:test-call` is not a registered consumer on purpose: the row says where it
+//    came from, and an operator pressing a button belongs to no caller.
 async function adminTest(model, prompt, maxTokens) {
   const route = resolveRoute(model);
-  const headers = { "content-type": "application/json" };
+  const sendModel = route.rewriteModel || model;
+  const t0 = Date.now();
+  const openai = { model: sendModel, messages: [{ role: "user", content: prompt || "Reply with a short greeting." }], max_tokens: maxTokens || 256, stream: false };
+  const done = (r) => {
+    recordCall({ ts: t0, ip: null, ua: "panel", method: "POST", path: "/api/test",
+      reqModel: model, sentModel: sendModel, provider: route.provider, keyLabel: `admin:${route.provider}`,
+      status: r.status || 0, ms: Date.now() - t0, error: r.ok ? null : (r.error || `upstream ${r.status}`),
+      project: "admin:test-call", usage: r.usage || {} });
+    return r;
+  };
+  let url = route.base + "/v1/chat/completions";
+  let headers = { "content-type": "application/json" };
+  let body = openai;
   if (route.provider === "crazyrouter") headers.authorization = `Bearer ${CFG.crazyrouterKey}`;
   else if (route.provider === "local" && isGated(route.target) && CFG.oblitToken) headers.authorization = `Bearer ${CFG.oblitToken}`;
-  const sendModel = route.rewriteModel || model;
-  const body = { model: sendModel, messages: [{ role: "user", content: prompt || "Reply with a short greeting." }], max_tokens: maxTokens || 256, stream: false };
-  const t0 = Date.now();
+  else if (route.provider === "claudecode") {
+    const acct = accountFor("admin");
+    if (!acct) return done({ ok: false, status: 0, provider: route.provider, sentModel: sendModel, ms: 0,
+      error: "no usable Claude account — every login in the pool is disabled or dead, so there is nothing to test with" });
+    url = route.base + "/v1/messages";
+    headers = { "content-type": "application/json", ...TR.anthropicHeaders(acct.token) };
+    body = TR.openaiToAnthropic(openai);
+  }
   try {
-    const r = await fetch(route.base + "/v1/chat/completions", { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) });
+    const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) });
     const text = await r.text(); let j = null; try { j = JSON.parse(text); } catch {}
-    const m = j && j.choices && j.choices[0] && j.choices[0].message;
+    const oa = route.provider === "claudecode" && j && j.content ? TR.anthropicToOpenai(j, { model }) : j;
+    const m = oa && oa.choices && oa.choices[0] && oa.choices[0].message;
     const content = (m && (m.content || m.reasoning_content)) || null;
-    return { ok: r.ok, status: r.status, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, content, raw: content == null ? text.slice(0, 2000) : undefined };
-  } catch (e) { return { ok: false, status: 0, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, error: e.message }; }
+    return done({ ok: r.ok, status: r.status, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, content,
+      usage: (oa && oa.usage) || {}, raw: content == null ? text.slice(0, 2000) : undefined });
+  } catch (e) { return done({ ok: false, status: 0, provider: route.provider, sentModel: sendModel, ms: Date.now() - t0, error: e.message }); }
 }
 
 async function health(req, res) {

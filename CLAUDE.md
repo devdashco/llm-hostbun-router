@@ -163,7 +163,13 @@ needs a key), `reset` (restores config defaults), `calls/clear` and `consumers/p
 `registry/keys` + both `keys/revoke` (mint and revoke credentials), plus `reveal`. `reveal`, `auth`,
 `calls/clear`, `consumers/purge`, `registry/keys` and both `keys/revoke` were covered that day;
 `reset`, `claudecode/models`, `models`, `limits`, `crazyrouter/test` and both alias routes too —
-only `logout` is left. Covering the "read-mostly tail" was not cosmetic: it found
+and `logout` last, so the admin surface has no untested route today — its block in
+`router.test.mjs` pins the parts that are a lock rather than a courtesy: an anonymous `POST` is a
+401 (an ungated one is a free lever on everyone else's session), a `GET` is refused (an
+`<img src=".../api/logout">` would otherwise log the operator out from any page), and the OLD cookie
+stops authenticating afterwards — sessions are stateless signed tokens with no store to revoke, so
+without the `sessionEpoch` bump "logout" would clear the browser's copy and nothing else. Covering
+the "read-mostly tail" was not cosmetic: it found
 `GET /api/claudecode/models` throwing `ReferenceError: claudecodeCatalog is not defined` on every
 call, live. `imports.test.mjs` could not catch that class at the time — it flagged a bare `name(` CALL, and this
 was an unbound identifier read as an OBJECT (`claudecodeCatalog.source`). **A second pass now covers

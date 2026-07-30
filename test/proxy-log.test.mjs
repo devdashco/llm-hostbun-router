@@ -337,5 +337,67 @@ console.log("proxy() early returns still record:");
   jsonErr.close(); okSrv.close();
 }
 
+// ── the panel's test call ───────────────────────────────────────────────────────────────────────
+// It bypasses proxy() (a form submit, no caller request to forward) and it SPENDS: crazyrouter per
+// token, claudecode against a real subscription window. It recorded nothing, so an operator leaning
+// on the button was invisible — the same gap the image-template render had. And for claudecode it
+// posted /v1/chat/completions to api.anthropic.com with NO Authorization, so a test of any Claude
+// model failed and blamed the router for the upstream's complaint.
+{
+  const DX = req_(join(ROOT, "src/diagnostics.js"));
+  const { CFG: C } = req_(join(ROOT, "src/config.js"));
+  const up = http.createServer((rq, rs) => {
+    seen.push({ path: rq.url, auth: rq.headers.authorization || null, beta: rq.headers["anthropic-beta"] || null });
+    rs.writeHead(200, { "content-type": "application/json" });
+    rs.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "hi" } }], usage: { prompt_tokens: 5, completion_tokens: 2 } }));
+  });
+  const seen = [];
+  await new Promise((r) => up.listen(0, "127.0.0.1", r));
+  const UP = `http://127.0.0.1:${up.address().port}`;
+  const prevBases = C.bases, prevRoutes = C.modelRoutes;
+  C.bases = { ...C.bases, crazyrouter: UP };
+  rows.length = 0;
+  const res = fakeRes();
+  const rq = fakeReq("/api/test");
+  const stream = new PassThrough(); stream.end(Buffer.from(JSON.stringify({ model: "gemini-2.5-flash", prompt: "hi" })));
+  Object.assign(rq, { on: stream.on.bind(stream), once: stream.once.bind(stream),
+    removeListener: stream.removeListener.bind(stream), pipe: stream.pipe.bind(stream),
+    [Symbol.asyncIterator]: stream[Symbol.asyncIterator].bind(stream) });
+  await DX.testCall(rq, res);
+  if (rows.length !== 1) bad("a panel test call records one row", `got ${rows.length} rows`);
+  else {
+    ok("a panel test call records one row");
+    check("...against the provider it actually billed", rows[0].provider, "crazyrouter");
+    check("...naming where the spend came from", rows[0].project, "admin:test-call");
+    check("...carrying the tokens upstream reported", rows[0].usage.prompt_tokens, 5);
+  }
+  // And the claudecode dialect: /v1/messages, a pinned account's token, the oauth beta header, and
+  // a TRANSLATED body. Posting /v1/chat/completions there with no auth is what made every Claude
+  // test fail and report the upstream's complaint as the router's fault.
+  seen.length = 0; rows.length = 0;
+  C.bases = { ...C.bases, claudecode: UP };
+  const prevPool = C.claudecodeAccountPool, prevDefault = C.defaultAccount;
+  C.claudecodeAccountPool = [{ name: "probe", token: "sk-ant-oat-fake" }];
+  C.defaultAccount = "probe";
+  const res2 = fakeRes();
+  const rq2 = fakeReq("/api/test");
+  const st2 = new PassThrough(); st2.end(Buffer.from(JSON.stringify({ model: "claude-haiku-4-5", prompt: "hi" })));
+  Object.assign(rq2, { on: st2.on.bind(st2), once: st2.once.bind(st2),
+    removeListener: st2.removeListener.bind(st2), pipe: st2.pipe.bind(st2),
+    [Symbol.asyncIterator]: st2[Symbol.asyncIterator].bind(st2) });
+  await DX.testCall(rq2, res2);
+  if (!seen.length) bad("a claudecode test reaches the upstream", "nothing arrived");
+  else {
+    check("a claudecode test posts to /v1/messages, not /v1/chat/completions", seen[0].path, "/v1/messages");
+    check("...with the pinned account's token", seen[0].auth, "Bearer sk-ant-oat-fake");
+    check("...and the oauth beta header a Max token requires", /oauth-2025-04-20/.test(seen[0].beta || ""), true);
+  }
+  check("...and it is recorded against claudecode", rows.length === 1 && rows[0].provider, "claudecode");
+  C.claudecodeAccountPool = prevPool; C.defaultAccount = prevDefault;
+
+  C.bases = prevBases; C.modelRoutes = prevRoutes;
+  up.close();
+}
+
 upstream.close();
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
