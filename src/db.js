@@ -10,7 +10,6 @@
 // call log must never break proxying, which is the one job this process actually has.
 const { Pool, types: pgTypes } = require("pg");
 const { CFG } = require("./config");
-const { priceMap, costUsd } = require("./pricing");
 
 // Call log lives in the `llmrouter` Postgres, NOT on the container's volume. Unset => logging off;
 // the router still proxies. Set in Coolify env, never in git — it carries the DB password.

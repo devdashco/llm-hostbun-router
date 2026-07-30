@@ -58,8 +58,10 @@ const SPIKE_BASE_MIN = 100_000;
 // A standing condition is not an event, and both of the interesting signals turn out to be standing
 // conditions: autonoma did not burn uncached for one hour, it burned for four days, and wmac's tool
 // schema is 291 KB until somebody unloads an MCP server. Hourly re-arming on those is a pager that
-// repeats the same sentence 11 times a day, so both back off to a working day; a spike is genuinely
-// per-hour and stays there.
+// repeats the same sentence 11 times a day, so both back well off. They back off by DIFFERENT
+// amounts, and the comment used to say "a working day" for both: burn waits 6h because it is the one
+// an operator can actually act on that day (turn a loop off, add a cache breakpoint), bloat waits a
+// full day because the fix is someone editing an MCP config. A spike is genuinely per-hour.
 const COOLDOWN = { burn: 6 * HOUR, spike: HOUR, bloat: DAY };
 const _fired = new Map();  // `${signal}|${consumer}` -> ts of last ship
 
