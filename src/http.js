@@ -296,9 +296,22 @@ async function proxy(req, res, base, opts = {}) {
   if (curProvider === "images" && up.status >= 400) {
     const errText = await up.text().catch(() => "");
     const msg = errText.trim() || `image generation failed (${up.status})`;
+    // An error page is not an error message. When an ingress or a CDN answers instead of the
+    // service, the body is a whole HTML document, and `clip()` stores its first 120 characters as
+    // the reason — so /api/stats' topErrors reads `upstream 502: <!DOCTYPE html> <!--[if lt IE 7]>`
+    // for thousands of rows, and the Health tab prints that at the operator as the dominant cause.
+    // Measured in prod 2026-07-30: 7,116 rows on 502 plus 206 on 524, all of them that same blob.
+    // The <title> is the only part a human wants ("502 Bad Gateway" / "Origin unreachable"), so
+    // reduce to it and say where it came from. The CALLER still gets the body verbatim below —
+    // this only changes what the log stores.
+    const html = /^\s*(<!doctype html|<html[\s>])/i.test(msg);
+    const title = html ? (msg.match(/<title[^>]*>([^<]{1,80})<\/title>/i) || [])[1] : null;
+    const reason = html
+      ? `html error page from the ingress${title ? `: ${title.trim()}` : ""}`
+      : clip(msg);
     if (recordThis) {
       recordCall({ ...base_rec, status: up.status, ms: Date.now() - t0,
-        usage: null, respContent: null, stopReason: null, error: `upstream ${up.status}: ${clip(msg)}` });
+        usage: null, respContent: null, stopReason: null, error: `upstream ${up.status}: ${reason}` });
     }
     res.writeHead(up.status, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: { message: msg, type: "upstream_error", param: null } }));
