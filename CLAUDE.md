@@ -567,9 +567,14 @@ per-machine credential is keyvault `gitlab/pbox` (user `philip-pbox`, scopes api
 A push to `origin` also fires Coolify's auto-deploy webhook, so a manual `?uuid=…&force=true` right
 after just queues a second, redundant build of the same commit behind the first.
 
-Pushing does **not** reliably auto-build — the app's `watch_paths` lists `server.js`, `Dockerfile`,
-`entrypoint.sh`, `gen-prices.sh`, `README.md`, `panel/**`, `docs/**`, and **not `translate.js`**, so a
-push that only touches the translator is silently ignored. Trigger the Coolify deploy for app uuid
+Pushing does **not** reliably auto-build — but read the CURRENT `watch_paths` before deciding, from
+the app object (`coolify_find` / `GET /api/v1/applications/<uuid>`), not from this file. **Verified
+2026-07-30** it is `server.js`, `Dockerfile`, `entrypoint.sh`, `gen-prices.sh`, `README.md`,
+`src/**`, `assets/**`, `panel/**`, `docs/**` — `src/**` and `assets/**` were added since this note
+first said otherwise, so a `src/` push DOES auto-build now and a manual force right after just
+queues a redundant 13-minute build of the same commit (measured — that is how this got corrected).
+Still **not** watched: `translate.js`, `archive/**`, `test/**`, `package.json`, `scripts/**`, so a
+push touching only the translator or the lockfile is silently ignored. Trigger the Coolify deploy for app uuid
 `d11s05nc130l2kjzr6anpebr` (token in keyvault `coolify/hostbun/api-token`;
 `curl "https://coolify.hostbun.cc/api/v1/deploy?uuid=d11s05nc130l2kjzr6anpebr&force=true" -H "Authorization: Bearer <tok>"`),
 then **verify — never stop at `git push`**: wait for
