@@ -653,7 +653,15 @@ The rule to keep: **if the Dockerfile copies it, it belongs here.** Still unwatc
 `curl "https://coolify.hostbun.cc/api/v1/deploy?uuid=d11s05nc130l2kjzr6anpebr&force=true" -H "Authorization: Bearer <tok>"`),
 then **verify — never stop at `git push`**: wait for
 `running:healthy`, read the boot line in the logs (`llm-gateway on :80 | providers: …`), then curl a
-real request. The headroom sidecar is app `i7pfies89s3maf390ye3rllk`. Both live in Coolify project
+real request. **`running:unhealthy` during the swap is expected, not a failure** — the healthcheck
+polls `/` inside the container every 5s and the old container stops answering before the new one
+binds; measured 2026-07-30, it read unhealthy for ~1 minute while the public URL served 200
+throughout, and settled healthy on its own. Judge it by two consecutive reads, not one.
+**A curl probe with a dev key will be REFUSED, and that is the lock working**: `allowUa` on `pbox`
+accepts `claude-cli…` only, so `curl` gets `403 client_not_allowed_for_key` (verified in prod, and
+both refusals landed in the call log with their reason). Do not spoof the UA to get a probe
+through — that is precisely the key-sharing the lock exists to stop. Probe with an unauthenticated
+endpoint (`/v1/models`, `/`) or mint a key for whatever is doing the probing. The headroom sidecar is app `i7pfies89s3maf390ye3rllk`. Both live in Coolify project
 `llm-hostbun-router`, alongside the `llm-proxy-archive` service (uuid `ysjpmznhdq1auwk9f3lqv8hk`).
 **That archive service is now orphaned** — `ops/nas-shipper/`, the only thing that fed it, was deleted
 (2026-07-09). Stop or delete the service. **`GET /api/export` is NOT dead** — despite what this line
