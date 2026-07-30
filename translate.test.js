@@ -192,11 +192,32 @@ t("the message breakpoint rolls with the tail of the conversation", () => {
   assert.ok(Math.max(...idx) === a.messages.length - 1, "the newest turn must carry one");
 });
 
-t("a caller's own cache_control is never overridden", () => {
+t("a caller's own cache_control is never overridden — and SURVIVES", () => {
   const body = loopBody(6);
   body.messages[1] = { role: "user", content: [{ type: "text", text: bigText(9000), cache_control: { type: "ephemeral" } }] };
   const a = T.openaiToAnthropic(body);
   assert.strictEqual(a.tools[a.tools.length - 1].cache_control, undefined, "an explicit breakpoint is a deliberate choice — hands off");
+  // The half that was missing, and it is the half that costs money. Asserting only that WE did not
+  // mark the tools passed for the wrong reason: the block rebuild dropped the caller's field too, so
+  // the request went to Anthropic with ZERO breakpoints — strictly worse than saying nothing, and
+  // the 12x this file exists to prevent. A check that cannot tell "we respected it" from "it is
+  // gone" is not a check.
+  const marks = JSON.stringify(a).split('"cache_control"').length - 1;
+  assert.strictEqual(marks, 1, "the caller's ONE breakpoint reaches Anthropic — no more, and no fewer");
+  const carried = a.messages.find((m) => Array.isArray(m.content) && m.content.some((c) => c.cache_control));
+  assert.ok(carried, "...on the block the caller put it on, not moved elsewhere");
+});
+
+t("a caller's cache_control on a TOOL definition survives too", () => {
+  // The largest stable prefix in an agent request is the tool list, so this is where a caller that
+  // knows what it is doing marks. It was dropped by the tools .map(), same as the content blocks.
+  const body = loopBody(4);
+  body.tools[body.tools.length - 1].cache_control = { type: "ephemeral" };
+  const a = T.openaiToAnthropic(body);
+  assert.deepStrictEqual(a.tools[a.tools.length - 1].cache_control, { type: "ephemeral" },
+    "the tool-list breakpoint reaches Anthropic");
+  assert.strictEqual(JSON.stringify(a).split('"cache_control"').length - 1, 1,
+    "...and ours stay off — one deliberate mark, not five");
 });
 
 t("a short prompt is left uncached (below Anthropic's floor, a write buys nothing)", () => {

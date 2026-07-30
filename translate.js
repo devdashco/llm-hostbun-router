@@ -48,7 +48,16 @@ function contentPartsToAnthropic(parts) {
   const out = [];
   for (const p of parts) {
     if (!p || typeof p !== "object") continue;
-    if (p.type === "text" && typeof p.text === "string") { out.push({ type: "text", text: p.text }); continue; }
+    // `cache_control` rides along. Detecting a caller's own breakpoint makes us skip OUR marking
+    // (their choice about where the stable prefix ends beats ours, and a 5th mark is a 400) — but
+    // this rebuild used to drop the field, so "hands off" meant the request reached Anthropic with
+    // NO breakpoint at all: strictly worse than if the caller had said nothing, and the exact 12x
+    // this file exists to prevent. Verified: a 9 KB body with one caller mark translated to zero.
+    if (p.type === "text" && typeof p.text === "string") {
+      const blk = { type: "text", text: p.text };
+      if (p.cache_control) blk.cache_control = p.cache_control;
+      out.push(blk); continue;
+    }
     if (p.type === "image_url" || p.type === "input_image") {
       const raw = (p.image_url && p.image_url.url) || p.image_url || p.image || "";
       const m = /^data:([^;]+);base64,(.*)$/.exec(String(raw));
@@ -186,11 +195,18 @@ function openaiToAnthropic(body, opts) {
   const tools = Array.isArray(b.tools) ? b.tools.filter((t) => t && t.function) : [];
   const choice = b.tool_choice;
   if (tools.length && choice !== "none") {
-    out.tools = tools.map((t) => ({
-      name: t.function.name,
-      description: t.function.description || "",
-      input_schema: t.function.parameters || { type: "object", properties: {} },
-    }));
+    out.tools = tools.map((t) => {
+      const def = {
+        name: t.function.name,
+        description: t.function.description || "",
+        input_schema: t.function.parameters || { type: "object", properties: {} },
+      };
+      // Same reason as the content blocks: a caller marking the tail of its tool list is marking
+      // the largest stable prefix there is, and dropping it silently un-caches the whole request.
+      const cc = t.cache_control || t.function.cache_control;
+      if (cc) def.cache_control = cc;
+      return def;
+    });
     if (choice === "auto") out.tool_choice = { type: "auto" };
     else if (choice === "required") out.tool_choice = { type: "any" };
     else if (choice && choice.function && choice.function.name) out.tool_choice = { type: "tool", name: choice.function.name };
