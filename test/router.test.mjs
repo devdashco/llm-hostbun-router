@@ -178,6 +178,30 @@ console.log("admin — the switch that decides whether anyone needs a key:");
   // `off` must remain reachable: it is the documented escape hatch when the registry is unseeded,
   // and a gate you cannot open is as much an outage as one you cannot close.
   check("`off` is still settable", api("auth", { mode: "off" }).ok, true);
+  // The gate must follow the ROUTE, not the URL spelling. `isInference` was a regex over the path
+  // suffix (chat/completions|responses|completions|messages|chat) while dispatch resolves purely on
+  // the body's `model` — so a POST to any other path carrying a real model id skipped the key check,
+  // the UA lock, the project rules and the usage limits, and was proxied to a paid provider with the
+  // router's own crazyrouter key attached. Verified by boot-and-probe before this check was written:
+  // /v1/chat/completions answered 401 while /v1/embeddings went through.
+  // Assert the REASON, not the status: a bare 401 also comes back from unrelated paths in this
+  // harness, so `=== "401"` here passed with the bug still in place — the assertion-that-cannot-fail
+  // this suite keeps producing. `invalid_api_key` is emitted only by keyFail(), i.e. only by the
+  // gate itself.
+  api("auth", { mode: "required" });
+  const refusal = (p) => {
+    const out = curl(["-m", "4", "-X", "POST", `${BASE}${p}`,
+      "-H", "content-type: application/json", "-d", '{"model":"gemini-2.5-flash","input":"hi"}']);
+    const [body, code] = out.split("\n<");
+    let why = "(no json)";
+    try { why = JSON.parse(body).error.code; } catch { /* not the gate's body */ }
+    return `${code.replace(/[<>]/g, "")} ${why}`;
+  };
+  check("no key on the canonical inference path is refused BY THE KEY GATE",
+    refusal("/v1/chat/completions"), "401 invalid_api_key");
+  check("no key on a path OUTSIDE the old regex is refused by the same gate",
+    refusal("/v1/embeddings"), "401 invalid_api_key");
+  check("...on any unlisted path that still carries a model", refusal("/v1/rerank"), "401 invalid_api_key");
   api("auth", { mode: before || "optional" });                 // leave the harness as we found it
   check("the mode was restored for the rest of this suite", api("state").authMode, before);
 }

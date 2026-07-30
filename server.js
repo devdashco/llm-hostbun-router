@@ -285,7 +285,14 @@ const server = http.createServer(async (req, res) => {
   const provider = route.provider;
   console.log(`[req] ${new Date().toISOString()} ip=${ip} ${req.method} ${path} model=${model || "-"} -> ${provider}${route.rewriteModel ? "(" + route.rewriteModel + ")" : ""} project=${project || "-"} ua="${String(req.headers["user-agent"] || "").slice(0, 50)}"`);
 
-  const isInference = req.method === "POST" && bodyBuf.length && /\/(chat\/completions|responses|completions|messages|chat)$/.test(path);
+  // What makes a request "inference" is that it is about to be DISPATCHED to a provider, and
+  // dispatch resolves on the body's `model` alone — `resolveRoute()` never looks at the URL. This
+  // used to be a regex over the path suffix (chat/completions|responses|completions|messages|chat),
+  // so a POST to any other path carrying a real model id — /v1/embeddings, /v1/rerank, anything —
+  // skipped every gate below (the key check, the UA lock, the project rules, the usage limits) and
+  // was proxied anyway, with the router's own crazyrouter key injected. Two independent notions of
+  // "is this inference" is the bug; the route is the one that decides where the money goes.
+  const isInference = req.method === "POST" && bodyBuf.length > 0 && model != null;
 
   // A key that was PRESENTED and is bad is always an error, in every mode above "off". Falling back
   // to the header there would mean a revoked key silently keeps working under its old name.
