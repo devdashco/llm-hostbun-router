@@ -253,4 +253,24 @@ t("a tool call with no arguments field is an empty input, not a failure", () => 
   assert.deepStrictEqual(a.messages[1].content.find((b) => b.type === "tool_use").input, {});
 });
 
+// The shape that makes the cache numbers look broken when they are not: a small system prompt and
+// ONE enormous user message (skyvern sends page text and screenshots this way — measured at 1,854
+// bytes of system against 3.78 MB of user content). The whole body is far over MIN_CACHEABLE_BYTES,
+// so marking runs; but with 2 messages it is under the 3-message floor, so only the system tail is
+// marked, and that prefix is under Anthropic's minimum cacheable size — ignored silently, giving
+// zero cache READS and zero cache WRITES. Prod read 0.0% on the translated path for exactly this
+// reason and it looked like trap #8 regressing. Pinned so the next reader gets the shape, not a hunt.
+{
+  const body = { model: "claude-haiku-4-5", messages: [
+    { role: "system", content: "you are a tester" },
+    { role: "user", content: "x".repeat(60000) },
+  ] };
+  const out = T.openaiToAnthropic(body);
+  const marks = JSON.stringify(out).split("cache_control").length - 1;
+  assert.strictEqual(marks, 1, "small system + one huge user message gets exactly one mark");
+  assert.ok(JSON.stringify(out.system).includes("cache_control"), "...and it is on the system, not the message");
+  assert.ok(!JSON.stringify(out.messages).includes("cache_control"),
+    "a 2-message conversation gets no tail mark — the tail is what changes every call");
+}
+
 console.log(`\n${pass} passed${process.exitCode ? ", SOME FAILED" : ", all green"}`);

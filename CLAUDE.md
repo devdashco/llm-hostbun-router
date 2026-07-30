@@ -602,6 +602,20 @@ drained the Max pool to 4-of-7 accounts rejecting. `markCacheBreakpoints()` mark
 prefix section (Anthropic hashes tools → system → messages, and a breakpoint caches everything up to
 itself, so tail-marking chains them), plus two rolling breakpoints on the conversation tail — this
 request's tail is the next one's stable prefix. Live traffic went 0% → **96–99%** cache hits.
+**0% cache on the translated path is not automatically trap #8 coming back — measure the SHAPE
+before believing it.** Measured 2026-07-30: `/v1/chat/completions` showed 0.0% cache reads and zero
+cache WRITES over 3,603 calls in 24h, against 89.6% on native `/v1/messages`. That reads exactly
+like the regression, and it is not one. 3,501 of those calls average ~1k prompt tokens — below the
+floor, correctly skipped. The remaining 90 are `skyvern`, and one of its real bodies is a **1,854-byte
+system prompt plus a single 3.78 MB user message** (page text and screenshots). `markCacheBreakpoints`
+marks the system tail and stops: with 2 messages it is under the 3-message floor, so it never marks a
+conversation tail. The one breakpoint it does place sits on a prefix far under Anthropic's minimum
+cacheable size, which Anthropic ignores silently — hence zero writes as well as zero reads.
+And that is the RIGHT outcome: skyvern's huge part is a new screenshot every call, so marking it
+would bill the 1.25× write for something never read. The router's own size check passes on the whole
+body (3.7 MB), not on the prefix being marked, which is why the numbers look alarming. Check the
+message shape and the per-call prompt average before concluding anything.
+
 Guards, each of which was a way to make it worse: a caller's own `cache_control` means hands off
 entirely (their breakpoint is a deliberate choice, and a 5th is a 400); under ~8 KB skip it
 (below Anthropic's floor it won't cache anyway and the write bills 1.25×); under 3 messages mark
