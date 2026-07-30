@@ -97,11 +97,17 @@ try {
 
   // A bad key must still read as a bad key. The policy check runs after authentication, so a broken
   // ordering here would answer 403 "wrong client" to someone whose real problem is a dead credential.
+  //
+  // The UA has to FAIL the policy for this to mean anything. It used to send `claude-cli/1`, which
+  // pmac's allowUa accepts — so the request passed the policy under either ordering and answered
+  // 401 either way. `node` is rejected by that policy, which is the only combination where
+  // auth-first (401) and policy-first (403) give different answers.
   const badKey = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
-    method: "POST", headers: { "content-type": "application/json", authorization: "Bearer sk-llm-aaaa1111-wrong", "user-agent": "claude-cli/1" },
+    method: "POST", headers: { "content-type": "application/json", authorization: "Bearer sk-llm-aaaa1111-wrong", "user-agent": "node" },
     body: JSON.stringify({ model: "fake-model", messages: [] }),
   });
-  check("a bad secret is still 401, not 403", badKey.status === 401, String(badKey.status));
+  check("a bad secret is still 401, not 403 — authentication runs BEFORE the client policy",
+    badKey.status === 401, String(badKey.status));
 } finally {
   srv.kill("SIGKILL");
   upstream.close();

@@ -248,7 +248,17 @@ check("a job is not a consumer", !!api("consumers", { name: "acme:job", kind: "a
 console.log("admin — a registry write without a DB refuses, it does not pretend:");
 check("registering needs the DB", api("consumers", { name: "acme", kind: "app" }).error, "registry unavailable: no database connection");
 check("issuing a key needs the DB", api("consumers/keys", { name: "fresh", kind: "app" }).error, "registry unavailable: no database connection");
-check("hash never leaves the process", JSON.stringify(api("consumers")).includes('"hash"'), false);
+// The seed gives `promopilot` a real key row, so there IS a hash in CFG to leak. Without one this
+// check passed with the redaction in src/consumers.js deleted outright — nothing to redact.
+{
+  const listed = api("consumers");
+  const all = [].concat(listed.registered || [], listed.consumers || [], Array.isArray(listed) ? listed : []);
+  const pp = all.find((c) => c && c.name === "promopilot") || null;
+  check("the consumer holding a key is listed at all", !!pp, true);
+  check("...and reports it has one", JSON.stringify(pp || {}).includes("eeee5555"), true);
+  check("hash never leaves the process", JSON.stringify(listed).includes('"hash"'), false);
+  check("...nor does the hash VALUE under another name", JSON.stringify(listed).includes("9f1a0000"), false);
+}
 
 console.log("admin — the gate:");
 check("unauthed state is 401", status("/api/state"), "401");
