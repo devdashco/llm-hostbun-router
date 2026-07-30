@@ -740,9 +740,13 @@ every time someone reads it.
   `135.125.243.62` = **ovh-promopilot** (Bun/1.1.45, the bulk of it) and `80.217.106.60` = **pbox**
   (a `node` process; the `curl/8.x` rows there were verification probes). **promopilot already holds
   a key** — keyvault `llm/promopilot/API_KEY`, which it uses for text — so its image path simply is
-  not sending it. **Closing the gate is still a deliberate act, not a tidy-up**: gating the route
-  401s both callers the moment you do. Wire the existing key into promopilot's image client and find
-  what on pbox is calling it, THEN move `/v1/images/*` below the auth gate.
+  not sending it. **Closing the gate is still a deliberate act, not a tidy-up** — but it costs less
+  than it did. **Re-counted 2026-07-30: promopilot has stopped calling entirely.** Its last
+  anonymous image call was 2026-07-27 (2 that day, 2,908 over the week before it); nothing since.
+  The only unauthenticated image traffic left is pbox's `node` client — 13 calls today, all
+  `POST /v1/images/generations`, all 200 — plus `curl` verification probes. So gating the route now
+  401s ONE caller, not two, and not the high-volume one. Re-count before acting rather than trusting
+  this paragraph: the shape changed twice in four days.
   **The pbox `node` caller is almost certainly `seoul/lib/imagegen-client.ts`** (traced 2026-07-26):
   it POSTs `https://llm.hostbun.cc/v1/images/generations` with `headers: { 'Content-Type':
   'application/json' }` and nothing else — no key, no `X-Project`, exactly the observed signature.
