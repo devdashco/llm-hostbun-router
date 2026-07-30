@@ -52,6 +52,17 @@ const rawGet = (path) => new Promise((resolve) => {
 });
 check("traversal is refused", /404/.test(await rawGet("/docs/../server.js")), await rawGet("/docs/../server.js"));
 check("encoded traversal is refused", /404/.test(await rawGet("/docs/..%2f..%2fetc/passwd")));
+// A NUL byte in a served path made fs.readFile THROW synchronously — it does not call back — inside
+// an async handler with no try/catch, so the throw became an unhandled rejection the process guard
+// only logged: no response written, socket never closed, connection held open forever with zero
+// bytes returned. Cheap to repeat, so it is a connection-exhaustion primitive. The traversal guard
+// lets it through because a NUL does not break a string prefix check. Raw socket, because fetch()
+// rejects the URL client-side and would assert nothing.
+{
+  const r = await rawGet("/panel-asset%00.js");
+  check("a NUL byte in a path is ANSWERED, not left hanging", /HTTP\/1\.1 \d{3}/.test(r), r.slice(0, 80));
+  check("...and the server still serves after it", await code("/docs/") === 200);
+}
 
 const md = (p) => readFileSync(join(ROOT, "docs", p), "utf8");
 const pages = readdirSync(join(ROOT, "docs")).filter((f) => f.endsWith(".md"));

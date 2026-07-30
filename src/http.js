@@ -104,8 +104,18 @@ async function readJson(req, res) {
   catch { sendJson(res, 400, { error: "bad json" }); return null; }
 }
 
+// fs.readFile THROWS synchronously — it does not call back — for a path containing a NUL byte, and
+// this runs inside an async request handler with no try/catch, so the throw became an unhandled
+// rejection that the process-level guard merely logged. The response was never written and the
+// socket never closed: `GET /x%00.js` left a connection open forever with zero bytes returned.
+// Cheap to repeat, so it is a connection-exhaustion primitive rather than a disclosure — and the
+// traversal guard above passes such a path, because a NUL does not break a string prefix check.
+//
+// Catch anything the call throws, not only NUL: whatever else fs decides is un-openable, the caller
+// still has to get an answer. 404, the same as a missing file, because to the caller it is one.
 function sendFile(res, path, type, cors, cacheControl) {
-  fs.readFile(path, (e, buf) => {
+  try {
+    fs.readFile(path, (e, buf) => {
     if (e) { res.writeHead(404, { "content-type": "text/plain" }); return res.end("not found"); }
     const h = { "content-type": type };
     if (cors) h["access-control-allow-origin"] = "*";
@@ -117,7 +127,11 @@ function sendFile(res, path, type, cors, cacheControl) {
     if (cacheControl) h["cache-control"] = cacheControl;
     res.writeHead(200, h);
     res.end(buf);
-  });
+    });
+  } catch {
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("not found");
+  }
 }
 
 
