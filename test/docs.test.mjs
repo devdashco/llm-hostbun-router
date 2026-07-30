@@ -87,6 +87,31 @@ const rendered = await until(() => /One OpenAI-compatible endpoint/.test(text())
 check("the home page renders its markdown", rendered, rendered ? "" : `body was: ${text().trim().slice(0, 140)}`);
 check("the sidebar rendered", await until(() => /Routing and providers/.test(window.document.body.textContent)));
 
+// The docs are PUBLIC and unauthenticated, so a wrong posture claim here is read by people who
+// cannot check it against the code. This page told readers for weeks that `auth.mode` was
+// `optional`, that "the network is the only boundary" and to treat the URL as a secret — while
+// prod had been `required` the whole time. Read literally it said: do not bother sending a key.
+// This suite already refuses to publish a secret; it now also refuses to publish that.
+{
+  const claims = readFileSync(join(ROOT, "docs", "README.md"), "utf8") +
+                 readFileSync(join(ROOT, "docs", "identity.md"), "utf8") +
+                 readFileSync(join(ROOT, "docs", "quickstart.md"), "utf8");
+  const stale = [
+    [/auth\.mode` is still `optional`|Currently `optional`/, "says auth.mode is optional — prod is `required`"],
+    [/the network is the only boundary/, "says the network is the only boundary — a key is required"],
+    [/while auth\.mode is optional/, "offers a placeholder key as an alternative to a real one"],
+  ];
+  for (const [re, why] of stale) {
+    if (re.test(claims)) check(`the published auth posture is current (${why})`, false, why);
+  }
+  check("the published auth posture is current", !stale.some(([re]) => re.test(claims)));
+  // And the quickstart's first example must actually work: no key, no service.
+  const qs = readFileSync(join(ROOT, "docs", "quickstart.md"), "utf8");
+  const firstCurl = (qs.match(/```bash[\s\S]*?```/) || [""])[0];
+  check("the first quickstart example sends a key", /Authorization: Bearer sk-llm-|x-api-key/i.test(firstCurl),
+    firstCurl.slice(0, 200));
+}
+
 dom.window.close();
 server.kill();
 console.log(`\n${pass} passed, ${fail} failed`);

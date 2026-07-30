@@ -143,8 +143,15 @@ HTTP 400
           "type":"invalid_request_error","code":"project_required"}}
 ```
 
-This applies to `/v1/chat/completions`, `/v1/messages`, `/v1/completions`, `/v1/responses`. It does
-not apply to `/v1/images/generations`, `/v1/embeddings`, `/v1/rerank`, `/v1/audio/*`, or any GET.
+This applies to any POST whose body carries a `model` — which is every path that can reach a
+provider, not a fixed list of URLs. `/v1/embeddings`, `/v1/rerank` and `/v1/audio/*` used to be
+exempt and are not any more: the gate was a regex over the URL suffix while routing resolves on the
+model id alone, so a request to any other path with a real model id passed the key check, the
+allowlist and the usage limits and was proxied anyway (fixed 2026-07-30).
+
+Still exempt: any GET, and `/v1/images/generations`, which is dispatched before this gate — see
+[the image routes](endpoints.md#images), which are anonymous on purpose except for templated
+generation.
 
 ## API keys
 
@@ -213,7 +220,8 @@ is an IP allowlist, which suits a consumer that lives at a fixed address; a lapt
 
 - **`auth.mode`** — `off` | `optional` | `required`. The lock. `optional` is migration mode: a valid
   key wins, no key falls back to the header, and a key that is *presented and bad* is always a 401.
-  Only `required` closes the hole. **Currently `optional`.**
+  Only `required` closes the hole. **Currently `required`** — the migration is done, and the top of
+  this page has said so for a while, which is exactly how a page ends up contradicting itself.
 - **`requireRegisteredConsumer`** — a spelling check, not a lock. Applies only to calls with no key,
   and refuses an unknown consumer with `403 unknown_consumer` so a typo cannot become a new consumer
   with its own bill. **Currently on.**
