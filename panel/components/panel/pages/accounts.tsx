@@ -346,6 +346,23 @@ export function Accounts() {
                     <TableRow key={a.name} className={live ? "bg-ok/[0.06]" : ""}>
                       <TableCell className="font-mono align-top">
                         <b>{a.name}</b>
+                        {/* An account the router will NEVER serve. `disabled` is persistent (set by
+                            an operator, or automatically on a 403 permission_error — a cancelled or
+                            refunded subscription); `dead` is the runtime ACCT_DEAD set. Both were
+                            returned by /api/accounts and rendered nowhere, so a subscription the
+                            pool has stopped using looked exactly like an idle one — and a project
+                            pinned to it gets 403 no_account_for_project until it is re-pinned. The
+                            pool card only warns when EVERY account is out, so a partial outage was
+                            invisible on both screens. */}
+                        {a.disabled ? (
+                          <div className="text-micro text-danger" title="never served — flip with POST /api/accounts/disable after rotating a fresh token; projects pinned here 403 until re-pinned">
+                            ✕ disabled
+                          </div>
+                        ) : a.dead ? (
+                          <div className="text-micro text-danger" title="marked dead at runtime after an auth failure — projects pinned here 403 until re-pinned">
+                            ✕ dead
+                          </div>
+                        ) : null}
                         {a.email ? <div className="text-micro text-muted-foreground">{a.email}</div> : null}
                         {a.org ? (
                           <div className="text-micro text-muted-foreground" title={a.org}>

@@ -111,7 +111,9 @@ function Pool({ d }: { d: any }) {
   if (!d) return null;
   const accts = d.accounts || [];
   if (!accts.length) return null;
-  const bad = (d.orphanPins || []).length;
+  // The card turns red for an orphan pin OR an account the pool will not serve: both mean
+  // some project is not getting an account, which is the only thing this card is for.
+  const bad = (d.orphanPins || []).length + accts.filter((a: any) => a.disabled || a.dead).length;
   const now = d.now || Date.now();
   const resetAt = (sec: number) => {
     if (!sec) return "";
@@ -149,7 +151,18 @@ function Pool({ d }: { d: any }) {
           <TableBody>
             {accts.map((a: any) => (
               <TableRow key={a.name} className="cursor-pointer" onClick={() => go("providers", "accounts")}>
-                <TableCell className="font-mono text-ui font-semibold">{a.name}</TableCell>
+                <TableCell className="font-mono text-ui font-semibold">
+                  {a.name}
+                  {/* A disabled or dead account is never served, so the projects listed beside it
+                      are STRANDED — they 403 no_account_for_project until re-pinned. Without this
+                      the row reads as a healthy account with quota, and the card's own warning only
+                      fires when the WHOLE pool is out. */}
+                  {a.disabled || a.dead ? (
+                    <span className="ml-1 text-micro text-danger" title={a.disabled ? "disabled — never served; projects pinned here are stranded" : "marked dead at runtime — projects pinned here are stranded"}>
+                      ✕ {a.disabled ? "disabled" : "dead"}
+                    </span>
+                  ) : null}
+                </TableCell>
                 <TableCell className="text-meta text-muted-foreground">{a.projects.length ? a.projects.join(", ") : "— unused"}</TableCell>
                 <TableCell className="min-w-[78px]">
                   <Bar v={a.limits && a.limits.u5} />

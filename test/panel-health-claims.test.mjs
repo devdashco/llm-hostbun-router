@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "panel", "components", "panel", "pages", "health.tsx");
 const src = readFileSync(SRC, "utf8");
+const accountsSrc = readFileSync(join(ROOT, "panel", "components", "panel", "pages", "accounts.tsx"), "utf8");
 
 let pass = 0;
 const ok = (m) => { pass++; console.log(`  ok    ${m}`); };
@@ -101,6 +102,31 @@ else fail(`the All healthy banner says "${banner[1].trim().slice(0, 60)}" withou
   else if (!/topErrors/.test(src)) fail("the error-rate finding names the dominant reason", "health.tsx never reads st.topErrors");
   else if (!/\$\{why\}/.test(errFinding[0])) fail("the error-rate finding names the dominant reason", "topErrors is read but not interpolated into the message");
   else ok("the error-rate finding names the dominant reason from st.topErrors");
+}
+
+// An account the router will NEVER serve must LOOK different from an idle one. /api/accounts
+// returns `disabled` (persistent — set by an operator, or automatically on a 403 permission_error
+// when a subscription is cancelled or refunded) and `dead` (the runtime ACCT_DEAD set); both were
+// returned and rendered nowhere. The consequence is not cosmetic: accountFor() returns null for a
+// project pinned to such an account, so those projects 403 `no_account_for_project` until they are
+// re-pinned — while the screen showed a normal row with quota bars. Measured precedent: `william`
+// went OAuth-disabled 2026-07-24 and the projects pinned to it started failing.
+// Reading the flag is not showing it: the first version of this check only grepped for
+// `a.disabled`, and passed against markup neutered to `{false ? (` because an unrelated line
+// (the card's red-border count) mentions the same field. It now requires the flag to be followed
+// closely by the ✕ marker the operator actually sees.
+const shows = (txt) => {
+  if (!/\ba\.dead\b/.test(txt)) return false;
+  // ANY occurrence may be the rendering one — health.tsx reads the flag once for the card's red
+  // border long before the row markup, so checking only the first would fail a correct file.
+  for (const m of txt.matchAll(/\ba\.disabled\b/g)) if (txt.slice(m.index, m.index + 400).includes("✕")) return true;
+  return false;
+};
+for (const [file, srcTxt] of [["health.tsx", src], ["accounts.tsx", accountsSrc]]) {
+  if (!/\ba\.disabled\b/.test(srcTxt)) fail(`${file} reads an account's \`disabled\` flag`, "the field is returned by /api/accounts and never read here — a dead subscription looks idle");
+  else if (!/\ba\.dead\b/.test(srcTxt)) fail(`${file} reads an account's runtime \`dead\` flag`, "ACCT_DEAD is returned as `dead` and never read here");
+  else if (!shows(srcTxt)) fail(`${file} RENDERS the flag, not just reads it`, "no ✕ marker within the branch — the row still looks like a healthy idle account");
+  else ok(`${file} shows an account the pool will not serve`);
 }
 
 console.log(`\n${pass} passed${process.exitCode ? " · FAILURES ABOVE" : ""}`);
