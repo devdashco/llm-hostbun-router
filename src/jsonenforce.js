@@ -100,10 +100,13 @@ async function jsonEnforce(req, res, route) {
   if (provider === "local") applyLocalThinkingDefault(reqObj);
   const messages = Array.isArray(reqObj.messages) ? reqObj.messages.slice() : [];
   const rf = reqObj.response_format;
-  const rfType = typeof rf === "string" ? rf : (rf && rf.type);
-  // Neither claudecode nor the local json_object mode honours `response_format` natively → strip it
-  // and steer with a plain instruction instead.
-  if (provider === "claudecode" || (provider === "local" && rfType === "json_object")) {
+  // claudecode has no `response_format` on the wire — strip it and steer with a plain instruction.
+  // The local lane KEEPS it: llama.cpp compiles both `json_object` and `json_schema` into a GBNF
+  // grammar and honours them. This used to strip `json_object` there too, which downgraded a hard
+  // grammar guarantee to a prose plea — measured 2026-07-31 on gemma-4-26b with a prompt asking
+  // for prose, llama.cpp answered `{"description": …}` and the stripped path answered a bare JSON
+  // *string*. Both parse, so nothing errored; a caller expecting an object got a string.
+  if (provider === "claudecode") {
     delete reqObj.response_format;
     injectJsonInstruction(messages, rf);
   }

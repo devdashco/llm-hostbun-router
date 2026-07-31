@@ -34,9 +34,11 @@ const bad = (name, why) => { console.log(`  FAIL  ${name}\n        ${why}`); fai
 // upstream-error branch was throwing ReferenceError on HOP_RES from 2026-07-26 (introduced by the
 // jsonenforce split in 8dc6ca3) until this made it reachable.
 let failNext = false;
+let lastBody = null;                               // what the router ACTUALLY sent upstream
 const upstream = http.createServer((req, res) => {
   let b = ""; req.on("data", (c) => (b += c));
   req.on("end", () => {
+    try { lastBody = JSON.parse(b); } catch { lastBody = null; }
     if (failNext) { failNext = false; res.writeHead(429, { "content-type": "application/json" }); return res.end('{"error":{"message":"rate limited"}}'); }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -52,7 +54,10 @@ await new Promise((r) => upstream.listen(UPSTREAM, r));
 const cfgPath = path.join(os.tmpdir(), `wire-cfg-${process.pid}.json`);
 fs.writeFileSync(cfgPath, JSON.stringify({
   bases: { local: `http://127.0.0.1:${UPSTREAM}`, crazyrouter: `http://127.0.0.1:${UPSTREAM}`, claudecode: `http://127.0.0.1:${UPSTREAM}` },
-  localMap: { local: "fake-model" },
+  // `local` is NOT a local-lane id here: the env-seeded modelRoutes redirects the legacy
+  // ids (local/gemma/obliterated) to claudecode, and modelRoutes wins over localMap. So the
+  // local provider needs an id nothing else claims.
+  localMap: { local: "fake-model", "wire-local": "fake-model" },
   crazyrouterKey: "test", requireProject: false, requireRegisteredConsumer: false,
   auth: { mode: "off" }, logging: { enabled: false, content: false },
   consumers: {}, consumerAliases: {},
@@ -221,6 +226,28 @@ for (const path of ["/api/machines", "/api/projects"]) {
   else bad("an oversize body is refused 413", `got ${r.status}`);
   // And the router keeps serving: destroying one request must not take the listener with it.
   await expect("...and the server is still healthy after it", "/v1/models", 200);
+}
+
+// The local lane must FORWARD `response_format`, not swap it for a prose instruction. llama.cpp
+// compiles both `json_object` and `json_schema` into a GBNF grammar and honours them; jsonEnforce
+// used to strip `json_object` on this lane and append "reply with only JSON" to the last user turn
+// instead, which is a plea, not a constraint. Measured 2026-07-31 against the real gemma-4-26b: with
+// the field the model answered `{"description": …}` to a prompt demanding prose, and without it a
+// bare JSON *string*. Both parse, so validateJsonContent was green either way and a caller expecting
+// an object got a string. Asserted on the body the UPSTREAM received — the router's own 200 cannot
+// tell the two apart, which is why this went unnoticed.
+{
+  lastBody = null;
+  await call("/v1/chat/completions", J({ ...CHAT, model: "wire-local", response_format: { type: "json_object" } }));
+  const sent = lastBody;
+  if (!sent) bad("the local lane forwards response_format", "upstream received no JSON body");
+  else if (!sent.response_format || sent.response_format.type !== "json_object") {
+    bad("the local lane forwards response_format", `sent ${JSON.stringify(sent.response_format)}`);
+  } else ok("the local lane forwards response_format json_object to llama.cpp");
+  const lastUser = sent && Array.isArray(sent.messages) ? sent.messages[sent.messages.length - 1] : null;
+  if (lastUser && /ONLY a single valid JSON value/.test(String(lastUser.content || ""))) {
+    bad("...and does not also inject the prose instruction", "the instruction was appended anyway");
+  } else ok("...and does not also inject the prose instruction");
 }
 
 // A malformed numeric filter must be an ERROR, not "zero calls match". parseInt("abc") is NaN, pg
