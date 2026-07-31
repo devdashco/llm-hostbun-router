@@ -2,6 +2,7 @@
 - [Quick start](quickstart.md)
 - [Identity: projects, jobs, keys](identity.md)
 - [Routing and providers](routing.md)
+- [Local models: llama.cpp pass-through](local-models.md)
 - [Accounts, limits &amp; pinning](accounts.md)
 - [Endpoints](endpoints.md)
 - [What gets stored](storage.md)

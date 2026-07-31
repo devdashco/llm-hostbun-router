@@ -4,7 +4,7 @@ The model id picks the provider, unless your project has a rule.
 
 | model id | provider |
 |---|---|
-| `local`, `qwen`, `qwen3.5-9b` | `local` |
+| `local`, `gemma`, `gemma-4-26b`, `qwen`, `qwen3.5-9b` | `local` |
 | anything starting `claude` | `claudecode` |
 | `imagegen`, `sana-sprint`, `sana`, `sdxl-lightning`, `sd-turbo` | image service, and **only** on `/v1/images/*` |
 | everything else | `crazyrouter` |
@@ -15,14 +15,17 @@ bill.
 
 ## `local` — on-prem GPU, free
 
-Qwen3.5-9B, Q4_K_M GGUF, 16K context, resident on the GPU, no cold start. Private: the data stays
-on-prem. No key.
+A llama.cpp server on the pbox GPU, resident, no cold start. Private: the data stays on-prem. No key,
+no per-token bill. **Five ids resolve here** and all five serve the same checkpoint — `qwen` and
+`qwen3.5-9b` are legacy aliases from an earlier one. Ask the server what is loaded rather than
+trusting a page: `curl https://pbox.llm.hostbun.cc/props`. On 2026-07-31 it is gemma-4-26B (Q4_K_XL
+GGUF, `n_ctx` 65,536 over 2 slots, vision and video in).
 
 > **It is a reasoning model, and that will bite you.** It emits its chain of thought into
 > `reasoning_content` and leaves `content` empty until it finishes. With a small `max_tokens` it never
 > finishes: you get `content: ""` and `finish_reason: "length"`, having paid for every token.
 
-The router now defaults thinking **off** for this provider. To turn it back on, send
+The router defaults thinking **off** for this provider. To turn it back on, send
 `chat_template_kwargs: {"enable_thinking": true}`. A top-level `enable_thinking` also works, because
 the router hoists it — llama.cpp accepts the top-level form and silently ignores it, which is why the
 obvious fix appears to do nothing when you talk to it directly.
@@ -32,6 +35,11 @@ curl https://llm.hostbun.cc/v1/chat/completions \
   -H "Content-Type: application/json" -H "X-Project: my-app" \
   -d '{"model":"local","messages":[{"role":"user","content":"describe Stockholm"}],"max_tokens":512}'
 ```
+
+**Anything llama.cpp accepts, you can send** — every sampler, raw GBNF `grammar`, `json_schema`,
+`n_probs`, `seed`. The router forwards the body verbatim. See
+[Local models — llama.cpp pass-through](local-models.md) for the parameter list, the three ways to
+force structured output, and the `required` trap that makes a 24-field schema answer 3 fields.
 
 ## `claudecode` — real Claude, flat cost
 

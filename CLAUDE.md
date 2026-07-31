@@ -18,7 +18,7 @@ refs may still linger in sibling repos.
   | `identity.js` | consumer/job paths, API keys, `authenticate()` |
   | `routing.js` | pins, allowlists, usage limits, account pinning |
   | `http.js` | `readBody`/`readJson`, `buildHeaders`, `proxy()` — 400 lines. It was 536 and over the 500 budget until JSON enforcement moved to `jsonenforce.js`; that split is what dropped `HOP_RES`'s import and is why `imports.test.mjs` now checks module-scope consts too |
-  | `jsonenforce.js` | the `response_format: json_object` retry loop, lifted out of `http.js` |
+  | `jsonenforce.js` | the `response_format` validate/retry loop, lifted out of `http.js`. **It strips `response_format` for `claudecode` ONLY** (no such field on the wire there) and steers with a prose instruction. It used to strip `json_object` on `local` too — llama.cpp honours both `json_object` and `json_schema` as a GBNF grammar, so that downgraded a hard constraint to a plea and gemma answered a bare JSON *string* where the caller wanted an object. Both parse, so nothing errored. Pinned by `wire.test.mjs`, asserted on the body the UPSTREAM received — the router's own 200 cannot tell the two apart |
   | `db.js` | Postgres call log + harvested account headroom |
   | `claudecode.js` | Anthropic model catalog, per-account live usage-limit refresh |
   | `admin.js` | the control-plane API behind the password cookie — **the dispatcher and the auth gate** |
@@ -317,7 +317,7 @@ Three **routing** providers — the whole of `PROVIDERS`, i.e. everything a mode
 
 | provider | upstream | speaks | cost |
 |---|---|---|---|
-| `local` | llama.cpp on the pbox GPU (`bases.local`, currently `pbox.llm.hostbun.cc`, model `qwen3.5-9b`) | OpenAI | free |
+| `local` | llama.cpp on the pbox GPU (`bases.local`, currently `pbox.llm.hostbun.cc`). **Serves `gemma-4-26B-qat-UD-Q4_K_XL.gguf`, build b9821, `n_ctx` 65536 / 2 slots, vision+video — verified 2026-07-31.** All five ids `local`/`gemma`/`gemma-4-26b`/`qwen`/`qwen3.5-9b` resolve here; the qwen pair are legacy aliases, so "model `qwen3.5-9b`" (what this said) named a checkpoint that is not loaded. Ask `/props`, don't infer from the id | OpenAI | free |
 | `claudecode` | the **claudecode-account-pool** (our Claude Max logins) → `api.anthropic.com` | Anthropic | flat (subscription) |
 | `crazyrouter` | `crazyrouter.com` cloud relay (gemini etc), key injected | OpenAI | **per token** |
 
