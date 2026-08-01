@@ -13,6 +13,7 @@ const { resolveRoute, isGated, accountFor } = require("./routing");
 const { recordCall } = require("./db");
 const TR = require("../translate");
 const { upstreamCatalogs, localModelEntries } = require("./claudecode");
+const { snapshot: gateSnapshot } = require("./gate");
 
 async function probe(base, authToken) {
   const t0 = Date.now();
@@ -131,7 +132,10 @@ async function health(req, res) {
       : alive.length === 0 ? `all ${pool.length} accounts are disabled or OAuth-dead`
       : undefined,
   };
-  return sendJson(res, 200, { local, crazyrouter, claudecode });
+  // Admission control, so "the local model is slow" and "twelve callers are queued behind one GPU"
+  // are distinguishable without reading the logs. Reported for every gated provider even at zero
+  // traffic — absent and unlimited must not look alike.
+  return sendJson(res, 200, { local, crazyrouter, claudecode, gates: gateSnapshot() });
 }
 
 async function catalogs(req, res) {

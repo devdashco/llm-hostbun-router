@@ -18,6 +18,7 @@ refs may still linger in sibling repos.
   | `identity.js` | consumer/job paths, API keys, `authenticate()` |
   | `routing.js` | pins, allowlists, usage limits, account pinning |
   | `http.js` | `readBody`/`readJson`, `buildHeaders`, `proxy()` — 400 lines. It was 536 and over the 500 budget until JSON enforcement moved to `jsonenforce.js`; that split is what dropped `HOP_RES`'s import and is why `imports.test.mjs` now checks module-scope consts too |
+  | `gate.js` | admission control — the per-provider queue in front of the single-GPU upstreams. ~120 lines, no deps, no state outside the process |
   | `jsonenforce.js` | the `response_format` validate/retry loop, lifted out of `http.js`. **It strips `response_format` for `claudecode` ONLY** (no such field on the wire there) and steers with a prose instruction. It used to strip `json_object` on `local` too — llama.cpp honours both `json_object` and `json_schema` as a GBNF grammar, so that downgraded a hard constraint to a plea and gemma answered a bare JSON *string* where the caller wanted an object. Both parse, so nothing errored. Pinned by `wire.test.mjs`, asserted on the body the UPSTREAM received — the router's own 200 cannot tell the two apart |
   | `db.js` | Postgres call log + harvested account headroom |
   | `claudecode.js` | Anthropic model catalog, per-account live usage-limit refresh |
@@ -87,7 +88,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (23 suites, ~555 checks, ~70s)
+## Tests — `npm test` (24 suites, ~624 checks, ~75s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -140,6 +141,16 @@ wrong about the gate is how a suite gets added and then quietly dropped.
   silently. The image-error branch did: a successful image call was logged and a failed one was not,
   so during the 2026-07-26 ingress outage the log read "no image traffic" instead of "image traffic
   failing" — while a *refused* connection, handled higher up, recorded normally and hid the gap.
+
+- `test/gate.test.mjs` — admission control, driven through the real server against slow fake
+  upstreams that COUNT how many requests they had in flight at once. That number is the only
+  evidence a gate works; the router's own 200s look identical either way. Pins the three ways it
+  un-gates itself silently: releasing the slot when `proxy()` RESOLVES instead of when the response
+  ends (it returns the moment it wires `r.pipe(res)`, so a release there hands the GPU to the next
+  caller mid-render — probed: turns 3 checks red), gating the cloud lanes as well (serialising
+  api.anthropic.com would be a self-inflicted outage no 500 ever reveals — probed: 2 red), and
+  leaking a slot when a queued caller hangs up, which is invisible until the gate is permanently
+  full and every caller 503s against an idle GPU.
 
 - `test/otel.test.mjs` — the OTLP ingest, in two halves. The parse (OTLP/JSON puts every int64 in a
   **string**, the event name arrives either in `event.name` or in the log body, and every other
@@ -350,7 +361,11 @@ FastAPI's threadpool: concurrent calls were swapping each other's LoRA adapters 
 raising from inside CUDA. Measured 2026-07-27 on `/v1/images/generations`: 94×200, 47×500, 145×502
 in one hour, the 500s arriving ~18s in (after real GPU work) and the 502s in ~66ms (origin simply
 gone). A `GPU_LOCK` around select+render is committed in that repo but **not deployed** — no ssh to
-the box from pbox, so someone with access has to ship it. It still writes `provider='images'` rows to the call log, so it IS subject to the
+the box from pbox, so someone with access has to ship it. **The router now holds the other half of
+that lock** (`src/gate.js`, 2026-08-01): image renders are serialised at THIS end, one at a time, so
+the adapter swap cannot happen even while the upstream fix sits unshipped. Deploying `GPU_LOCK` is
+still worth doing — it also covers callers that reach the service without going through this router.
+It still writes `provider='images'` rows to the call log, so it IS subject to the
 retention prune (`NOT IN ('anthropic','claudecode')`) — that is intended; only Claude Code chats are
 exempt. Don't "fix" the taxonomy by folding it into `PROVIDERS`; the exclusion is the design.
 
@@ -383,6 +398,40 @@ answers in the OpenAI images envelope. **Three things here are load-bearing, not
    store only (a fresh volume), so a deliberate delete stays deleted. Re-sync from the CMS with
    `node scripts/import-cms-image-templates.mjs`; it also shrinks references to 1280px/JPEG, because
    the reference is base64'd into every request and the CMS held a 4.7 MB PNG.
+
+### Admission control — the queue in front of the GPUs (`src/gate.js`, 2026-08-01)
+
+A burst is serialised **per provider**, and only where the upstream is one piece of hardware.
+Defaults: `images` **1** (one `diffusers` pipeline), `local` **2** (llama.cpp `n_parallel`, verified
+live off `/slots`). `claudecode` and `crazyrouter` are **0 — ungated on purpose**: they run their own
+concurrency and their 429 is a signal to surface, not absorb (invariant 2). Queueing them would add
+latency to calls that are legitimately parallel and turn "you are out of quota" into a silent wait.
+
+Four things are load-bearing:
+
+1. **The slot is released on the RESPONSE ending, not on `proxy()` returning.** `proxy()` resolves
+   the moment it wires `r.pipe(res)` with the whole streamed body still to come, so a release there
+   hands the GPU to the next caller mid-render — i.e. rebuilds the exact bug. `res` `"close"` is the
+   one event that fires on every ending: finished, errored, hung up.
+2. **Gating `local` is about the CLOCK, not about crashing.** llama.cpp queues past its 2 slots
+   itself and never falls over. But its queue wait runs inside `UPSTREAM_HEADER_TIMEOUT_MS`, which
+   starts at `fetch()` — so in a burst of 100 the ones at the back burn their whole 120s budget
+   waiting for a slot and 504, for work the model would have done. Waiting in the router instead
+   means the header budget starts when the request actually reaches the model.
+3. **A queued caller that hangs up is dropped from the queue.** Cloudflare abandons at 100s;
+   rendering for a dead socket spends the GPU on nobody, and spends it *ahead* of callers still
+   waiting.
+4. **The queue is bounded and the refusal is a 503**, never a substitution and never an unbounded
+   wait: `GATE_QUEUE_MAX` (100) per provider, `GATE_WAIT_MS` (300s), then
+   `503 {code: "<provider>_busy"}` + `Retry-After`.
+
+Limits are **env, not `CFG`** — they describe hardware on the other end, which does not change from
+the panel. `GATE_<PROVIDER>` overrides any of them; `0` means ungated. Live state (`active`,
+`queued`, `peakQueued`, `refused`) is on `GET /api/health` under `gates`, reported for every gated
+provider even at zero traffic — "absent" and "unlimited" must not look alike there.
+
+The image *catalog* GETs (`/v1/templates`, `/v1/loras`) are deliberately ungated: they touch no GPU,
+and queueing a template list behind a 20s render would cost real usability for nothing.
 
 Legacy ids still migrate on read: `cloud`→`crazyrouter`; `claude`/`anthropic`/`wrappy`→`claudecode`.
 The old subprocess wrapper is **deleted** — the router now calls the real Anthropic API with a pinned

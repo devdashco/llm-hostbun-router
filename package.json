@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/imports.test.mjs && node translate.test.js && node test/wire.test.mjs && node test/router.test.mjs && node test/panel-tokens.test.mjs && node test/panel-nav.test.mjs && node test/imagetemplates.test.mjs && node test/proxy-log.test.mjs && node test/otel.test.mjs && node test/keypolicy.test.mjs && node test/telemetry-throttle.test.mjs && node test/waste.test.mjs && node test/db-writehealth.test.mjs && node test/health-verdict.test.mjs && node test/panel-health-claims.test.mjs && node test/model-fold.test.mjs && node test/server-rows.test.mjs && node test/gateway-route.test.mjs && node test/module-size.test.mjs && node test/docs-claims.test.mjs && node test/test-helpers.test.mjs && node test/registry-refresh.test.mjs && node test/static-guards.test.mjs",
+    "test": "node test/imports.test.mjs && node translate.test.js && node test/wire.test.mjs && node test/router.test.mjs && node test/panel-tokens.test.mjs && node test/panel-nav.test.mjs && node test/imagetemplates.test.mjs && node test/proxy-log.test.mjs && node test/gate.test.mjs && node test/otel.test.mjs && node test/keypolicy.test.mjs && node test/telemetry-throttle.test.mjs && node test/waste.test.mjs && node test/db-writehealth.test.mjs && node test/health-verdict.test.mjs && node test/panel-health-claims.test.mjs && node test/model-fold.test.mjs && node test/server-rows.test.mjs && node test/gateway-route.test.mjs && node test/module-size.test.mjs && node test/docs-claims.test.mjs && node test/test-helpers.test.mjs && node test/registry-refresh.test.mjs && node test/static-guards.test.mjs",
     "test:translate": "node translate.test.js",
     "test:router": "node test/router.test.mjs",
     "test:docs": "node test/docs.test.mjs",
@@ -16,6 +16,7 @@
     "test:panel-tokens": "node test/panel-tokens.test.mjs",
     "test:panel-nav": "node test/panel-nav.test.mjs",
     "test:proxy-log": "node test/proxy-log.test.mjs",
+    "test:gate": "node test/gate.test.mjs",
     "test:imgtpl": "node test/imagetemplates.test.mjs",
     "build:panel": "cd panel && npm ci && npm run build",
     "dev": "PORT=${PORT:-8787} CONFIG_FILE=${CONFIG_FILE:-./.local/config.json} DOCS_FILE=./docs/index.html PANEL_DIR=${PANEL_DIR:-$PWD/panel/out} PRICES_FILE=${PRICES_FILE:-./.local/prices.json} SESSION_INSECURE=1 node server.js",

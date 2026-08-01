@@ -73,4 +73,23 @@ That is a deliberate, load-bearing decision. Silent failover once hid both the c
 | 422 | `json_validation_failed` | You asked for JSON and the model would not produce it, even after re-prompting. |
 | 429 | `usage_limit_exceeded` | Your project hit its rolling-window quota. Honour `retry-after`. |
 | 429 | *(upstream)* | The pinned account is out of Max quota, or crazyrouter rate-limited us. Real 429, passed through. Waiting is the fix. |
+| 503 | `local_busy` / `images_busy` | The GPU behind that provider is saturated **and** its queue is full. Honour `retry-after`. See "One at a time on the GPU lanes" below — you normally wait in the queue instead of seeing this. |
 | 5xx | *(upstream)* | Upstream failed. Passed through verbatim. Retry with backoff. |
+
+## One at a time on the GPU lanes
+
+`local` and the image service are single-GPU, so the router admits a fixed number of requests at a
+time and **queues the rest** — `images` 1 at a time, `local` 2 (llama.cpp's slot count). Send 100 and
+they drain one after another; you do not need to rate-limit yourself, and concurrency will not
+corrupt a render or time out work the model would have done.
+
+Two consequences worth designing for:
+
+- **A queued request looks like a slow one.** There is no "queued" status; your call simply takes
+  longer to return its first byte. Set a client timeout that accounts for the ones ahead of you.
+- **Hang up and you leave the queue.** An aborted request is dropped rather than rendered, which is
+  what you want — but it also means a client that times out at 30s in a deep queue never gets served.
+  Retry rather than assuming failure.
+
+`claudecode` and `crazyrouter` are **not** queued. They are cloud APIs, they handle their own
+concurrency, and their `429` is passed straight through to you.

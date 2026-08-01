@@ -56,6 +56,7 @@ const { handleAdminApi } = require("./src/admin");
 const OTEL = require("./src/otel");
 // Image templates: a reference picture + a style instruction, rendered by a crazyrouter image model.
 const IT = require("./src/imagetemplates");
+const GATE = require("./src/gate");
 const { PRICES_FILE, isPremiumModel, modelTier } = require("./src/pricing");
 // Used on every refusal path (missing project, unknown consumer, bad key, unpinned account) and by
 // the upstream-error shipper. Unbound since the split, so each gate 502'd instead of refusing.
@@ -226,7 +227,7 @@ const server = http.createServer(async (req, res) => {
     // cost: it is about `byProject`/`byModel` telling the truth about who runs what.
     let m = null;
     if (bodyBuf.length) { try { m = JSON.parse(bodyBuf.toString()).model ?? null; } catch { /* not json */ } }
-    return proxy(req, res, CFG.bases.local, { bodyBuf, provider: "local", model: m, project: extractProject(req, bodyBuf) });
+    return GATE.run("local", req, res, () => proxy(req, res, CFG.bases.local, { bodyBuf, provider: "local", model: m, project: extractProject(req, bodyBuf) }));
   }
   if (req.method === "GET" && (path === "/v1/models" || path === "/api/v1/models"))
     return mergedModels(res);
@@ -260,7 +261,7 @@ const server = http.createServer(async (req, res) => {
         if (+m[1] !== w || +m[2] !== h) { imgJson.size = `${w}x${h}`; imgBody = Buffer.from(JSON.stringify(imgJson)); }
       }
     }
-    return proxy(req, res, CFG.bases.images, { bodyBuf: imgBody, provider: "images", authToken: CFG.imageToken, project: extractProject(req, imgBody) });
+    return GATE.run("images", req, res, () => proxy(req, res, CFG.bases.images, { bodyBuf: imgBody, provider: "images", authToken: CFG.imageToken, project: extractProject(req, imgBody) }));
   }
   // Image-service catalog endpoints (templates + LoRAs) — proxy GETs straight through. These are
   // SD-TURBO's prompt templates, a different thing from /v1/image-templates below; see the header
@@ -541,9 +542,8 @@ const server = http.createServer(async (req, res) => {
     return proxy(req, res, route.base, { ...route, bodyBuf, model, provider, project, translate });
   };
 
-  // No admission control: there is no subprocess to stampede. api.anthropic.com handles its own
-  // concurrency, and its 429 is a real signal we surface rather than absorb.
-  return dispatch();
+  // Admission control (src/gate.js): single-GPU providers are serialised; claudecode/crazyrouter fall straight through, because they run their own concurrency and their 429 is a signal to surface rather than absorb.
+  return GATE.run(provider, req, res, dispatch);
 });
 
 server.listen(PORT, () => {

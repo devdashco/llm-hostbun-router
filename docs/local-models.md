@@ -119,4 +119,7 @@ server exactly as you sent it.
 
 - **No cost.** Nothing on this lane bills. `list_usd` is a real `0`, not "unknown".
 - **No prompt cache accounting.** The Anthropic cache-breakpoint machinery is `claudecode` only.
-- **No account pinning.** One GPU, no pool. `total_slots: 2`, so heavy concurrency queues.
+- **No account pinning.** One GPU, no pool. `total_slots: 2`, so heavy concurrency queues — in the
+  router, ahead of llama.cpp, two at a time (see "One at a time on the GPU lanes" in the overview).
+  Queueing there rather than at the model is what keeps a burst from timing out: the router's
+  120s upstream budget then starts when your request reaches the GPU, not when it joins the line.
