@@ -468,6 +468,17 @@ means *no restriction*, never "nothing allowed" — the opposite makes a mistype
 The allowlist **refuses, never rewrites**: silently serving an allowed model instead is exactly the
 cross-provider substitution invariant 2 forbids.
 
+**A pin's `model` is a LITERAL string, and it outranks `CFG.localMap`.** So swapping the local
+checkpoint is a FOUR-place change, not one: the Coolify service, `GATE_LOCAL` + `gate.js`,
+`localMap`, and **every `projectRoutes` pin naming the old model id**. Measured 2026-08-02 on the
+gemma→Qwen swap: `localMap` was updated and `dev`/`autonoma` still carried
+`{provider:"local", model:"gemma-4-26b"}`, so those two — the highest-volume local consumers — kept
+logging `sent_model=gemma-4-26b` while Qwen answered every one of their calls. Nothing errored,
+because llama.cpp ignores the model name in the body and serves whatever is loaded. The tell is a
+call-log row whose `req_model` and `sent_model` disagree with `/props`; the fix is merge-safe
+`POST /api/routes`. A consumer carrying only an `allowModels` list is unaffected — most already
+list both ids, which is why the swap did not 400 anybody.
+
 **A rule is resolved like `accountFor()`: exact path → consumer.** So a rule on `promopilot`
 covers `promopilot:generatetext`. Before 2026-07-09 `projectRoutes` matched the literal string only,
 so every job path silently ignored its own project's pin and fell through to crazyrouter, per token.
