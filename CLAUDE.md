@@ -88,7 +88,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (24 suites, ~624 checks, ~75s)
+## Tests — `npm test` (25 suites, ~660 checks, ~75s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -151,6 +151,18 @@ wrong about the gate is how a suite gets added and then quietly dropped.
   api.anthropic.com would be a self-inflicted outage no 500 ever reveals — probed: 2 red), and
   leaking a slot when a queued caller hangs up, which is invisible until the gate is permanently
   full and every caller 503s against an idle GPU.
+
+- `test/local-default.test.mjs` — what the FREE lane resolves to on a cold boot, i.e. with no
+  `/data/config.json`. Production reads `localMap` off the volume, so the env seed is invisible until
+  the volume is empty — a fresh deploy, a lost disk, or `POST /api/reset`, which unlinks the file and
+  reverts to `envDefaults()`. Reconstructed and measured on the pre-2026-08-02 seed: `local`/`gemma`
+  resolved to **claudecode** and `gemma-4-26b`/`qwen3.5-9b` fell through to **crazyrouter**, which
+  bills per token — four of the five ids for a free on-prem GPU pointed at something that costs
+  money, and the caller still gets a perfectly good completion, so nothing says so. Invariant 2's
+  substitution arriving as a default rather than a decision. Also pins that the *abliterated* ids
+  keep their claudecode redirect (they genuinely have no local backend) and that `modelRoutes` never
+  reclaims a local id, since it outranks `localMap`. Probed: 15 of its 21 checks go red on the old
+  seed.
 
 - `test/otel.test.mjs` — the OTLP ingest, in two halves. The parse (OTLP/JSON puts every int64 in a
   **string**, the event name arrives either in `event.name` or in the log body, and every other

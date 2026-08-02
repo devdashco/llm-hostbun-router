@@ -41,9 +41,14 @@ const UI_ROUTES = new Set(["/overview", "/calls", "/routing", "/consumers", "/pr
   "/identity", "/settings", "/stats", "/accounts", "/models", "/crazyrouter", "/secrets"]);
 const CONFIG_FILE = process.env.CONFIG_FILE || "/data/config.json";
 
-// Default local model ids (env-overridable). "local" -> small multimodal E4B; "gemma" -> 26B MoE;
-// "obliterated" -> Qwen3.6-27B abliterated.
-const CANON = process.env.LOCAL_MODEL || "google/gemma-4-26b-a4b";
+// CANON is the id the local llama.cpp answers to (its `-a` alias); LOCAL_ALIASES is every id that
+// means the pbox GPU. Seeded into localMap so a cold boot on an EMPTY /data volume still serves
+// them from llama.cpp. Not a neutral default: until 2026-08-02 localMap seeded {} and modelRoutes
+// sent `local`/`gemma` to claudecode, so a lost config.json moved the whole FREE lane onto the Max
+// subscription — invariant 2's cross-provider substitution, arriving as a default rather than a
+// decision. With no bases.local the call now fails honestly instead.
+const CANON = process.env.LOCAL_MODEL || "qwen3.5-9b";
+const LOCAL_ALIASES = ["local", "gemma", "gemma-4-26b", "qwen", "qwen3.5-9b"];
 const OBLIT = process.env.LOCAL_MODEL_2 || "qwen3.6-27b-obliterated";
 const E4B = process.env.LOCAL_MODEL_3 || "gemma-4-e4b-it-obliterated";
 
@@ -122,24 +127,22 @@ function envDefaults() {
     // token = open. gemma + crazyrouter stay open so fb-bot/promopilot are unaffected.
     oblitToken: process.env.OBLIT_TOKEN || "",
     gatedModels: [OBLIT],
-    // localMap: alias -> local-model-id (resolves the local provider). The old hosted backend is
-    // gone; the env seed ships this EMPTY (local provider off by default) and the legacy ids
-    // ("local"/"gemma"/"obliterated"/...) fall through to claudecode via modelRoutes below. Production
-    // re-enables the provider via config.json — it points bases.local at the live llama.cpp server on
-    // the pbox GPU and maps e.g. "local"/"qwen3.5-9b" -> qwen3.5-9b there.
-    localMap: {},
+    // localMap: alias -> local-model-id (resolves the local provider). Production overrides it from
+    // config.json; this seed only decides a cold boot. ⚠ A `projectRoutes` pin's `model` is a
+    // literal string and OUTRANKS this map — a checkpoint swap must update both (see CLAUDE.md).
+    localMap: Object.fromEntries(LOCAL_ALIASES.map((id) => [id, CANON])),
     // ── flow control (admin-editable) ──
     // forceModel: when enabled, EVERY request is rewritten to this provider+model regardless of what
     // the caller asked for. The big red switch.
     forceModel: { enabled: false, provider: "claudecode", model: "" },
     // modelRoutes: explicit per-incoming-model overrides to ANY provider (highest priority after
     // forceModel). key = incoming model name (lowercased). value = { provider, model }.
-    // The legacy local model ids are redirected here to claudecode (claude-sonnet-4-6 is multimodal),
-    // so requests that still ask for "local"/"gemma"/"obliterated" — including image analysis —
-    // are served by Claude instead of the retired hosted backend.
+    // Only the ABLITERATED ids are redirected to claudecode: those checkpoints really have no
+    // backend. `local`/`gemma`/`google/gemma-4-26b-a4b` were in this list too until 2026-08-02 and
+    // should never have outlived the hosted backend's retirement — modelRoutes beats localMap, so
+    // they made the free lane resolve to a paid one on any box without a config.json.
     modelRoutes: Object.fromEntries(
-      ["local", "gemma", "gemma-4-e4b-it-obliterated", "google/gemma-4-26b-a4b",
-       "obliterated", "obliteratus", "qwen3.6-27b-obliterated"]
+      ["gemma-4-e4b-it-obliterated", "obliterated", "obliteratus", "qwen3.6-27b-obliterated"]
         .map((id) => [id, { provider: "claudecode", model: "claude-sonnet-4-6" }])
     ),
     // projectRoutes: per-PROJECT overrides to ANY provider (highest priority of all — beats forceModel
