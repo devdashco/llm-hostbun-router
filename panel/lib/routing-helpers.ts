@@ -18,8 +18,12 @@ export const PROJ_MODELS: { provider: string; model: string }[] = [
   { provider: "crazyrouter", model: "gemini-2.5-flash-lite" },
   { provider: "crazyrouter", model: "gemini-2.5-flash" },
   { provider: "crazyrouter", model: "gemini-2.5-pro" },
-  { provider: "local", model: "gemma-4-e4b-it-obliterated" },
-  { provider: "local", model: "google/gemma-4-26b-a4b" },
+  // The local presets are what llama.cpp on pbox actually answers to. They were
+  // `gemma-4-e4b-it-obliterated` and `google/gemma-4-26b-a4b` until 2026-08-02 — two ids with no
+  // backend, offered in a dropdown. A pin's `model` is a LITERAL string sent upstream and the
+  // server does not validate it against any catalog, so picking one wrote a dead id straight into
+  // that project's rule. Update these the same day the checkpoint changes.
+  { provider: "local", model: "qwen3.5-9b" },
 ];
 
 export const valToRule = (v: string): Rule | null => {

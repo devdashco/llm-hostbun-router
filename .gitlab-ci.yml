@@ -51,8 +51,14 @@ test:
       - node_modules/
   # router.test.mjs drives the booted server with `curl` (execFileSync) rather than fetch, on purpose
   # — some sandboxes block node's outbound sockets. node:24-alpine ships without curl, so install it.
+  # `bash` for gateway-route.test.mjs, which SOURCES cccc/shell/gateway-route.sh and asserts the env
+  # a shell really ends up with — alpine's /bin/sh is busybox ash and there is no bash at all, so the
+  # suite died on `spawnSync bash ENOENT` and took the whole gate red with it. It was red from at
+  # least 2026-07-30 to 2026-08-02 for exactly this, which means every push in that window was
+  # merged unverified. Installing bash is the fix rather than skipping the suite: a test that
+  # silently opts out of CI is the failure this repo keeps writing tests to prevent.
   before_script:
-    - apk add --no-cache curl
+    - apk add --no-cache curl bash
   script:
     - npm ci
     - npm test
