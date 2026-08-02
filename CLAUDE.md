@@ -328,7 +328,7 @@ Three **routing** providers — the whole of `PROVIDERS`, i.e. everything a mode
 
 | provider | upstream | speaks | cost |
 |---|---|---|---|
-| `local` | llama.cpp on the pbox GPU (`bases.local`, currently `pbox.llm.hostbun.cc`). **Serves `gemma-4-26B-qat-UD-Q4_K_XL.gguf`, build b9821, `n_ctx` 65536 / 2 slots, vision+video — verified 2026-07-31.** All five ids `local`/`gemma`/`gemma-4-26b`/`qwen`/`qwen3.5-9b` resolve here; the qwen pair are legacy aliases, so "model `qwen3.5-9b`" (what this said) named a checkpoint that is not loaded. Ask `/props`, don't infer from the id | OpenAI | free |
+| `local` | llama.cpp on the pbox GPU (`bases.local`, currently `pbox.llm.hostbun.cc`). **Serves `Qwen3.5-9B-UD-Q4_K_XL.gguf`, build b10223, `n_ctx` 65536 / 6 slots, vision — swapped 2026-08-02, was gemma-4-26B-QAT.** All five ids `local`/`gemma`/`gemma-4-26b`/`qwen`/`qwen3.5-9b` resolve here; the **`gemma` pair are now the legacy aliases** — the direction reversed on the swap, which is exactly why you ask `/props` and never infer from the id | OpenAI | free |
 | `claudecode` | the **claudecode-account-pool** (our Claude Max logins) → `api.anthropic.com` | Anthropic | flat (subscription) |
 | `crazyrouter` | `crazyrouter.com` cloud relay (gemini etc), key injected | OpenAI | **per token** |
 
@@ -402,8 +402,11 @@ answers in the OpenAI images envelope. **Three things here are load-bearing, not
 ### Admission control — the queue in front of the GPUs (`src/gate.js`, 2026-08-01)
 
 A burst is serialised **per provider**, and only where the upstream is one piece of hardware.
-Defaults: `images` **1** (one `diffusers` pipeline), `local` **2** (llama.cpp `n_parallel`, verified
-live off `/slots`). `claudecode` and `crazyrouter` are **0 — ungated on purpose**: they run their own
+Defaults: `images` **1** (one `diffusers` pipeline), `local` **6** (llama.cpp `n_parallel`, verified
+live off `/slots`; was 2 until the 2026-08-02 checkpoint swap freed the VRAM for three times the
+slots). **This number must track the server, and getting it wrong is silent both ways** — a gate of
+2 against a 6-slot llama.cpp idles two thirds of the GPU while callers queue, and a gate of 6
+against a 2-slot one rebuilds the header-timeout bug the gate exists to prevent. Neither errors. `claudecode` and `crazyrouter` are **0 — ungated on purpose**: they run their own
 concurrency and their 429 is a signal to surface, not absorb (invariant 2). Queueing them would add
 latency to calls that are legitimately parallel and turn "you are out of quota" into a silent wait.
 

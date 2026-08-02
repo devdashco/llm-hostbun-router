@@ -13,11 +13,20 @@ Ask the server, do not trust this page — the checkpoint behind `local` is ours
 curl https://pbox.llm.hostbun.cc/props | jq '{model_path, modalities, n_ctx, total_slots, build_info}'
 ```
 
-As of 2026-07-31 that answers `gemma-4-26B-qat-UD-Q4_K_XL.gguf`, build `b9821`, `n_ctx: 65536` over
-`total_slots: 2`, vision **and** video in, audio out of scope.
+As of 2026-08-02 that answers `Qwen3.5-9B-UD-Q4_K_XL.gguf`, build `b10223`, `n_ctx: 65536` over
+`total_slots: 6`, vision in, audio out of scope.
 
-Five model ids all resolve here — `local`, `gemma`, `gemma-4-26b`, `qwen`, `qwen3.5-9b`. The last two
-are legacy aliases from when a Qwen checkpoint was loaded; they serve gemma today.
+Five model ids all resolve here — `local`, `gemma`, `gemma-4-26b`, `qwen`, `qwen3.5-9b`. **The
+`gemma*` pair are now the legacy aliases** — they served gemma-4-26B-QAT until 2026-08-02 and serve
+Qwen today. That is the reverse of what this page said for the three weeks before, so trust `/props`
+over any id.
+
+The swap was measured, not assumed, and it is a trade rather than a win on every axis: aggregate
+throughput at 6 concurrent went 262 -> **395 tok/s** and VRAM 18.0 -> 15.5 GB, but a *single*
+request got slower, 147 -> **121 tok/s**. It is the right trade only because this lane is
+throughput-bound — peak 32 overlapping requests, p95 43s on a busy day. A draft model does not buy
+the single-stream back: llama.cpp disables speculative decoding when `-np > 1`, so the 0.8B draft
+measured 124.0 against 124.7 without it.
 
 ## Structured output — three ways, all grammar-enforced
 
