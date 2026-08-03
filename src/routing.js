@@ -14,11 +14,18 @@ const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCas
 const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.claudePrefix || "claude").toLowerCase());
 const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.includes(target);
 
+// The local provider is ONE provider but no longer one machine: pbox serves most ids, ww serves the
+// small ones that fit beside the image model on its 3070. localBases is the per-target-model
+// exception list; anything absent from it is pbox. Deliberately NOT a fourth provider — the box a
+// checkpoint sits on is not a billing or policy distinction, and gate/pricing/analytics all key on
+// `provider`, so splitting it there would have made every one of them ask about hardware.
+const localBaseFor = (m) => (CFG.localBases && CFG.localBases[String(m || "").toLowerCase()]) || CFG.bases.local;
+
 function providerRoute(provider, model, reason) {
   const l = normProvider(provider) || "crazyrouter";
   // claudecode: the pinned account's token is attached later (dispatch), not here.
   if (l === "claudecode") return { provider: "claudecode", base: CFG.bases.claudecode, rewriteModel: model || undefined, reason };
-  if (l === "local") return { provider: "local", base: CFG.bases.local, rewriteModel: model, target: model, reason };
+  if (l === "local") return { provider: "local", base: localBaseFor(model), rewriteModel: model, target: model, reason };
   return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
 }
 
@@ -438,7 +445,10 @@ function baseRoute(m, key) {
   if (CFG.modelRoutes && CFG.modelRoutes[key])
     return providerRoute(CFG.modelRoutes[key].provider, CFG.modelRoutes[key].model || m, `override: ${key}`);
   const lt = localTarget(m);
-  if (lt) return { provider: "local", base: CFG.bases.local, rewriteModel: lt, target: lt, reason: "local alias" };
+  // Through providerRoute, not a hand-built object: it is the one place that knows WHICH local box
+  // serves a given id (localBaseFor). Rebuilding the route here is how this branch kept pointing at
+  // pbox for models that live on ww.
+  if (lt) return providerRoute("local", lt, "local alias");
   if (isClaudeModel(m)) return { provider: "claudecode", base: CFG.bases.claudecode, reason: "claude* model" };
   if (!m) return defaultRouteResolved("no model specified");
   const pol = CFG.cloudPolicy || "open";

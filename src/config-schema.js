@@ -164,10 +164,46 @@ function sanitizeLimit(v) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The local lane: which ids mean "our own GPU", and which box each one sits on.
+// ─────────────────────────────────────────────────────────────────────────────
+// CANON is the id the local llama.cpp answers to (its `-a` alias); LOCAL_ALIASES is every id that
+// means the pbox GPU. Seeded into localMap so a cold boot on an EMPTY /data volume still serves
+// them from llama.cpp. Not a neutral default: until 2026-08-02 localMap seeded {} and modelRoutes
+// sent `local`/`gemma` to claudecode, so a lost config.json moved the whole FREE lane onto the Max
+// subscription — invariant 2's cross-provider substitution, arriving as a default rather than a
+// decision. With no bases.local the call now fails honestly instead.
+//
+// This is vocabulary, so it lives here beside PROVIDERS and IMAGE_MODEL_IDS rather than in
+// config.js — which was at 521 lines against a 500 budget once the ww half was added.
+const CANON = process.env.LOCAL_MODEL || "qwen3.5-9b";
+const LOCAL_ALIASES = ["local", "gemma", "gemma-4-26b", "qwen", "qwen3.5-9b"];
+// One provider, TWO boxes since 2026-08-03. ww's RTX 3070 already serves the image model; what is
+// left of that card (~2.6 GB at its measured 5545 MiB peak) fits a 2B, so these ids resolve to ww.
+// The split is a BASE, not a provider: which machine holds a checkpoint is not a billing or policy
+// distinction, and gate/pricing/analytics all key on `provider`.
+const WW_CANON = process.env.LOCAL_MODEL_WW || "qwen3.5-2b";
+const WW_ALIASES = ["qwen3.5-2b", "qwen-small"];
+const WW_BASE = (process.env.LOCAL_BASE_WW || "http://10.0.1.250:8001").replace(/\/$/, "");
+const OBLIT = process.env.LOCAL_MODEL_2 || "qwen3.6-27b-obliterated";
+const E4B = process.env.LOCAL_MODEL_3 || "gemma-4-e4b-it-obliterated";
+// alias -> the model id its box actually answers to.
+const LOCAL_MAP_SEED = {
+  ...Object.fromEntries(LOCAL_ALIASES.map((id) => [id, CANON])),
+  ...Object.fromEntries(WW_ALIASES.map((id) => [id, WW_CANON])),
+};
+// model id -> the base that serves it, for the ids that are NOT on pbox. Keyed on both the alias
+// and the canonical id, because providerRoute is reached with whichever of the two was named. An id
+// absent here is pbox, so losing this map degrades to "ww's ids 404 on pbox's llama.cpp" — an
+// honest failure, never a silent hop onto a per-token provider.
+const LOCAL_BASES_SEED = Object.fromEntries([...WW_ALIASES, WW_CANON].map((id) => [id, WW_BASE]));
+
 module.exports = {
   PROVIDERS, PROVIDER_SET, LEGACY_PROVIDER, normProvider, providerOf,
   IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel,
   IMAGE_TEMPLATE_MODELS, IMAGE_TEMPLATE_SLUG, sanitizeImageTemplate,
   WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES,
   sanitizeRule, sanitizeLimit,
+  CANON, LOCAL_ALIASES, WW_CANON, WW_ALIASES, WW_BASE, OBLIT, E4B,
+  LOCAL_MAP_SEED, LOCAL_BASES_SEED,
 };

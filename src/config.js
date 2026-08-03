@@ -41,18 +41,8 @@ const UI_ROUTES = new Set(["/overview", "/calls", "/routing", "/consumers", "/pr
   "/identity", "/settings", "/stats", "/accounts", "/models", "/crazyrouter", "/secrets"]);
 const CONFIG_FILE = process.env.CONFIG_FILE || "/data/config.json";
 
-// CANON is the id the local llama.cpp answers to (its `-a` alias); LOCAL_ALIASES is every id that
-// means the pbox GPU. Seeded into localMap so a cold boot on an EMPTY /data volume still serves
-// them from llama.cpp. Not a neutral default: until 2026-08-02 localMap seeded {} and modelRoutes
-// sent `local`/`gemma` to claudecode, so a lost config.json moved the whole FREE lane onto the Max
-// subscription — invariant 2's cross-provider substitution, arriving as a default rather than a
-// decision. With no bases.local the call now fails honestly instead.
-const CANON = process.env.LOCAL_MODEL || "qwen3.5-9b";
-const LOCAL_ALIASES = ["local", "gemma", "gemma-4-26b", "qwen", "qwen3.5-9b"];
-const OBLIT = process.env.LOCAL_MODEL_2 || "qwen3.6-27b-obliterated";
-const E4B = process.env.LOCAL_MODEL_3 || "gemma-4-e4b-it-obliterated";
-
-// The vocabularies and their validators — providers, image ids, limit windows/actions, auth modes.
+// The vocabularies and their validators — providers, image ids, limit windows/actions, auth modes,
+// and the local lane (CANON, the pbox + ww aliases, their bases, the abliterated ids).
 // Re-exported below so every existing caller (and the import guard) still sees them here.
 const SCHEMA = require("./config-schema");
 const {
@@ -61,8 +51,8 @@ const {
   IMAGE_TEMPLATE_MODELS, IMAGE_TEMPLATE_SLUG, sanitizeImageTemplate,
   WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES,
   sanitizeRule, sanitizeLimit,
+  CANON, OBLIT, E4B, LOCAL_MAP_SEED, LOCAL_BASES_SEED,
 } = SCHEMA;
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Live config: env defaults, then /data/config.json overlay.
@@ -130,7 +120,10 @@ function envDefaults() {
     // localMap: alias -> local-model-id (resolves the local provider). Production overrides it from
     // config.json; this seed only decides a cold boot. ⚠ A `projectRoutes` pin's `model` is a
     // literal string and OUTRANKS this map — a checkpoint swap must update both (see CLAUDE.md).
-    localMap: Object.fromEntries(LOCAL_ALIASES.map((id) => [id, CANON])),
+    localMap: { ...LOCAL_MAP_SEED },
+    // localBases: per-MODEL override of bases.local, for the ids that live on ww rather than pbox.
+    // Seeded from config-schema; see LOCAL_BASES_SEED there for why an absent id means pbox.
+    localBases: { ...LOCAL_BASES_SEED },
     // ── flow control (admin-editable) ──
     // forceModel: when enabled, EVERY request is rewritten to this provider+model regardless of what
     // the caller asked for. The big red switch.
@@ -265,6 +258,14 @@ function mergeConfig(base, saved) {
         m[k.trim().toLowerCase()] = v.trim();
     }
     c.localMap = m; // allow an explicit empty map to fully disable the local provider
+  }
+  if (saved.localBases && typeof saved.localBases === "object" && !Array.isArray(saved.localBases)) {
+    const lb = {};
+    for (const [k, v] of Object.entries(saved.localBases)) {
+      if (typeof k === "string" && typeof v === "string" && k.trim() && v.trim())
+        lb[k.trim().toLowerCase()] = v.trim().replace(/\/$/, "");
+    }
+    c.localBases = lb; // an explicit empty map sends every local id back to the one bases.local
   }
   if (Array.isArray(saved.gatedModels))
     c.gatedModels = saved.gatedModels.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
