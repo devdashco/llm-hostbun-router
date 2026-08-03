@@ -25,7 +25,10 @@ function providerRoute(provider, model, reason) {
   const l = normProvider(provider) || "crazyrouter";
   // claudecode: the pinned account's token is attached later (dispatch), not here.
   if (l === "claudecode") return { provider: "claudecode", base: CFG.bases.claudecode, rewriteModel: model || undefined, reason };
-  if (l === "local") return { provider: "local", base: localBaseFor(model), rewriteModel: model, target: model, reason };
+  // authToken on the local lane = llama.cpp's --api-key. buildHeaders already turns it into the
+  // Authorization bearer, so nothing downstream changes. It also OVERWRITES the caller's own
+  // `sk-llm-…` header, which we were otherwise forwarding verbatim to llama.cpp.
+  if (l === "local") return { provider: "local", base: localBaseFor(model), rewriteModel: model, target: model, ...(CFG.localKey ? { authToken: CFG.localKey } : {}), reason };
   return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
 }
 

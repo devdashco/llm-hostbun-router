@@ -102,5 +102,26 @@ check("modelRoutes claims none of the local ids",
   LOCAL_IDS.every((id) => !CFG.modelRoutes[id]),
   `claimed: ${LOCAL_IDS.filter((id) => CFG.modelRoutes[id]).join(", ")}`);
 
+// ── the local lane's own credential ────────────────────────────────────────
+// llama.cpp's --api-key. Without this the router forwarded the CALLER's `sk-llm-...` bearer
+// straight to llama.cpp, and pbox.llm.hostbun.cc answered anyone who skipped the router entirely.
+// buildHeaders turns `authToken` into the Authorization header, so the route carrying it IS the fix.
+{
+  const before = CFG.localKey;
+  CFG.localKey = "";
+  check("no localKey -> no authToken (old behaviour, nothing breaks)",
+    resolveRoute("qwen3.5-9b").authToken === undefined);
+  CFG.localKey = "test-key-123";
+  for (const id of [...LOCAL_IDS, ...WW_IDS]) {
+    const r = resolveRoute(id);
+    check(`${id} carries the local key`, r.authToken === "test-key-123",
+      `got authToken=${r.authToken} — this call reaches llama.cpp unauthenticated`);
+  }
+  // It must NOT leak onto the paid providers: that would send our GPU key to a third party.
+  check("claudecode route does not get the local key",
+    resolveRoute("claude-sonnet-4-6").authToken !== "test-key-123");
+  CFG.localKey = before;
+}
+
 console.log(fails ? `\nFAIL — ${fails} failed` : "\nPASS — 0 failed");
 process.exit(fails ? 1 : 0);

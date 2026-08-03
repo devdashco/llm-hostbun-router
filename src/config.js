@@ -67,11 +67,9 @@ function envDefaults() {
       // claudecode → the real Anthropic API, called with a pinned account's Max token. The old
       // old subprocess-wrapper base is GONE.
       claudecode: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
-      // Image generation. Routed by PATH, never by model name. NVIDIA SANA-Sprint 0.6B (2 steps,
-      // no LoRA) on ww's RTX 3070, fronted by the `ww` Cloudflare tunnel. NOT pbox: the old
-      // `sdturbo.bofrid.dev` default outlived that move and answers 503, so a boot without
-      // IMAGE_BASE aimed every image call at a decommissioned host. `sdturbo-ww.blpk.cc` is kept
-      // as a tunnel alias but names a checkpoint this has never run.
+      // Image generation. Routed by PATH, never by model name. SANA-Sprint 0.6B on ww's RTX 3070,
+      // fronted by the `ww` tunnel. NOT pbox: the old `sdturbo.bofrid.dev` default outlived that
+      // move and answers 503, so a boot without IMAGE_BASE aimed every image call at a dead host.
       images: (process.env.IMAGE_BASE || "https://imagegen-ww.hostbun.cc").replace(/\/$/, ""),
     },
     // Who to name as the owner of the image models in /v1/models. A literal is what
@@ -116,13 +114,15 @@ function envDefaults() {
     // id listed in gatedModels require Authorization: Bearer <oblitToken> (or x-api-key). Empty
     // token = open. gemma + crazyrouter stay open so fb-bot/promopilot are unaffected.
     oblitToken: process.env.OBLIT_TOKEN || "",
+    // Bearer sent TOWARD the local llama.cpp (its --api-key). Empty = send nothing, the old
+    // behaviour where pbox.llm.hostbun.cc answered anyone. Set on both sides or neither.
+    localKey: process.env.LOCAL_KEY || "",
     gatedModels: [OBLIT],
     // localMap: alias -> local-model-id (resolves the local provider). Production overrides it from
     // config.json; this seed only decides a cold boot. ⚠ A `projectRoutes` pin's `model` is a
     // literal string and OUTRANKS this map — a checkpoint swap must update both (see CLAUDE.md).
     localMap: { ...LOCAL_MAP_SEED },
-    // localBases: per-MODEL override of bases.local (see LOCAL_BASES_SEED; absent id = pbox).
-    localBases: { ...LOCAL_BASES_SEED },
+    localBases: { ...LOCAL_BASES_SEED },   // per-MODEL override of bases.local; absent id = pbox
     // ── flow control (admin-editable) ──
     // forceModel: when enabled, EVERY request is rewritten to this provider+model regardless of what
     // the caller asked for. The big red switch.
@@ -318,7 +318,7 @@ function mergeConfig(base, saved) {
   if (typeof saved.claudePrefix === "string") c.claudePrefix = saved.claudePrefix;
   else if (typeof saved.wrappyPrefix === "string") c.claudePrefix = saved.wrappyPrefix;
   if (typeof saved.imageTemplateKey === "string") c.imageTemplateKey = saved.imageTemplateKey;
-  for (const k of ["oblitToken", "adminPassword"])
+  for (const k of ["oblitToken", "adminPassword", "localKey"])
     if (typeof saved[k] === "string") c[k] = saved[k];
   // Must survive the sanitizer or every logout is undone by the next config load — the same way
   // `allowUa` was silently dropped here and took the key policy with it.
