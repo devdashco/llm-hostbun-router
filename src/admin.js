@@ -204,14 +204,14 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     // Secret fields: omit/undefined = keep; "" = clear; value = set. Start from current CFG.
     const next = JSON.parse(JSON.stringify(CFG));
     if (patch.bases) {
-      if (typeof patch.bases.local === "string") next.bases.local = patch.bases.local;
-      if (typeof (patch.bases.crazyrouter ?? patch.bases.crazy) === "string") next.bases.crazyrouter = patch.bases.crazyrouter ?? patch.bases.crazy;
-      // The panel renders an editable claudecode base (rules-advanced.tsx) and posts it here, and
-      // this handler dropped it while answering `{ok:true, persisted:true}` — a save that reports
-      // success and changes nothing, with the field reverting on the next state load. `anthropic`
-      // is the pre-rename spelling, accepted for the same reason mergeConfig() accepts it on disk.
-      const cc = patch.bases.claudecode ?? patch.bases.anthropic;
-      if (typeof cc === "string") next.bases.claudecode = cc;
+      // EVERY base, each with its legacy spelling — a per-field `if` is what let two go missing.
+      // The panel posts an editable claudecode base (rules-advanced.tsx) and this dropped it,
+      // answering `{ok:true, persisted:true}`: a save that reports success, changes nothing, and
+      // reverts on the next state load. `images` had the same hole until 2026-08-03, found while
+      // moving the image service to its own hostname. Legacy names as mergeConfig() accepts them.
+      for (const [key, ...legacy] of [["local"], ["crazyrouter", "crazy"], ["claudecode", "anthropic"], ["images"]])
+        for (const k of [key, ...legacy])
+          if (typeof patch.bases[k] === "string") { next.bases[key] = patch.bases[k]; break; }
     }
     if (patch.localMap) next.localMap = patch.localMap;
     if (patch.gatedModels) next.gatedModels = patch.gatedModels;

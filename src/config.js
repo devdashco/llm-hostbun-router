@@ -71,8 +71,9 @@ function envDefaults() {
       // (2 steps, no LoRA) on ww's RTX 3070 (Windows 11 → WSL2 → Docker), fronted by the `ww`
       // Cloudflare tunnel. NOT pbox: the old `sdturbo.bofrid.dev` default outlived that move and
       // answers 503, so a boot without IMAGE_BASE aimed every image call at a decommissioned host.
+      // `sdturbo-ww.blpk.cc` is kept as a tunnel alias but names a checkpoint this has never run.
       // Prod sets IMAGE_BASE explicitly; this default is what a fresh or local boot gets.
-      images: (process.env.IMAGE_BASE || "https://sdturbo-ww.blpk.cc").replace(/\/$/, ""),
+      images: (process.env.IMAGE_BASE || "https://imagegen-ww.hostbun.cc").replace(/\/$/, ""),
     },
     // Who to name as the owner of the image models in /v1/models. A literal is what
     // let "pbox" survive the move to ww for months.
