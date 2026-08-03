@@ -67,12 +67,11 @@ function envDefaults() {
       // claudecode → the real Anthropic API, called with a pinned account's Max token. The old
       // old subprocess-wrapper base is GONE.
       claudecode: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
-      // Image generation. Routed by PATH, never by model name. NVIDIA SANA-Sprint 0.6B
-      // (2 steps, no LoRA) on ww's RTX 3070 (Windows 11 → WSL2 → Docker), fronted by the `ww`
-      // Cloudflare tunnel. NOT pbox: the old `sdturbo.bofrid.dev` default outlived that move and
-      // answers 503, so a boot without IMAGE_BASE aimed every image call at a decommissioned host.
-      // `sdturbo-ww.blpk.cc` is kept as a tunnel alias but names a checkpoint this has never run.
-      // Prod sets IMAGE_BASE explicitly; this default is what a fresh or local boot gets.
+      // Image generation. Routed by PATH, never by model name. NVIDIA SANA-Sprint 0.6B (2 steps,
+      // no LoRA) on ww's RTX 3070, fronted by the `ww` Cloudflare tunnel. NOT pbox: the old
+      // `sdturbo.bofrid.dev` default outlived that move and answers 503, so a boot without
+      // IMAGE_BASE aimed every image call at a decommissioned host. `sdturbo-ww.blpk.cc` is kept
+      // as a tunnel alias but names a checkpoint this has never run.
       images: (process.env.IMAGE_BASE || "https://imagegen-ww.hostbun.cc").replace(/\/$/, ""),
     },
     // Who to name as the owner of the image models in /v1/models. A literal is what
@@ -122,8 +121,7 @@ function envDefaults() {
     // config.json; this seed only decides a cold boot. ⚠ A `projectRoutes` pin's `model` is a
     // literal string and OUTRANKS this map — a checkpoint swap must update both (see CLAUDE.md).
     localMap: { ...LOCAL_MAP_SEED },
-    // localBases: per-MODEL override of bases.local, for the ids that live on ww rather than pbox.
-    // Seeded from config-schema; see LOCAL_BASES_SEED there for why an absent id means pbox.
+    // localBases: per-MODEL override of bases.local (see LOCAL_BASES_SEED; absent id = pbox).
     localBases: { ...LOCAL_BASES_SEED },
     // ── flow control (admin-editable) ──
     // forceModel: when enabled, EVERY request is rewritten to this provider+model regardless of what
@@ -251,6 +249,8 @@ function mergeConfig(base, saved) {
     const loc = pick("local"); if (loc) c.bases.local = loc;
     const cr = pick("crazyrouter", "crazy"); if (cr) c.bases.crazyrouter = cr;
     const an = pick("claudecode", "anthropic"); if (an) c.bases.claudecode = an;
+    // `images` too, or the admin POST that sets it reverts on the next restart: saved and ignored.
+    const im = pick("images"); if (im) c.bases.images = im;
   }
   if (saved.localMap && typeof saved.localMap === "object" && !Array.isArray(saved.localMap)) {
     const m = {};
