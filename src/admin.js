@@ -142,6 +142,8 @@ function adminState() {
     imageTemplateKeySet: !!CFG.imageTemplateKey, imageTemplateKeyMasked: mask(CFG.imageTemplateKey),
     openrouterKeySet: !!CFG.openrouterKey, openrouterKeyMasked: mask(CFG.openrouterKey),
     ...openrouterState(),   // freeOnly + the manual id list; no key = the provider claims nothing
+    freeaiapikeyKeySet: !!CFG.freeaiapikeyKey, freeaiapikeyKeyMasked: mask(CFG.freeaiapikeyKey),
+    freeaiapikeyModels: CFG.freeaiapikeyModels || [],
     // Each account carries its harvested headroom AND the age of that reading, so any consumer
     // (admin UI, statusline) can render "hot/cool" together with "as of when" — never a stale
     // number presented as fresh. `stale:true` = no reading in 6h: unknown, not cool.
@@ -240,7 +242,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     if (typeof (patch.crazyrouterKey ?? patch.crazyKey) === "string") next.crazyrouterKey = patch.crazyrouterKey ?? patch.crazyKey;
     if (typeof patch.imageTemplateKey === "string") next.imageTemplateKey = patch.imageTemplateKey;
     applyOpenrouterPatch(next, patch);
-    for (const k of ["oblitToken", "adminPassword", "openrouterKey"])
+    if (Array.isArray(patch.freeaiapikeyModels)) next.freeaiapikeyModels = patch.freeaiapikeyModels;
+    for (const k of ["oblitToken", "adminPassword", "openrouterKey", "freeaiapikeyKey"])
       if (typeof patch[k] === "string") next[k] = patch[k];
     const merged = mergeConfig(envDefaults(), next);
     if (!merged.adminPassword || merged.adminPassword.length < 3)

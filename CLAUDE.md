@@ -90,7 +90,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (28 suites, ~750 checks, ~80s)
+## Tests — `npm test` (29 suites, ~780 checks, ~80s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -211,6 +211,18 @@ wrong about the gate is how a suite gets added and then quietly dropped.
   no-key guard 2. The routing-ORDER check needed a second pass — the first version read green
   against a deliberately reordered `baseRoute` because no catalogue id starts with `claude`, so it
   now asserts with `openrouterModels` populated, which is the only way that ordering can bite.
+
+- `test/freeaiapikey.test.mjs` — the `freeaiapikey` provider, same class of bug as the suite above
+  and therefore the same rule: **not one assertion is about a status code**, because every way this
+  provider fails returns a good completion. Pins that it is OFF without a key or a base (so the
+  deploy that added it changed no route until the key landed); that the WRITTEN model list is the
+  only guard, since there is no free/paid line here to police; that an empty list means "claim
+  nothing" rather than "unset, keep the seed" (it is the off switch that does not require deleting
+  the key — the opposite of `imageTemplateModels`, deliberately); that the route carries `authToken`
+  and never `injectKey`; and that the bare `claude-*` ids stay on the Max pool **even when someone
+  hand-writes one into `freeaiapikeyModels`**, which is the one mistake here that costs real money.
+  Probed: removing the list guard turns 4 checks red, never taking the branch 8, swapping
+  `authToken` for `injectKey` 2.
 
 - `test/apps.test.mjs` — `POST /api/apps` (one-call app creation) and the premium-app watcher behind
   it. Two silent failure classes: a TIER that quietly includes opus (still `ok:true`, still a working
@@ -378,7 +390,7 @@ Two more are **not** in `npm test` because they need `panel/out` or the docs bui
 
 ## Providers
 
-Four **routing** providers — the whole of `PROVIDERS`, i.e. everything a model id can resolve to.
+Five **routing** providers — the whole of `PROVIDERS`, i.e. everything a model id can resolve to.
 (`lane` is the old word for the same thing; a few internals still spell it that way.)
 
 | provider | upstream | speaks | cost |
@@ -387,6 +399,39 @@ Four **routing** providers — the whole of `PROVIDERS`, i.e. everything a model
 | `claudecode` | the **claudecode-account-pool** (our Claude Max logins) → `api.anthropic.com` | Anthropic | flat (subscription) |
 | `crazyrouter` | `crazyrouter.com` cloud relay (gemini etc), key injected | OpenAI | **per token** |
 | `openrouter` | `openrouter.ai` (`bases.openrouter` = `https://openrouter.ai/api` — the `/api` is load-bearing, every caller appends `/v1/…`). Added 2026-08-04. **FREE-ONLY by default** and OFF entirely without `openrouterKey` | OpenAI | free (see below) |
+| `freeaiapikey` | `api.freeaiapikey.com` (`bases.freeaiapikey`, **no `/api` suffix** — their OpenAI surface is `/v1/*` directly). Added 2026-08-04. Opt-in per id via `freeaiapikeyModels`, OFF entirely without `freeaiapikeyKey` | OpenAI **and** native Anthropic | **per token, ~half crazyrouter** |
+
+**`freeaiapikey` is a cheaper reseller of the same frontier ids, and the reason it is worth a
+provider is arithmetic.** Measured against crazyrouter's live pricing API on 2026-08-04 (USD/1M,
+in/out): `openai/gpt-5.6-sol` 1.70/7.50 vs 3.25/19.50; `anthropic/claude-opus-5` 1.60/6.75 vs
+3.25/16.25; `anthropic/claude-sonnet-4.6` 0.80/3.00 vs 1.95/9.75. Roughly half the input and a third
+of the output, for ids `cloudPolicy: "open"` was already forwarding to crazyrouter.
+
+Four things about it, and none of them errors:
+
+1. **The written list IS the guard.** Every id they serve is metered — there is no free tier here to
+   police, which is why this provider needs no catalogue refresh and no module of its own.
+   `freeaiapikeyModels` is seeded with their ten live ids and is config, never code; an id not in it
+   never routes here. An **explicitly empty list disables the provider without deleting the key** —
+   the opposite reading from `imageTemplateModels`, on purpose.
+2. **Their ids are `vendor/model` and ours are bare, and that difference is load-bearing.**
+   `anthropic/claude-opus-5` is a different string from `claude-opus-5`, so `isClaudeModel()` never
+   sees theirs and the flat Max subscription cannot leak onto a metered relay. Do not "tidy" the
+   prefixes off. The branch also sits BELOW `claude-*`, so even a bare id hand-written into the list
+   loses to the subscription (pinned by the suite).
+3. **It sits after `openrouter` and before the crazyrouter fallthrough.** The two catalogues OVERLAP
+   on every id — `anthropic/claude-opus-5` and `openai/gpt-5.6-sol` are real on both. openrouter is
+   free-only by default and these are paid there, so it declines them today; turn `openrouterFreeOnly`
+   off and openrouter starts winning them at full list price. Free before paid, cheap paid before
+   dear paid.
+4. **⚠ Their usage accounting is wrong, and that is measured, not suspected.** On 2026-08-04 a native
+   `/v1/messages` call reported `input_tokens: 0`; the prompt `"hi"` reported 1,762 input tokens; the
+   same 20-token prompt reported 620 / 0 / 2,247 / 1,855 prompt tokens across four ids; and
+   `openai/gpt-4o` — a model with no reasoning mode — returned a `reasoning` field and 98 completion
+   tokens for the words "GPT-4o OpenAI". So **do not trust `usage` from this provider for cost
+   attribution**, and treat "which model actually answered" as unverified. It is a brand-new vendor
+   (signed up 2026-08-04) with a WhatsApp-founder support channel. Suitable for cheap bulk work,
+   NOT for anything where the bill or the model identity has to be right.
 
 **`openrouter` is the one provider that decides for itself which ids it will take, and the guard is
 the whole design.** Their catalogue is ~330 models on ONE base URL and ~17 are free, so

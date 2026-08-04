@@ -13,6 +13,21 @@ const { openrouterTarget } = require("./openrouter");
 const { dbUp, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT } = require("./db");
 
 const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCase()] || null);
+// Does freeaiapikey claim this id? Only if a key is set AND the id is written down in
+// `freeaiapikeyModels`. No catalogue lookup, because there is no free/paid line to police there —
+// every id they serve is metered, so the WRITTEN LIST is the whole guard. Returns the id to forward
+// or null, and null is the safe answer: the call then takes exactly the route it took before.
+// Deliberately not a module like src/openrouter.js — that file exists to hold a live catalogue and
+// a free-only test, and neither applies here. Give it a refresh and it earns its own file.
+function freeaiapikeyTarget(model) {
+  if (!CFG.bases.freeaiapikey || !CFG.freeaiapikeyKey) return null;
+  const key = String(model == null ? "" : model).trim().toLowerCase();
+  if (!key) return null;
+  return (CFG.freeaiapikeyModels || []).includes(key) ? key : null;
+}
+const freeaiapikeyModelEntries = () =>
+  (!CFG.bases.freeaiapikey || !CFG.freeaiapikeyKey) ? []
+    : (CFG.freeaiapikeyModels || []).map((id) => ({ id, object: "model", owned_by: "freeaiapikey" }));
 // A `claude*` model id means the claudecode provider (our Max account pool → api.anthropic.com).
 const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.claudePrefix || "claude").toLowerCase());
 const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.includes(target);
@@ -37,6 +52,12 @@ function providerRoute(provider, model, reason) {
   if (l === "openrouter")
     return { provider: "openrouter", base: CFG.bases.openrouter, rewriteModel: model || undefined,
              ...(CFG.openrouterKey ? { authToken: CFG.openrouterKey } : {}), reason };
+  // Same rule, same reason: `authToken`, never `injectKey`. Their bearer works on BOTH surfaces —
+  // OpenAI /v1/chat/completions and native /v1/messages (verified 2026-08-04), so nothing here has
+  // to know which shape the caller sent.
+  if (l === "freeaiapikey")
+    return { provider: "freeaiapikey", base: CFG.bases.freeaiapikey, rewriteModel: model || undefined,
+             ...(CFG.freeaiapikeyKey ? { authToken: CFG.freeaiapikeyKey } : {}), reason };
   return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
 }
 
@@ -503,6 +524,17 @@ function baseRoute(m, key) {
   // free-only guard, so an unconfigured or unknown id falls through exactly as it did before.
   const or = openrouterTarget(m);
   if (or) return providerRoute("openrouter", or, "openrouter catalog");
+  // AFTER openrouter and BEFORE the crazyrouter fallthrough, and both neighbours matter:
+  //   • after openrouter, because the two catalogues OVERLAP on every id here —
+  //     `anthropic/claude-opus-5` and `openai/gpt-5.6-sol` are real ids on both. openrouter is
+  //     free-only by default and these are paid there, so it declines them and the order is moot
+  //     today; turn openrouterFreeOnly OFF and openrouter starts winning them at list price.
+  //     Free before paid is the rule; this is the cheaper paid one, not a free one.
+  //   • before crazyrouter, which is the whole point: `cloudPolicy: "open"` forwards anything, and
+  //     crazyrouter bills ~2x the input and ~2.5-3x the output for the same id (measured
+  //     2026-08-04). Below the fallthrough this provider would never see a single call.
+  const fa = freeaiapikeyTarget(m);
+  if (fa) return providerRoute("freeaiapikey", fa, "freeaiapikey model list");
   const pol = CFG.cloudPolicy || "open";
   if (pol === "open") return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, reason: "crazyrouter (open)" };
   if (pol === "allowlist" && (CFG.cloudAllowlist || []).some((x) => x.toLowerCase() === key))
@@ -513,7 +545,7 @@ function baseRoute(m, key) {
 module.exports = {
   resolveRoute, baseRoute, providerRoute, defaultRouteResolved, projectRule, projectRuleFor,
   enforceAllow, accountFor, autoAccount, autoDisableAccount, acctHealth, limitFor, resolveLimit, projectUsage, usageVerdict,
-  localTarget, isClaudeModel, isGated, sleep,
+  localTarget, freeaiapikeyTarget, freeaiapikeyModelEntries, isClaudeModel, isGated, sleep,
   note429, note2xx, throttleDelay, throttleSnapshot,
   noteAcctCooldown, acctCooling, clearAcctCooldown,
 };

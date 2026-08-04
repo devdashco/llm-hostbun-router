@@ -68,6 +68,11 @@ function envDefaults() {
       // every caller of this base (proxy, the health probe, the catalog refresh) appends "/v1/…".
       // Drop it and each one asks for /v1/chat/completions, which is their marketing site.
       openrouter: (process.env.OPENROUTER_BASE || "https://openrouter.ai/api").replace(/\/$/, ""),
+      // freeaiapikey. The `api.` host is load-bearing and NEW: the bare freeaiapikey.com endpoint
+      // answers 410 `endpoint_moved` on every path, which reads as a routing bug rather than as a
+      // vendor migration. No `/api` suffix here (unlike openrouter) — their OpenAI surface is at
+      // /v1/* directly, and native /v1/messages sits beside it on the same host.
+      freeaiapikey: (process.env.FREEAIAPIKEY_BASE || "https://api.freeaiapikey.com").replace(/\/$/, ""),
       // claudecode → the real Anthropic API, called with a pinned account's Max token. The old
       // old subprocess-wrapper base is GONE.
       claudecode: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
@@ -94,6 +99,24 @@ function envDefaults() {
     // openrouterFreeOnly). Config, never code (invariant 6). Normally EMPTY: the catalogue refresh
     // in src/openrouter.js is what makes a new free model routable without a config edit.
     openrouterModels: (process.env.OPENROUTER_MODELS || "").split(",").map((x) => x.trim()).filter(Boolean),
+    // freeaiapikey bearer (`sk-…`). EMPTY DISABLES THE PROVIDER ENTIRELY, same rule and same reason
+    // as openrouterKey: a half-configured reseller must not swallow ids that used to reach
+    // crazyrouter and answer 401 for them.
+    freeaiapikeyKey: process.env.FREEAIAPIKEY_KEY || "",
+    // The ids this provider may claim. There is no free-only guard to lean on here — every id they
+    // serve is metered — so THIS LIST IS THE GUARD, and it is why the provider needs no catalogue
+    // refresh: an id not written down never routes here. Seeded from their live /v1/models
+    // (2026-08-04, ten ids). Config, never code (invariant 6): FREEAIAPIKEY_MODELS or the panel
+    // replaces it, and an explicit empty list disables the provider without touching the key.
+    //
+    // Every id is `vendor/model`, which is what keeps the Max pool safe: `anthropic/claude-opus-5`
+    // is a DIFFERENT STRING from `claude-opus-5`, so isClaudeModel() never sees these and the flat
+    // subscription cannot leak onto a metered relay. Do not "tidy" the prefixes off.
+    freeaiapikeyModels: (process.env.FREEAIAPIKEY_MODELS ||
+      "openai/gpt-5.6-sol,openai/gpt-5.5,openai/gpt-5.4,openai/gpt-4o," +
+      "anthropic/claude-opus-5,anthropic/claude-opus-4.8,anthropic/claude-opus-4.7," +
+      "anthropic/claude-opus-4.6,anthropic/claude-sonnet-5,anthropic/claude-sonnet-4.6"
+    ).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean),
     // A SEPARATE crazyrouter key for image templates, because access to the image models is granted
     // per token: the router's own key is valid and still answers "this token does not have access to
     // model gemini-2.5-flash-image". Empty = fall back to crazyrouterKey. Kept apart rather than
@@ -278,6 +301,7 @@ function mergeConfig(base, saved) {
     // `images` too, or the admin POST that sets it reverts on the next restart: saved and ignored.
     const im = pick("images"); if (im) c.bases.images = im;
     const or = pick("openrouter"); if (or) c.bases.openrouter = or;
+    const fa = pick("freeaiapikey"); if (fa) c.bases.freeaiapikey = fa;
   }
   if (saved.localMap && typeof saved.localMap === "object" && !Array.isArray(saved.localMap)) {
     const m = {};
@@ -322,6 +346,12 @@ function mergeConfig(base, saved) {
   // is what makes free ids routable, so emptying this only drops the manual additions.
   if (Array.isArray(saved.openrouterModels))
     c.openrouterModels = [...new Set(saved.openrouterModels
+      .filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().toLowerCase()))];
+  if (typeof saved.freeaiapikeyKey === "string") c.freeaiapikeyKey = saved.freeaiapikeyKey;
+  // An explicit empty list IS meaningful — it is the off switch for the provider that does not
+  // require deleting the key, and there is no catalogue refresh to re-fill it behind your back.
+  if (Array.isArray(saved.freeaiapikeyModels))
+    c.freeaiapikeyModels = [...new Set(saved.freeaiapikeyModels
       .filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().toLowerCase()))];
   // The account pool. `claudecodeAccountPool` is the name; `anthropicPool` is what the live
   // /data/config.json still calls it. Read either, keep both in sync so a rollback still boots.

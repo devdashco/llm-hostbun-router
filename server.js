@@ -1,14 +1,17 @@
 // llm.hostbun.cc — single-URL OpenAI router + control panel.
 //
-// PROVIDERS — where a request is actually served. Four, and that is the whole taxonomy:
+// PROVIDERS — where a request is actually served. Five, and that is the whole taxonomy:
 //   • local        -> llama.cpp on the pbox GPU (OpenAI-native; base + ids from config.json)
 //   • claudecode   -> the claudecode-account-pool (our Claude Max logins) -> api.anthropic.com
 //   • crazyrouter  -> crazyrouter.com cloud relay (CRAZYROUTER_KEY injected server-side)
 //   • openrouter   -> openrouter.ai, FREE-ONLY by default and off entirely without a key
+//   • freeaiapikey -> api.freeaiapikey.com, a cheaper metered reseller of the same frontier ids;
+//                     opt-in by model id (freeaiapikeyModels) and off entirely without a key
 //
 //   model "local" / "qwen3.5-9b"                -> local (pbox GPU)
 //   model "claude*" (e.g. claude-sonnet-4-6)    -> claudecode, the pinned account's token injected
 //   an id openrouter serves FREE               -> openrouter (src/openrouter.js owns the catalogue)
+//   an id in freeaiapikeyModels                -> freeaiapikey (metered, but under crazyrouter)
 //   any other model                             -> crazyrouter, key injected
 //   model "imagegen"  +  POST /v1/images/*      -> image generation (SDXL+Lightning on ww's 3070)
 //   `template` naming one of ours + same path  -> image templates: a reference picture + a style
@@ -16,6 +19,7 @@
 //                                                 model. PAID, so this one route needs a key.
 //   /v1/image-templates[/<slug>/reference]     -> that store, public reads
 //   GET /v1/models                              -> local + claudecode + crazyrouter + openrouter
+//                                                  + freeaiapikey
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
 //   /local/*                                   -> back-compat: strips /local, proxies to the local provider (pbox)
@@ -26,7 +30,8 @@
 // panel take effect immediately AND survive restarts/reboots/redeploys. Nothing here needs a
 // redeploy to change routing.
 //
-// NAMING: canonical ids are `local`, `crazyrouter`, `claudecode`, `openrouter`. Legacy ids `cloud`
+// NAMING: canonical ids are `local`, `crazyrouter`, `claudecode`, `openrouter`, `freeaiapikey`.
+// Legacy ids `cloud`
 // (=crazyrouter), `claude`, `anthropic`, and the retired wrapper's id all normalize to
 // one of those on input, so older /data/config.json files and call-log rows keep working without a
 // reset. A few internals still spell the field `provider`; it means provider.

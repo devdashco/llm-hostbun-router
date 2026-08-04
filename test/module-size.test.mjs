@@ -24,15 +24,22 @@ const BUDGET = 500;
 // Files already over budget when this test was written (2026-07-30). Each may only get smaller.
 // These are not exemptions — they are debts with a number attached.
 const CEILINGS = {
-  "server.js": 590,      // the HTTP layer + the path table + boot; the dispatch handler is the bulk
-  "src/admin.js": 529,   // was 1179 before the four route modules were lifted out on 2026-07-26
-  "src/config.js": 534,  // env defaults + the /data/config.json merge; two literals of every key
-  "src/routing.js": 519, // the routing chain AND all of account selection — see the note below
+  "server.js": 595,      // the HTTP layer + the path table + boot; the dispatch handler is the bulk
+  "src/admin.js": 532,   // was 1179 before the four route modules were lifted out on 2026-07-26
+  "src/config.js": 564,  // env defaults + the /data/config.json merge; two literals of every key
+  "src/routing.js": 551, // the routing chain AND all of account selection — see the note below
 };
 
-// RAISED 2026-08-04 twice: first for the `openrouter` provider, then again (+2 server.js,
-// +8 config.js, +8 routing.js) for the `any-available` account strategy. Recorded here rather than
+// RAISED 2026-08-04 three times: the `openrouter` provider, then (+2 server.js, +8 config.js,
+// +8 routing.js) the `any-available` account strategy, then (+5 server.js, +3 admin.js,
+// +30 config.js, +32 routing.js) the `freeaiapikey` provider. Recorded here rather than
 // absorbed, because this ratchet only works if every increase is a sentence someone had to write.
+//
+// freeaiapikey deliberately got NO module of its own, unlike openrouter — it has no live catalogue
+// and no free/paid line to police, so its whole logic is a list membership test. A file holding one
+// four-line predicate would be ceremony. The cost is that config.js and routing.js, both already
+// over, absorbed the two config literals and the routing branch. If it ever gains a refresh, that
+// is the moment it earns src/freeaiapikey.js and both ceilings come back down.
 //
 // What those lines actually bought: a fourth provider costs an import, a state field, a config patch
 // and a boot hook in each of server.js and admin.js, and there is no way to add one without touching

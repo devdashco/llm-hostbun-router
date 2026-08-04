@@ -19,7 +19,7 @@ import {
 // Kept as a SET-equal copy of the server's PROVIDERS (src/config-schema.js); test/panel-nav.test.mjs
 // fails the build when the two drift. The panel is a separate static export and cannot import the
 // server module, and a provider the panel never offers is a provider no operator can pin to.
-export const PROVS = ["claudecode", "crazyrouter", "local", "openrouter"];
+export const PROVS = ["claudecode", "crazyrouter", "local", "openrouter", "freeaiapikey"];
 
 // The pin cell — ONE provider-tinted select (a 3px left accent carries the provider identity the old
 // standalone pill used to). `auto` and `block` get their own tint. This is the fix that started the

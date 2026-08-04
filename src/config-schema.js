@@ -23,10 +23,16 @@ const path = require("node:path");
 //                provider only claims an id its catalogue marks free — anything else falls through
 //                to the chain it would have taken anyway, rather than quietly billing a card.
 //                See src/openrouter.js.
+//   freeaiapikey api.freeaiapikey.com — a metered RESELLER of the same OpenAI/Anthropic frontier
+//                ids, listed ~2x under crazyrouter on input and ~2.5-3x under it on output
+//                (measured 2026-08-04). Opt-in by model id: `freeaiapikeyModels` IS the guard, and
+//                an unlisted id falls through exactly as before. No live catalogue refresh, unlike
+//                openrouter — their roster is ten ids with no free tier to police, so there is no
+//                free/paid line for a refresh to keep on the right side of.
 //
 // `provider` is the field name. `lane` was the old word for the same thing and is still accepted
 // on input so existing /data/config.json keeps working.
-const PROVIDERS = ["local", "crazyrouter", "claudecode", "openrouter"];
+const PROVIDERS = ["local", "crazyrouter", "claudecode", "openrouter", "freeaiapikey"];
 // The image provider is deliberately absent from PROVIDERS: it is not a routing target. It is picked
 // by path (`/v1/images/*`), it speaks its own shape, and it bills GPU seconds rather than tokens.
 //

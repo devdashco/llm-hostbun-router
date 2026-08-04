@@ -9,7 +9,7 @@
 const { CFG } = require("./config");
 const { dbRows, ACCT_DEAD } = require("./db");
 const { sendJson, readBody, readJson, mask, upstreamReason } = require("./http");
-const { resolveRoute, isGated, accountFor } = require("./routing");
+const { resolveRoute, isGated, accountFor, freeaiapikeyModelEntries } = require("./routing");
 const { recordCall } = require("./db");
 const TR = require("../translate");
 const { upstreamCatalogs, localModelEntries } = require("./claudecode");
@@ -145,6 +145,18 @@ async function health(req, res) {
   // NOT acctUsable(): that also excludes cooling and quota-spent accounts, and a 429 is a usage
   // WINDOW, not a capability — the per-model probe was deleted in 2026-07-11 for exactly that
   // confusion. Only the permanent conditions belong in a health verdict.
+  // freeaiapikey, reported the same way and for the same reason as openrouter: not probed, because
+  // what decides whether it can serve is a key plus a non-empty model list, and their /v1/models
+  // answers 200 unauthenticated so a probe would call it up while holding nothing.
+  const faModels = (CFG.freeaiapikeyModels || []).length;
+  const freeaiapikey = {
+    up: !!CFG.freeaiapikeyKey && faModels > 0,
+    status: null, probed: false, ms: 0,
+    count: faModels, keySet: !!CFG.freeaiapikeyKey,
+    note: !CFG.freeaiapikeyKey ? "no freeaiapikeyKey — the provider claims no model ids"
+      : faModels === 0 ? "freeaiapikeyModels is empty — the provider claims no model ids"
+      : undefined,
+  };
   const pool = CFG.claudecodeAccountPool || [];
   const alive = pool.filter((a) => !a.disabled && !ACCT_DEAD.has(a.name));
   const claudecode = {
@@ -164,12 +176,13 @@ async function health(req, res) {
   // The human-facing alert channel (src/alert.js). A rotated bot token drops every premium-app
   // warning silently — "nobody has created an opus app" and "nobody has been told" look identical
   // from here otherwise, which is the same trap dbWriteHealth and shipHealth exist for.
-  return sendJson(res, 200, { local, crazyrouter, claudecode, openrouter, gates: gateSnapshot(), alerts: alertHealth() });
+  return sendJson(res, 200, { local, crazyrouter, claudecode, openrouter, freeaiapikey, gates: gateSnapshot(), alerts: alertHealth() });
 }
 
 async function catalogs(req, res) {
   const { claudecode, crazyrouter } = await upstreamCatalogs();
-  return sendJson(res, 200, { local: localModelEntries(), claudecode, crazyrouter, openrouter: openrouterModelEntries() });
+  return sendJson(res, 200, { local: localModelEntries(), claudecode, crazyrouter,
+    openrouter: openrouterModelEntries(), freeaiapikey: freeaiapikeyModelEntries() });
 }
 
 // Latest per-account rate-limit snapshot harvested off real traffic (zero-token; see recordLimits).
