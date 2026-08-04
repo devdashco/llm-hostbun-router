@@ -17,23 +17,24 @@
 //     server runs `-np 4 -c 65536` since the mmproj vision weights joined it on the same card).
 //     It was 2 until 2026-08-02, when the checkpoint changed from gemma-4-26B-QAT to Qwen3.5-9B and
 //     the weights went 13.6 GB -> 5.6 GB, paying for three times the slots inside the same card.
-//     THIS NUMBER MUST TRACK THE SERVER, and it stopped: this said 6 against a 4-slot server from
-//     the day `-np` was cut, and the drift does NOT queue — it OVERSHOOTS. llama.cpp answers the
-//     5th and 6th concurrent request `503 no available server` in ~73 ms, so the gate hands the
-//     upstream exactly the burst it cannot take. Re-read total_slots after any `-np`, context or
-//     checkpoint change on the box. Too LOW idles the GPU silently; too HIGH refuses traffic AND
-//     spills it onto crazyrouter, which bills.
+//     THIS NUMBER SHOULD TRACK THE SERVER — but for the CLOCK below, not to prevent an error.
+//     ⛔ `503 no available server` is NOT what slot exhaustion looks like. Measured 2026-08-04
+//     DIRECTLY against pbox with the router bypassed: 24 requests 12 wide at a 4-slot server →
+//     24 x 200. llama.cpp QUEUES past its slots. That string is what it answers while the model
+//     is not loaded, so a 503 storm means the SERVER IS RESTARTING, never that this number is
+//     too high. Overshooting costs waiting, not failures.
 //
-//     ⚠ The 24 h to 2026-08-04 measured 11,116 x 200 against 4,416 x 503 on this provider (28% of
-//     every free-lane call, across bluebut AND agentic-marketplace, 904 of them falling through to
-//     the paid lane) — and this gate drift was only PART of it. The larger half was pbox's
-//     llama.cpp being killed by its own memory cgroup: LLAMA_MEM 8g against a real ~8.7 GB working
-//     set, 7 kernel OOM kills and 27 restarts in 18 h, every restart 503ing until the model
-//     reloads. The kill is invisible from here AND from docker (`ExitCode=0`, `OOMKilled=false` —
-//     the kernel kills the process, not the container); `dmesg -T | grep llama-server` is the only
-//     honest source. Raised to 16g the same day: a 60-request 12-concurrent probe went from
-//     50x503 + 6x502 + 4x200 to 60/60 200. So do not read a 503 storm as proof this number is
-//     wrong — check the box first.
+//     ⚠ That distinction is the whole lesson of the 24 h to 2026-08-04: 11,116 x 200 against
+//     4,416 x 503 on this provider (28% of every free-lane call, across bluebut AND
+//     agentic-marketplace, 904 of them falling through to the paid lane). It was read here first
+//     as gate drift — this did say 6 against a 4-slot server — and that was WRONG. Every one of
+//     those 503s was pbox's llama.cpp being killed by its own memory cgroup: LLAMA_MEM 8g against
+//     a real ~8.8 GB working set, 7 kernel OOM kills and 27 restarts in 18 h, each restart 503ing
+//     until the model reloads. The kill is invisible from here AND from docker (`ExitCode=0`,
+//     `OOMKilled=false` — the kernel kills the process, not the container) and llama.cpp's own log
+//     jumps from slot timings straight to its boot banner; `dmesg -T | grep llama-server` is the
+//     only honest source. Raised to 16g the same day: a 60-request 12-concurrent probe went from
+//     50x503 + 6x502 + 4x200 to 60/60 200. CHECK THE BOX BEFORE YOU TOUCH THIS NUMBER.
 //     It queues past that itself and never crashes, so this is not about crashing. It is about the
 //     clock: llama.cpp's queue wait runs INSIDE our UPSTREAM_HEADER_TIMEOUT_MS, which starts at
 //     fetch() and only stops when headers arrive. Send 100 and the ones at the back burn their
