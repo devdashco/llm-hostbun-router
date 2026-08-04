@@ -469,7 +469,7 @@ in/out): `openai/gpt-5.6-sol` 1.70/7.50 vs 3.25/19.50; `anthropic/claude-opus-5`
 3.25/16.25; `anthropic/claude-sonnet-4.6` 0.80/3.00 vs 1.95/9.75. Roughly half the input and a third
 of the output, for ids `cloudPolicy: "open"` was already forwarding to crazyrouter.
 
-Four things about it, and none of them errors:
+Six things about it, and none of them errors:
 
 1. **The written list IS the guard.** Every id they serve is metered — there is no free tier here to
    police, which is why this provider needs no catalogue refresh and no module of its own.
@@ -486,14 +486,36 @@ Four things about it, and none of them errors:
    free-only by default and these are paid there, so it declines them today; turn `openrouterFreeOnly`
    off and openrouter starts winning them at full list price. Free before paid, cheap paid before
    dear paid.
-4. **⚠ Their usage accounting is wrong, and that is measured, not suspected.** On 2026-08-04 a native
-   `/v1/messages` call reported `input_tokens: 0`; the prompt `"hi"` reported 1,762 input tokens; the
-   same 20-token prompt reported 620 / 0 / 2,247 / 1,855 prompt tokens across four ids; and
-   `openai/gpt-4o` — a model with no reasoning mode — returned a `reasoning` field and 98 completion
-   tokens for the words "GPT-4o OpenAI". So **do not trust `usage` from this provider for cost
-   attribution**, and treat "which model actually answered" as unverified. It is a brand-new vendor
-   (signed up 2026-08-04) with a WhatsApp-founder support channel. Suitable for cheap bulk work,
-   NOT for anything where the bill or the model identity has to be right.
+4. **⚠ IT DOES NOT CACHE PROMPTS, whatever their docs say — and that alone rules out the one use
+   they are cheapest for.** Their documentation states "We fully support native Anthropic SDKs and
+   prompt caching". Measured on the wire 2026-08-04: a native `/v1/messages` call carrying a ~13k-token
+   system block marked `cache_control: {type: "ephemeral"}` came back with **no
+   `cache_creation_input_tokens` and no `cache_read_input_tokens` field at all** — real Anthropic
+   always returns both, as 0 if unused — and the identical second call reported `input_tokens: 0`.
+   So there is no cache, and no way to observe one if there were. Our claudecode traffic runs
+   **89-96% cache reads** (trap #8), so moving it here would multiply the real input volume by
+   roughly 10x against a per-token bill, to save a subscription that is flat. **Never point
+   claudecode work at this provider.** Cheap bulk single-shot work is what it is for.
+5. **⚠ Their usage accounting is fabricated, and `temperature` is ignored.** Same session: a native
+   call reported `input_tokens: 0`; the prompt `"hi"` reported 1,762; the same 20-token prompt
+   reported 620 / 0 / 2,247 / 1,855 across four ids; and the ~13k-token body above reported 2,160.
+   Two identical `temperature: 0` calls returned different completions, so sampling params are not
+   passed through faithfully either — which also means a "same answer twice" fingerprint proves
+   nothing here. **Do not trust `usage` from this provider for cost attribution**, and do not expect
+   determinism.
+6. **⚠ At least one id is provably NOT the model it names.** `openai/gpt-4o` returns a `reasoning`
+   field in every response (real GPT-4o has no reasoning mode) and scores like a frontier reasoning
+   model on a battery real GPT-4o would not pass — `4831*27-8964`, the weekday of 2000-01-01, and a
+   letter count, all correct. Every id shares that same envelope (`content` + `reasoning` + `role`)
+   and all of them score alike, which is what a single backend behind ten labels looks like. What is
+   NOT established is which model that is: black-box probing separates a frontier model from a weak
+   one, and cannot separate two frontier ones, so "is `anthropic/claude-opus-5` really Opus 5" is
+   still open and was not answered by scoring it 5/5. The responses are re-synthesized rather than
+   proxied — message ids are `msg_<24 hex>`, not Anthropic's `msg_01…`, and the Anthropic surface
+   returns `thinking` blocks that were never requested. Treat the model identity as unverified, and
+   pin nothing here that has to be a specific model.
+
+   It is a brand-new vendor (signed up 2026-08-04) with a WhatsApp-founder support channel.
 
 **`openrouter` is the one provider that decides for itself which ids it will take, and the guard is
 the whole design.** Their catalogue is ~330 models on ONE base URL and ~17 are free, so
