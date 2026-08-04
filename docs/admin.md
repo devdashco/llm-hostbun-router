@@ -42,6 +42,24 @@ delete every sibling. So these exist, and they merge:
 | `POST /api/routes` | `{project, provider?, model?, allowProviders?, allowModels?, block?, clear?}` | One project's rule. Rejects an unknown provider and an empty rule. |
 | `POST /api/consumers` | `{name, kind, owner?}` | One registry entry |
 | `POST /api/consumers/keys` | `{name, kind?, owner?}` | Issue a key. Creates the consumer if absent. |
+| `POST /api/apps` | `{name, tier?, note?, models?, pin?, account?, allowUa?}` | A whole application in one call: key **and** routing rule. |
+
+### One call for a new app
+
+`POST /api/apps` exists because the rule is the half that gets forgotten — a consumer with no rule
+is *unrestricted*, which includes the premium (opus/fable) models on the shared Max pool. Its
+allowlist is a **tier resolved against the live model catalogs**, so a new app never needs a
+hand-copied model list that goes stale:
+
+| `tier` | Allowed |
+|---|---|
+| `standard` (default) | every advertised id **except** the premium claudecode ones |
+| `frontier` | the above **plus** opus/fable — warns the operator |
+| `local` | the free on-prem GPU only |
+| `any` | no allowlist at all — also warns |
+
+`models: [...]` overrides the tier. The reply carries the key **once**, the rule it wrote, and
+`premium: true` when the app can reach opus.
 
 ### Reading usage limits honestly
 

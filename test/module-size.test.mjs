@@ -25,7 +25,7 @@ const BUDGET = 500;
 // These are not exemptions — they are debts with a number attached.
 const CEILINGS = {
   "server.js": 583,      // the HTTP layer + the path table + boot; the dispatch handler is the bulk
-  "src/admin.js": 527,   // was 1179 before the four route modules were lifted out on 2026-07-26
+  "src/admin.js": 525,   // was 1179 before the four route modules were lifted out on 2026-07-26
 };
 
 const files = ["server.js", "translate.js",

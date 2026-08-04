@@ -361,6 +361,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (sub === "consumers" && req.method === "GET") return CO.listConsumers(req, res);
   if (sub === "consumers" && req.method === "POST") return CO.addConsumer(req, res, ip);
   if (sub === "consumers/keys" && req.method === "POST") return CO.issueKey(req, res, ip);
+  // Stand up a whole app in one call — key + tiered allowlist + optional pin. See createApp().
+  if (sub === "apps" && req.method === "POST") return CO.createApp(req, res, ip);
   if (sub === "consumers/keys/revoke" && req.method === "POST") return CO.revokeKey(req, res, ip);
   // Who is using each key (read first), and the lock (set second). Never the other way round.
   if (sub === "consumers/clients" && req.method === "GET") return CO.listClients(req, res);
@@ -400,12 +402,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
 
   if (sub === "usage" && req.method === "GET") return AN.usageRollup(req, res);
 
-  // One shape for all three providers: {up, status, ms, count}. claudecode used to answer `{ok}`, so
-  // the panel — which reads `.up` — showed it permanently DOWN while it served every Claude call.
-  // Never let one member of a set speak a different dialect than its siblings. And claudecode is not
-  // probed over HTTP: api.anthropic.com needs a Max token, so an unauthenticated GET reads as DOWN.
-  // Its health IS "do we hold accounts".
-  // ── diagnostics ── (src/diagnostics.js)
+  // ── diagnostics ── (src/diagnostics.js). Why claudecode is not probed, and why all three answer
+  // the same {up,status,ms,count} shape, is documented on health() itself.
   if (sub === "health" && req.method === "GET") return DX.health(req, res);
   if (sub === "models" && req.method === "GET") return DX.catalogs(req, res);
   if (sub === "limits" && req.method === "GET") return DX.harvestedLimits(req, res);

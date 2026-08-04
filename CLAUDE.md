@@ -32,6 +32,7 @@ refs may still linger in sibling repos.
   | `otel.js` | OTLP/JSON ingest — `POST /otel/v1/logs`, the token usage of boxes that bypass this router |
   | `registry.js` | the only writer of the consumer registry to Postgres |
   | `telemetry.js` | call-log row shaping, HyperDX error shipping |
+  | `alert.js` | telling a HUMAN (Telegram), and the one thing worth it: an **app that just gained access to opus/fable**. Diffed from `persistConfig()`, which every registry write, panel save and `/api/routes` edit passes through — so no door creates a premium-capable app unseen. `shipEvent`'s `premium_usage` is the same subject *after* the spend; this is the moment the door opened. Requires `ALERT_TG_TOKEN` + `ALERT_TG_CHAT` (keyvault `notify/channels` → the `llm-router` bot); unset = console only, which is what tests and dev boxes run in. Channel health is on `/api/health` under `alerts` — a rotated token would otherwise drop every warning silently |
   | `pricing.js` | USD estimates (crazyrouter only) |
 
   `handleAdminApi` was one ~900-line function holding a flat if-chain of ~40 routes; the four route
@@ -88,7 +89,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (26 suites, ~674 checks, ~75s)
+## Tests — `npm test` (27 suites, ~702 checks, ~75s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -192,6 +193,17 @@ wrong about the gate is how a suite gets added and then quietly dropped.
   is still a 401 — ordering the policy check before authentication would answer "wrong client" to
   someone whose real problem is a dead credential. It already earned its keep: the config sanitizer
   dropped `allowUa` on load, so the lock existed in Postgres and vanished from the mirror.
+
+- `test/apps.test.mjs` — `POST /api/apps` (one-call app creation) and the premium-app watcher behind
+  it. Two silent failure classes: a TIER that quietly includes opus (still `ok:true`, still a working
+  key, 5–10x on the shared pool until someone reads the rule back — hence the *negative* assertions),
+  and a DIFF that never fires. The watcher breaks in both directions invisibly: no baseline pages
+  about every app on the next restart, a baseline that swallows the first look never alerts at all,
+  and from outside both read as "no alerts". Also pins that a pin to haiku is NOT premium-capable
+  (the pin rewrites every call, so reading the allowlist first would flag half the fleet and get the
+  warning muted), that a failed create leaves no orphan routing rule, and that the alert channel's
+  own health is on `/api/health`. Probed: dropping the premium filter from the `standard` tier turns
+  2 checks red, removing the baseline turns 1 red.
 
 **Coverage is skewed toward the safe routes. Audited 2026-07-26:** fourteen admin routes had no
 test at all, and they cluster at the dangerous end — `auth` (the switch that decides whether anyone
@@ -620,6 +632,20 @@ consumer's pin, so pinning `promopilot` covers every job while one greedy job ca
 **Issuing a key IS registering.** One call, `POST /admin/api/consumers/keys {name,kind,owner?}`,
 creates the consumer if absent and returns the only copy of the secret. Two steps — register a name,
 then separately authenticate — is precisely what let a self-asserted header masquerade as identity.
+
+**A whole APP is one call: `POST /api/apps {name, tier?, note?, models?, pin?, account?, allowUa?}`.**
+It issues the key AND writes the routing rule, because the rule is the half that got forgotten: a
+consumer with no `projectRoutes` entry is *unrestricted*, so every app registered in a hurry could
+reach opus on the shared Max pool. The allowlist is a **tier resolved against the live catalogs**,
+never a literal a caller types — `standard` (default: everything except the premium claudecode ids),
+`frontier` (plus opus/fable — and it warns, which is why it has a name), `local` (the free GPU only),
+`any` (no allowlist — also warns). `models:[…]` overrides the tier. That is what stops the
+twelve-model list prod carries twelve times, hand-copied and naming ids no upstream serves any more.
+Three properties are load-bearing: the **rule is written BEFORE the key** (issuing it refreshes the
+registry, which persists, which is where the premium watcher looks — so key-first would page about
+every new app for the instant before its rule landed); a failed create **rolls the rule back** rather
+than leaving an orphan; and an unreachable crazyrouter catalog is **reported** (`catalogWarning`),
+never silently a shorter allowlist. See `createApp()` in `src/consumers.js`, `test/apps.test.mjs`.
 
 Wire format `sk-llm-<id>-<secret>`. `id` is public (an 8-char handle, so lookup is a map hit, not a
 scan over every hash); `secret` is never stored, only its sha256. The consumer name is deliberately

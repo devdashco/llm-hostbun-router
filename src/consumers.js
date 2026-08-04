@@ -15,10 +15,13 @@
 // turning either on with an unseeded registry is an instant outage, and they are not registry CRUD.
 const url = require("node:url");
 
-const { CFG } = require("./config");
+const { CFG, persistConfig, normProvider, PROVIDERS, sanitizeRule } = require("./config");
 const { dbRows, dbUp } = require("./db");
 const { sendJson, readJson } = require("./http");
 const { sha256 } = require("./identity");
+const { isPremiumModel } = require("./pricing");
+const { upstreamCatalogs } = require("./claudecode");
+const { premiumWhy } = require("./alert");
 // registry.js pulls config/db/identity and nothing pulls admin, so there is no cycle here — the
 // four inline require()s this replaced were habit, not a guard.
 const REG = require("./registry");
@@ -185,4 +188,86 @@ async function listClients(req, res) {
 // Account-selection strategy. Its own logged endpoint (like auth/enforce), never POST config:
 // flipping it is a deliberate act — it changes WHICH subscription every app bills to.
 
-module.exports = { setAlias, listConsumers, addConsumer, issueKey, revokeKey, setClientPolicy, listClients };
+// ── one call, one app ────────────────────────────────────────────────────────
+// Standing up a new application used to be four: issue a key, write a routing rule, pin an account,
+// set a client policy — each merge-safe, each easy to forget. What actually got forgotten was the
+// RULE: a consumer with no projectRoutes entry is unrestricted, so every app registered in a hurry
+// could reach opus on the shared Max pool. The twelve-model allowlist those apps eventually got was
+// hand-copied into each of them, which is why prod carries the same list twelve times and why it
+// still names ids that no upstream serves any more.
+//
+// So the allowlist is a TIER resolved against the LIVE catalogs, not a literal a caller types:
+//
+//   standard  everything except the premium claudecode ids — the default, and what an app wants
+//   frontier  standard plus opus/fable. Alerts (see src/alert.js); that is the point of naming it
+//   local     the free GPU only, providers locked to `local`
+//   any       no allowlist at all — also alerts, because unrestricted includes opus
+//
+// `models: [...]` overrides the tier when a caller genuinely wants a literal list.
+const APP_TIERS = ["standard", "frontier", "local", "any"];
+
+// The ids each tier resolves to, from what the router advertises RIGHT NOW. crazyrouter's half is a
+// live fetch and is best-effort: `catalogWarning` says so rather than silently handing back a
+// shorter allowlist, which would 400 the new app on a model it should have been able to use.
+async function tierModels(tier) {
+  const local = [...new Set(Object.entries(CFG.localMap || {}).flat())];
+  if (tier === "local") return { models: local, warning: null };
+  const claude = CFG.claudecodeModels || [];
+  let crazy = [], warning = null;
+  try {
+    const cat = await upstreamCatalogs();
+    crazy = (cat.crazyrouter || []).map((m) => m.id).filter(Boolean);
+    if (!crazy.length) warning = "crazyrouter advertised no models — its ids are not in this allowlist";
+  } catch (e) { warning = `crazyrouter catalog unreachable (${e.message}) — its ids are not in this allowlist`; }
+  const claudeIds = tier === "frontier" ? claude : claude.filter((id) => !isPremiumModel(id));
+  return { models: [...new Set([...claudeIds, ...crazy, ...local])], warning };
+}
+
+async function createApp(req, res, ip) {
+  const p = await readJson(req, res);
+  if (!p) return;
+  const name = String(p.name || "").trim().toLowerCase();
+  if (!name) return sendJson(res, 400, { error: "name required" });
+  const tier = p.tier === undefined ? "standard" : String(p.tier);
+  if (!APP_TIERS.includes(tier)) return sendJson(res, 400, { error: `tier must be ${APP_TIERS.join(" | ")}`, tiers: APP_TIERS });
+  if (p.pin && !normProvider(p.pin.provider)) return sendJson(res, 400, { error: `unknown provider '${p.pin && p.pin.provider}'`, providers: PROVIDERS });
+  const account = p.account ? String(p.account).trim() : null;
+  if (account && !(CFG.claudecodeAccountPool || []).some((a) => a.name.toLowerCase() === account.toLowerCase()))
+    return sendJson(res, 400, { error: `no such account '${account}'`, accounts: (CFG.claudecodeAccountPool || []).map((a) => a.name) });
+
+  const explicit = Array.isArray(p.models) ? p.models.filter((m) => typeof m === "string" && m.trim()) : null;
+  const { models, warning } = explicit ? { models: explicit, warning: null } : await tierModels(tier);
+  const rule = sanitizeRule({
+    ...(p.pin ? { provider: p.pin.provider, model: p.pin.model } : {}),
+    ...(tier === "any" && !explicit ? {} : { allowModels: models }),
+    ...(tier === "local" ? { allowProviders: ["local"] } : {}),
+  });
+
+  // The rule goes in BEFORE the key. issueKey() refreshes the registry, which persists, which is
+  // where the premium watcher looks — so writing the key first would make every new app appear for
+  // one instant with no rule at all, and page about an app that is about to be restricted.
+  const prev = CFG.projectRoutes || {};
+  const had = Object.prototype.hasOwnProperty.call(prev, name);
+  if (rule) CFG.projectRoutes = { ...prev, [name]: rule };
+  try {
+    const out = await REG.issueKey({ name, kind: "project", note: p.note });
+    if (account) CFG.projectAccounts = { ...(CFG.projectAccounts || {}), [name]: account };
+    if (Array.isArray(p.allowUa) && p.allowUa.length) await REG.setClientPolicy({ name, allowUa: p.allowUa });
+    persistConfig();
+    const premium = premiumWhy(CFG, name);
+    console.warn(`[admin] app created ${name} tier=${tier} models=${models.length} account=${account || "-"} premium=${premium || "no"} ip=${ip}`);
+    return sendJson(res, 200, { ok: true, ...out, tier, rule: rule || null, account,
+      allowedModels: rule && rule.allowModels ? rule.allowModels : null,
+      premium: !!premium, ...(premium ? { premiumWhy: premium } : {}),
+      ...(warning ? { catalogWarning: warning } : {}),
+      warning: "this is the only time the key is shown — store it in keyvault as llm/" + name + "/API_KEY now" });
+  } catch (e) {
+    // A half-made app is worse than none: roll the rule back so a failed create leaves no orphan.
+    if (!had) { const r = { ...CFG.projectRoutes }; delete r[name]; CFG.projectRoutes = r; }
+    else CFG.projectRoutes = prev;
+    if (e instanceof REG.RegistryError) return sendJson(res, e.status, { error: e.message, ...e.extra });
+    return sendJson(res, 500, { error: e.message });
+  }
+}
+
+module.exports = { setAlias, listConsumers, addConsumer, issueKey, revokeKey, setClientPolicy, listClients, createApp, tierModels, APP_TIERS };
