@@ -107,6 +107,10 @@ const call = (p, init) => fetch(`http://127.0.0.1:${PORT}${p}`, { ...init, signa
   .catch((e) => `ERR ${e.name === "TimeoutError" ? "timed out (hung)" : e.message}`);
 const J = (body) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const CHAT = { model: "local", max_tokens: 4, messages: [{ role: "user", content: "hi" }] };
+// An id claimed by nothing — no localMap entry, no modelRoutes redirect — so it falls through to
+// crazyrouter, i.e. an OpenAI-compatible RELAY. That is the half of the json-keyword rule that is
+// the opposite of `wire-local`, and using CHAT's own id here would silently test the local lane twice.
+const RELAY = "wire-relay";
 
 const routes = [
   ["GET  /v1/models", () => call("/v1/models")],
@@ -248,6 +252,68 @@ for (const path of ["/api/machines", "/api/projects"]) {
   if (lastUser && /ONLY a single valid JSON value/.test(String(lastUser.content || ""))) {
     bad("...and does not also inject the prose instruction", "the instruction was appended anyway");
   } else ok("...and does not also inject the prose instruction");
+}
+
+// The OTHER half of that rule, and the two are in tension — which is why both are pinned.
+//
+// `json_object` on the OpenAI-compatible relays REQUIRES the literal token "json" in the messages
+// (OpenAI's rule, inherited by groq). Measured 2026-08-04: without it all five groq models answer
+// 400 `'messages' must contain the word 'json' in some form`, so EVERY json_object call to a free
+// lane failed — as an upstream 400 that reads like a routing bug rather than a prompt requirement.
+//
+// So the relays get the instruction appended, and `local` must NOT (asserted above): llama.cpp has
+// no keyword gate and picks its slot by prompt-prefix similarity, so the sentence would cost cache
+// reuse for nothing. Same field, opposite handling, decided by what the upstream actually needs.
+//
+// `response_format` still goes with it — that is the constraint; the sentence only gets past the
+// gate in front of it. Sending one without the other is the downgrade this file already made once.
+{
+  lastBody = null;
+  await call("/v1/chat/completions", J({ ...CHAT, model: RELAY, response_format: { type: "json_object" } }));
+  const sent = lastBody;
+  const lastUser = sent && Array.isArray(sent.messages) ? sent.messages[sent.messages.length - 1] : null;
+  if (!sent) bad("a relay lane gets the json keyword injected", "upstream received no JSON body");
+  else if (!lastUser || !/ONLY a single valid JSON value/.test(String(lastUser.content || ""))) {
+    bad("a relay lane gets the json keyword injected", `last turn: ${JSON.stringify(lastUser && lastUser.content).slice(0, 120)}`);
+  } else ok("a relay lane gets the json keyword injected when the prompt lacks it");
+  // The whole point of injecting rather than substituting: the real constraint survives.
+  if (sent && sent.response_format && sent.response_format.type === "json_object") {
+    ok("...and response_format still goes with it (injected, not substituted)");
+  } else bad("...and response_format still goes with it", `sent ${JSON.stringify(sent && sent.response_format)}`);
+  // The injected text has to actually contain the token, or it satisfies nothing. Asserting the
+  // regex above alone would pass on an instruction that never says "json" — the upstream's gate is
+  // case-insensitive on that literal word, not on our phrasing.
+  if (lastUser && /json/i.test(String(lastUser.content || ""))) {
+    ok("...and the injected text contains the literal token the gate looks for");
+  } else bad("...and the injected text contains the literal token the gate looks for");
+}
+
+// A prompt that ALREADY says json must be left alone — byte-identical. Injecting anyway would append
+// a redundant sentence to every structured-output call in the fleet, and on any lane that caches by
+// prefix that is a cache miss bought for nothing.
+{
+  lastBody = null;
+  const said = { ...CHAT, model: RELAY, messages: [{ role: "user", content: "give me json" }], response_format: { type: "json_object" } };
+  await call("/v1/chat/completions", J(said));
+  const sent = lastBody;
+  const turns = sent && Array.isArray(sent.messages) ? sent.messages : [];
+  if (turns.length === 1 && turns[0].content === "give me json") {
+    ok("a prompt that already says json is forwarded unchanged");
+  } else bad("a prompt that already says json is forwarded unchanged", JSON.stringify(turns).slice(0, 140));
+}
+
+// `json_schema` carries the schema in the field itself and needs no keyword — verified against groq,
+// which answered a schema request whose prompt never mentioned json. Injecting here would mutate
+// prompts for a requirement that does not exist.
+{
+  lastBody = null;
+  const schema = { type: "json_schema", json_schema: { name: "p", schema: { type: "object" } } };
+  await call("/v1/chat/completions", J({ ...CHAT, model: RELAY, response_format: schema }));
+  const sent = lastBody;
+  const lastUser = sent && Array.isArray(sent.messages) ? sent.messages[sent.messages.length - 1] : null;
+  if (lastUser && /ONLY a single valid JSON value/.test(String(lastUser.content || ""))) {
+    bad("json_schema is not given the keyword instruction", "instruction appended to a schema request");
+  } else ok("json_schema is not given the keyword instruction");
 }
 
 // A malformed numeric filter must be an ERROR, not "zero calls match". parseInt("abc") is NaN, pg

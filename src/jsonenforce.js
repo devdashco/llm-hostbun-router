@@ -42,6 +42,44 @@ function validateJsonContent(content) {
   }
 }
 
+// Does any message already say "json"? Content can be a string or an array of multimodal parts, and
+// a caller asking for JSON usually says so — so this is normally true and nothing is injected.
+function mentionsJson(messages) {
+  const hit = (s) => typeof s === "string" && /json/i.test(s);
+  return messages.some((m) => hit(m && m.content)
+    || (Array.isArray(m && m.content) && m.content.some((p) => hit(p && p.text))));
+}
+
+// `json_object` mode on the OpenAI-compatible providers REQUIRES the literal token "json" somewhere
+// in the messages — a rule OpenAI wrote and groq inherited. Without it the upstream refuses the
+// request outright: `'messages' must contain the word 'json' in some form` (400, measured on all
+// five groq models 2026-08-04). The router forwards `response_format` untouched, so every
+// json_object call to a free lane failed before this — and it failed as an upstream 400 that reads
+// like a routing bug rather than a two-word prompt requirement.
+//
+// The fix is to append the SAME instruction claudecode gets, which contains the word — but unlike
+// claudecode, `response_format` STAYS. That distinction is the whole point: on claudecode there is
+// no such field on the wire so prose is all there is, whereas here the upstream compiles a real
+// constraint and the instruction is only there to satisfy the gate in front of it. Downgrading one
+// to the other is the mistake this file already made once on the local lane.
+//
+// Only for `json_object`: `json_schema` carries the schema itself and needs no keyword (verified —
+// gpt-oss answered a schema request whose prompt never said "json"). And only when the messages
+// don't already say it, so a prompt that mentions JSON is left byte-identical and keeps its cache.
+//
+// `local` is EXCLUDED, and not as an oversight. llama.cpp has no keyword gate — it compiles the
+// grammar directly — so the sentence would buy nothing there, and it is not free: the server picks a
+// slot by longest-common-prefix similarity against what it already has resident (`selected slot by
+// LCP similarity` in its own log). Appending a sentence to the last user turn perturbs the prefix
+// that reuse keys on. So the rule is "the OpenAI-compatible relays need the token, our own GPU does
+// not", which is a property of the upstream rather than a list of provider names to keep updated.
+const JSON_KEYWORD_EXEMPT = new Set(["local", "claudecode"]);   // claudecode is handled above
+const needsJsonKeyword = (rf, provider) => {
+  if (JSON_KEYWORD_EXEMPT.has(provider)) return false;
+  const t = typeof rf === "string" ? rf : rf && rf.type;
+  return t === "json_object";
+};
+
 function jsonInstruction(rf) {
   let s = "Respond with ONLY a single valid JSON value — no markdown code fences, no commentary, nothing before or after the JSON.";
   const schema = rf && typeof rf === "object" && rf.type === "json_schema" && rf.json_schema && rf.json_schema.schema;
@@ -108,6 +146,10 @@ async function jsonEnforce(req, res, route) {
   // *string*. Both parse, so nothing errored; a caller expecting an object got a string.
   if (provider === "claudecode") {
     delete reqObj.response_format;
+    injectJsonInstruction(messages, rf);
+  } else if (needsJsonKeyword(rf, provider) && !mentionsJson(messages)) {
+    // See needsJsonKeyword above: satisfies the upstream's keyword gate WITHOUT touching
+    // response_format, so the real constraint still applies.
     injectJsonInstruction(messages, rf);
   }
   let headers = buildHeaders(req, { injectKey, authToken });

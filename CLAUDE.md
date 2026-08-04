@@ -451,6 +451,30 @@ Two decisions here are load-bearing:
    `/v1/chat/completions` fails — for an id that would otherwise have reached a provider that
    answers. The seed is the four verified on the real path plus `gpt-oss-20b`. Verify before adding.
 
+**Structured output on groq — measured 2026-08-04, and the two modes behave differently.**
+
+| id | `json_object` | `json_schema` |
+|---|---|---|
+| `llama-3.1-8b-instant` | ✅ | ❌ 400 `does not support` |
+| `llama-3.3-70b-versatile` | ✅ | ❌ 400 |
+| `openai/gpt-oss-120b` / `-20b` | ✅ | ✅ |
+| `qwen/qwen3.6-27b` | ❌ **never** | ❌ 400 |
+
+Two things fall out of that and both are load-bearing:
+
+1. **`json_object` requires the literal token "json" in the messages** — OpenAI's rule, inherited by
+   groq. Without it the upstream answers `400 'messages' must contain the word 'json' in some form`,
+   so **every** json_object call to a free lane failed until `jsonenforce.js` started appending the
+   instruction (case-insensitive; a prompt that already says json is left byte-identical). The
+   `response_format` field still goes with it — the sentence only gets past the gate, it is not a
+   replacement for the constraint. `local` is exempt: llama.cpp has no keyword gate and selects its
+   slot by prompt-prefix similarity (`selected slot by LCP similarity` in its log), so appending
+   there would cost cache reuse and buy nothing. Pinned in `wire.test.mjs`, both halves, probed.
+2. **`qwen/qwen3.6-27b` cannot do structured output at all.** It leaks a raw `<think>` block into
+   `content`, which fails groq's OWN validator before the router sees a body — `Failed to validate
+   JSON. Please adjust your prompt.`, which blames the prompt for a model defect. Nothing the router
+   can strip. Don't route JSON work there; it is fine for prose.
+
 **`openai/gpt-oss-*` are REASONING models and will return `content: ''` on a small `max_tokens`.**
 Measured through the router 2026-08-04: `max_tokens: 24` → `''`; `max_tokens: 400` → the right
 answer, `finish_reason: stop`, and `reasoning_tokens: 40` spent before the first content token. Same
