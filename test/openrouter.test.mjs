@@ -180,6 +180,51 @@ check("an allowlist naming openrouter survives sanitisation and refuses the rest
 check("...while permitting openrouter itself", resolveRoute("openai/gpt-oss-20b:free", "someapp").provider, "openrouter");
 CFG.projectRoutes = {};
 
+console.log("\nopenrouter — the panel's test button sends the key too:");
+// `POST /api/test` does NOT go through proxy(). It builds its own request, so its auth switch is a
+// SECOND copy of buildHeaders() — and a provider added to one is not added to the other. Shipped
+// exactly that way on 2026-08-04: routing was correct, `/v1/models` was correct, a real
+// `/v1/chat/completions` returned "ROUTER OK", and the panel's test button answered
+// `401 No cookie auth credentials found` because it sent no Authorization header at all. An
+// upstream 401 reads as "the key is wrong", which is the most expensive way to be told "we sent no
+// key". Driven through the real route handler, asserting on what the UPSTREAM received.
+{
+  const { Readable } = await import("node:stream");
+  const DX = req(join(ROOT, "src/diagnostics.js"));
+  seedCatalog();
+  CFG.openrouterKey = "sk-or-v1-test";
+  CFG.crazyrouterKey = "sk-crazy-secret";
+  const savedFetch = globalThis.fetch;
+  let seen = null;
+  globalThis.fetch = async (url, opts) => {
+    seen = { url, headers: opts.headers, body: JSON.parse(opts.body) };
+    return { ok: true, status: 200, text: async () => JSON.stringify({
+      choices: [{ message: { content: "ok" } }], usage: { total_tokens: 3 } }) };
+  };
+  // Buffer chunks, not strings: readBody() Buffer.concat()s them and a string chunk throws.
+  const mkReq = (payload) => Object.assign(
+    Readable.from([Buffer.from(JSON.stringify(payload))]),
+    { method: "POST", url: "/api/test", headers: { "content-type": "application/json" } });
+  const mkRes = () => { const r = { code: 0, body: "" };
+    return { r, writeHead(c) { r.code = c; }, end(b) { r.body = b || ""; }, setHeader() {} }; };
+
+  let res = mkRes();
+  await DX.testCall(mkReq({ model: "openai/gpt-oss-20b:free", prompt: "hi", maxTokens: 8 }), res);
+  check("the test call routes to openrouter", JSON.parse(res.r.body).provider, "openrouter");
+  check("...at openrouter's URL", seen && seen.url, "https://openrouter.ai/api/v1/chat/completions");
+  check("...carrying the openrouter key", seen && seen.headers.authorization, "Bearer sk-or-v1-test");
+  // The credential must be openrouter's OWN, not the crazyrouter bearer this switch reaches for first.
+  ok("...and never crazyrouter's", !String(seen.headers.authorization).includes("sk-crazy-secret"));
+
+  // The branch above it still wins for crazyrouter — a generic `route.authToken` fallback must not
+  // have swallowed the provider that carries its key on CFG instead of on the route.
+  seen = null; res = mkRes();
+  await DX.testCall(mkReq({ model: "gemini-2.5-flash-lite", prompt: "hi", maxTokens: 8 }), res);
+  check("crazyrouter still uses its own key", seen && seen.headers.authorization, "Bearer sk-crazy-secret");
+
+  globalThis.fetch = savedFetch;
+}
+
 console.log("\nopenrouter — a failed refresh keeps the previous catalogue:");
 // Same rule, and the same reason, as registry.js's refresh: an empty catalogue is indistinguishable
 // from "nothing is free today", and acting on it moves every free-lane call onto a per-token

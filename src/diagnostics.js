@@ -93,6 +93,15 @@ async function adminTest(model, prompt, maxTokens) {
     headers = { "content-type": "application/json", ...TR.anthropicHeaders(acct.token) };
     body = TR.openaiToAnthropic(openai);
   }
+  // Anything else that carries its credential ON THE ROUTE — openrouter today. Generic rather than a
+  // fourth `else if`, because this switch is a SECOND copy of proxy()'s auth: `adminTest` does not
+  // go through proxy(), so a provider added to buildHeaders() is not added here, and the failure is
+  // an upstream 401 that reads as "the key is wrong" rather than "we sent no key". That is exactly
+  // what openrouter did on the day it shipped — the route was right, the panel's test button sent no
+  // Authorization at all, and openrouter answered "No cookie auth credentials found".
+  // The three branches above keep theirs: crazyrouter's rides `injectKey`, claudecode needs the
+  // whole oauth header set, and local's route token is llama.cpp's api-key, NOT the oblit gate token.
+  else if (route.authToken) headers.authorization = `Bearer ${route.authToken}`;
   try {
     const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) });
     const text = await r.text(); let j = null; try { j = JSON.parse(text); } catch {}
