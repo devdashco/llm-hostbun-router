@@ -49,7 +49,7 @@ const {
   PROVIDERS, PROVIDER_SET, LEGACY_PROVIDER, normProvider, providerOf,
   IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel,
   IMAGE_TEMPLATE_MODELS, IMAGE_TEMPLATE_SLUG, sanitizeImageTemplate,
-  WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES,
+  WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES, ACCOUNT_STRATEGIES,
   sanitizeRule, sanitizeLimit,
   CANON, OBLIT, E4B, LOCAL_MAP_SEED, LOCAL_BASES_SEED,
 } = SCHEMA;
@@ -170,11 +170,19 @@ function envDefaults() {
     // defaultAccount: the one named account unpinned projects fall back to. "" = refuse instead.
     // Explicit by design — an empty default means a misconfigured caller fails loudly, not silently.
     defaultAccount: process.env.DEFAULT_ACCOUNT || "",
-    // accountStrategy: how the claudecode account is chosen for APP consumers (registry kind "app").
-    //   "pinned"              — projectAccounts only (the invariant default; devs always use this).
-    //   "soonest-weekly-reset" — apps are served by the usable account whose 7d window resets
-    //                            soonest (see autoAccount in routing.js). Opt-in, deliberate.
-    accountStrategy: process.env.ACCOUNT_STRATEGY === "soonest-weekly-reset" ? "soonest-weekly-reset" : "pinned",
+    // accountStrategy: how the claudecode account is chosen.
+    //   "pinned"               — projectAccounts only (the invariant default).
+    //   "soonest-weekly-reset" — APP consumers (registry kind "app") are served by the usable
+    //                            account whose 7d window resets soonest (autoAccount in routing.js).
+    //                            Devs keep their pins; an unregistered/unpinned caller still 403s.
+    //   "any-available"        — the same selection, applied to EVERY caller and to callers with no
+    //                            pin at all. "Don't make me pick an account": the pool is one shared
+    //                            set of our own Max subscriptions, so any usable login serves.
+    //                            It waives invariant 3's 403 on purpose — read the note above
+    //                            accountFor() in routing.js before turning it on, because it also
+    //                            means a DEV session can move between accounts (a prompt-cache miss
+    //                            on the box that runs at ~95% cache hits).
+    accountStrategy: ACCOUNT_STRATEGIES.includes(process.env.ACCOUNT_STRATEGY) ? process.env.ACCOUNT_STRATEGY : "pinned",
     // ── per-project usage limits (rolling-window quotas) ──
     // projectLimits[<project>] = { window, tokens, calls, warnPct, slowPct, slowMs, hard }
     //   window  rolling count window: 1h|6h|24h|7d|30d (default 24h)
@@ -437,7 +445,7 @@ function mergeConfig(base, saved) {
     if (Object.keys(pins).length) { c.projectAccounts = pins; c.consumerAccounts = pins; }
   }
   if (typeof saved.defaultAccount === "string") c.defaultAccount = saved.defaultAccount.trim();
-  if (["pinned", "soonest-weekly-reset"].includes(saved.accountStrategy)) c.accountStrategy = saved.accountStrategy;
+  if (ACCOUNT_STRATEGIES.includes(saved.accountStrategy)) c.accountStrategy = saved.accountStrategy;
   if (saved.projectLimits && typeof saved.projectLimits === "object" && !Array.isArray(saved.projectLimits)) {
     const pl = {};
     for (const [k, v] of Object.entries(saved.projectLimits)) {
@@ -520,7 +528,7 @@ const keyIndex = () => KEY_INDEX;
 module.exports = {
   CFG, setCFG, loadConfig, persistConfig, mergeConfig, envDefaults,
   PROVIDERS, PROVIDER_SET, normProvider, providerOf, sanitizeRule, sanitizeLimit,
-  IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES, WINDOW_MS,
+  IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES, ACCOUNT_STRATEGIES, WINDOW_MS,
   CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS,
   CONFIG_FILE, UI_ROUTES, reindexKeys, keyIndex, CANON, OBLIT, E4B,
 };

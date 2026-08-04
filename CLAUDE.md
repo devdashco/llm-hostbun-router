@@ -621,12 +621,25 @@ These are load-bearing decisions, not oversights. Each one was a bug once.
    roughly weekly (reset7 timestamps only move when a window rolls), never per request; devs keep
    their pins; attribution still lands in `key_label`; with no weekly reading anywhere it falls back
    to the pin — it never hops blind. When the strategy is on, `server.js` sweeps
-   `refreshAccountLimits()` over the pool every 30 min so every account's reset7 stays honest.
+   `refreshAccountLimits()` over the pool every 30 min so every account's reset7 stays honest (gated
+   on `accountStrategy !== "pinned"`, not on the one name, so the mode below gets fresh readings too).
+
+   **A second, wider exception (2026-08-04): `accountStrategy: "any-available"`** — the same
+   selection applied to **every** caller and to callers with **no pin at all**. This is the "stop
+   making me pick an account" mode, and it knowingly waives two things that are otherwise invariants:
+   invariant 3's 403 (a typo'd or unregistered consumer is now *served*, not refused) and a dev's
+   stable account (a hop is a full per-org prompt-cache miss, and `pmac`/`pbox` run ~95% cache hits).
+   Both are the price of the behaviour, not oversights — hence still opt-in and still not the
+   default. The pick remains STABLE (deterministic by name), so it moves when an account's state
+   changes, never per request; a disabled or dead login is still never served; and when nothing in
+   the pool is usable it returns null so the caller gets the honest 429/403 rather than a request
+   fired at a dead subscription. "Any available" is not "any".
 2. **No fallback. Anywhere.** A 429 means the pinned account is out of quota → the caller is told.
    A 5xx means upstream failed → the caller is told. Answering anyway with a different model on a
    different provider (the old wrapper→crazyrouter path) hid both the cost and the truth.
 3. **An unpinned project gets `403 no_account_for_project`**, and the error body lists the projects
-   that *are* pinned. Never bill a guess.
+   that *are* pinned. Never bill a guess. (Waived, deliberately and only, by
+   `accountStrategy: "any-available"` — see the note under invariant 1.)
 4. **`claudecode` request headers are synthesized, never inherited.** A Max setup-token is rejected
    without `anthropic-beta: oauth-2025-04-20` + `anthropic-version` + a `claude-cli` UA. Trusting the
    caller to send them is why only real Claude Code ever worked on that path.

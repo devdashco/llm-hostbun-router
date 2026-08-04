@@ -18,7 +18,7 @@ const fs = require("node:fs");
 const TR = require("../translate");
 const C = require("./config");
 const { CFG, setCFG, persistConfig, mergeConfig, envDefaults, loadConfig, reindexKeys, CANON, OBLIT, E4B,
-        PROVIDERS, normProvider, sanitizeRule, sanitizeLimit, IMAGE_MODEL_IDS, CONFIG_FILE } = C;
+        PROVIDERS, normProvider, sanitizeRule, sanitizeLimit, IMAGE_MODEL_IDS, ACCOUNT_STRATEGIES, CONFIG_FILE } = C;
 const DB = require("./db");
 const { openrouterState, applyOpenrouterPatch } = require("./openrouter");
 const { shipHealth } = require("./telemetry");   // a dead ingest drops every alert; count is the sign
@@ -109,10 +109,10 @@ function adminState() {
     projectAccounts: CFG.projectAccounts,
     consumerAccounts: CFG.consumerAccounts,   // legacy alias, same map
     defaultAccount: CFG.defaultAccount,
-    // "pinned" (default) or "soonest-weekly-reset". autoAccount = what the picker would choose now
-    // (null when off, or with no usable weekly reading — then pins decide, as before).
+    // "pinned" | "soonest-weekly-reset" (apps) | "any-available" (all, incl. unpinned). autoAccount =
+    // the picker's current choice (null when off / no weekly reading → pins decide).
     accountStrategy: CFG.accountStrategy || "pinned",
-    autoAccount: CFG.accountStrategy === "soonest-weekly-reset" ? ((autoAccount() || {}).name || null) : null,
+    autoAccount: CFG.accountStrategy === "pinned" ? null : ((autoAccount() || {}).name || null),
     projectLimits: CFG.projectLimits,
     projectLimitDefault: CFG.projectLimitDefault,
     cloudPolicy: CFG.cloudPolicy,
@@ -374,11 +374,11 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
   if (sub === "claudecode/strategy" && req.method === "POST") {
     const p = await readJson(req, res);
     if (!p) return;
-    if (!["pinned", "soonest-weekly-reset"].includes(p.mode))
-      return sendJson(res, 400, { error: "mode must be pinned | soonest-weekly-reset" });
+    if (!ACCOUNT_STRATEGIES.includes(p.mode))
+      return sendJson(res, 400, { error: `mode must be ${ACCOUNT_STRATEGIES.join(" | ")}` });
     CFG.accountStrategy = p.mode;
     const persisted = persistConfig();
-    const auto = p.mode === "soonest-weekly-reset" ? ((autoAccount() || {}).name || null) : null;
+    const auto = p.mode === "pinned" ? null : ((autoAccount() || {}).name || null);
     console.warn(`[admin] accountStrategy=${p.mode} auto=${auto || "-"} ip=${ip} persisted=${persisted}`);
     return sendJson(res, 200, { ok: true, persisted, mode: p.mode, autoAccount: auto });
   }

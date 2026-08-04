@@ -407,7 +407,21 @@ check("a config write is visible to the router", api("state").projectRoutes.z.pr
 // requiring src/ directly is the only hermetic way to feed it data.
 console.log("account strategy — the opt-in weekly-reset picker:");
 check("default strategy is pinned", api("state").accountStrategy, "pinned");
-check("a bad mode is refused", api("claudecode/strategy", { mode: "round-robin" }).error, "mode must be pinned | soonest-weekly-reset");
+// Asserted against the SCHEMA's list, not a frozen sentence: the error names the modes, so a mode
+// added to ACCOUNT_STRATEGIES and forgotten in the validator (or the reverse) is what should turn
+// this red — not the act of adding one. A literal here fails on every legitimate addition, which
+// trains whoever hits it to edit the expectation without reading what it was guarding.
+{
+  const { createRequire } = await import("node:module");
+  const { ACCOUNT_STRATEGIES } = createRequire(import.meta.url)(join(ROOT, "src/config.js"));
+  check("a bad mode is refused, and the refusal names the real vocabulary",
+        api("claudecode/strategy", { mode: "round-robin" }).error,
+        `mode must be ${ACCOUNT_STRATEGIES.join(" | ")}`);
+  check("...and every mode the schema lists is actually accepted",
+        ACCOUNT_STRATEGIES.map((m) => api("claudecode/strategy", { mode: m }).ok),
+        ACCOUNT_STRATEGIES.map(() => true));
+  api("claudecode/strategy", { mode: "pinned" });   // restore: later blocks assert on the default
+}
 
 // Malformed JSON is ONE answer on every control-plane route. Nineteen hand-rolled copies of the
 // read-and-parse preamble had drifted into four different behaviours, and two of them swallowed the
@@ -525,6 +539,40 @@ const rawPost = (path, raw) => {
   ACCT_DEAD.add("late");
   check("a dev keeps its (even dead) pin — never auto-hopped", accountFor("somedev").name, "late");
   ACCT_DEAD.clear();
+
+  // ── "any-available": stop having to pick an account at all ────────────────
+  // The difference from soonest-weekly-reset is WHO it applies to, and that is the whole point of
+  // it being a separate mode. Under soonest-weekly-reset the two exclusions below are deliberate
+  // (devs keep a stable account for the prompt cache; an unpinned caller 403s rather than being
+  // billed to a guess). Under any-available they are exactly what the operator asked to waive, so
+  // both are asserted here — if either silently kept its old behaviour the mode would look enabled
+  // and change nothing for the callers it was turned on for.
+  CFG.accountStrategy = "any-available";
+  for (const n of ["early", "late", "spent"]) ACCT_CACHE.delete("org-" + n);
+  // A consumer with NO pin at all: under "pinned"/"soonest-weekly-reset" this is null → the caller
+  // gets 403 no_account_for_project. Here it must be served from the pool.
+  check("an unpinned consumer is served instead of 403'ing", !!accountFor("nopinapp"), true);
+  check("...deterministically, by name — not a per-request rotation",
+        [accountFor("nopinapp").name, accountFor("nopinapp").name], ["early", "early"]);
+  // An UNREGISTERED caller too: `consumers` has no entry, so the kind check that gates
+  // soonest-weekly-reset cannot pass. That check is what any-available bypasses.
+  check("an unregistered caller is served too", !!accountFor("neverseen"), true);
+  // And a DEV now participates, where soonest-weekly-reset holds it on its pin.
+  ACCT_DEAD.add("late");
+  check("a dev with a dead pin now hops, where soonest-weekly-reset would not",
+        accountFor("somedev").name, "early");
+  ACCT_DEAD.clear();
+  // Not a licence to serve a disabled login: "available" still means available.
+  CFG.claudecodeAccountPool = CFG.claudecodeAccountPool.map((a) => ({ ...a, disabled: a.name !== "late" }));
+  check("only USABLE accounts are candidates — a disabled one is still never served",
+        accountFor("nopinapp").name, "late");
+  CFG.claudecodeAccountPool = CFG.claudecodeAccountPool.map(({ disabled, ...a }) => a);
+  // With the whole pool unusable it returns null, so the caller gets the honest 403 rather than a
+  // request fired at a dead subscription. "Any available" is not "any".
+  for (const n of ["early", "late", "spent"]) ACCT_DEAD.add(n);
+  check("nothing usable anywhere → null, so the caller still gets the truth", accountFor("nopinapp"), null);
+  ACCT_DEAD.clear();
+  CFG.accountStrategy = "soonest-weekly-reset";
 
   // ── post-429 cooldown: a real 429 benches the auto-pick so the app's NEXT request hops off it ──
   // A 429 carries no ratelimit headers, so the harvest can't mark the account spent; the cooldown is

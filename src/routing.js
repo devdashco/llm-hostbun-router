@@ -271,7 +271,8 @@ function acctHealth(org) {
 //     the selection hops roughly WEEKLY, not per request (a per-request rotation is the ~12x
 //     prompt-cache blowout the invariant forbids);
 //   • attribution survives: every call still logs `claudecode:<account>` in key_label;
-//   • devs (kind "dev") and unregistered consumers are untouched — a human's session never hops;
+//   • devs (kind "dev") and unregistered consumers are untouched — a human's session never hops.
+//     "any-available" is the mode that lifts exactly that exclusion; see accountFor();
 //   • it is data-driven only: an account with no weekly reading is NOT a candidate, and if no
 //     account has one, selection returns null and the pin decides. Never hop blind.
 // "Usable" = login alive (not ACCT_DEAD), weekly not spent, and 5h window not currently rejected.
@@ -397,7 +398,8 @@ function autoAccount() {
 //   1. projectAccounts[project]  — the pin, edited in the panel
 //   2. CFG.defaultAccount        — one named fallback, also explicit
 // No request header can override it. Deterministic: same project ⇒ same account, every time.
-// Exception: accountStrategy "soonest-weekly-reset" auto-selects for APP consumers (see autoAccount).
+// Exceptions: accountStrategy "soonest-weekly-reset" auto-selects for APP consumers, "any-available"
+// for everyone including the unpinned (see autoAccount).
 // (`consumerAccounts` is the pre-rename name of `projectAccounts`; both are read during migration.)
 // Persistently mark an account disabled after a 403 permission_error (a dead/cancelled login —
 // "OAuth authentication is currently not allowed for this organization"). Called from BOTH the live
@@ -436,9 +438,15 @@ function accountFor(project) {
   // subscription. This is the "so we don't try to use it" guarantee for a disabled login.
   if (pinned && pinned.disabled) pinned = null;
 
-  if (CFG.accountStrategy === "soonest-weekly-reset") {
+  // "any-available" = the same selection, applied to EVERY caller and to callers with no pin at
+  // all. It knowingly waives two things: invariant 3's 403 (a typo'd consumer is served, not
+  // refused) and a dev's stable account (a hop is a full prompt-cache miss on boxes running ~95%
+  // hits). Both are the point, not oversights — hence opt-in. Attribution survives via key_label,
+  // and the pick is still stable by name, so it moves on state changes and never per request.
+  const strategy = CFG.accountStrategy;
+  if (strategy === "soonest-weekly-reset" || strategy === "any-available") {
     const reg = (CFG.consumers || {})[consumer];
-    if (reg && reg.kind === "app") {
+    if (strategy === "any-available" || (reg && reg.kind === "app")) {
       const now = Date.now();
       // Tier A — the soonest-to-reset USABLE account (burn the about-to-forfeit weekly window first).
       const auto = autoAccount();

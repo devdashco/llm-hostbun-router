@@ -570,8 +570,10 @@ server.listen(PORT, () => {
   // without a deploy. Skips DISABLED accounts: this POST spends against the window it measures, and
   // `disabled` is also how an operator PARKS a healthy login they want left alone.
   const sweepLimits = async () => { for (const a of (CFG.claudecodeAccountPool || []).filter((x) => !x.disabled)) await refreshAccountLimits(a); };
-  setTimeout(() => { if (CFG.accountStrategy === "soonest-weekly-reset") sweepLimits().catch(() => {}); }, 5000).unref();
-  setInterval(() => { if (CFG.accountStrategy === "soonest-weekly-reset") sweepLimits().catch(() => {}); }, 30 * 60 * 1000).unref();
+  // `!== "pinned"`, not one named strategy: `any-available` orders on the same reset7 readings, so
+  // gating on the older name would leave it picking from frozen data.
+  setTimeout(() => { if (CFG.accountStrategy !== "pinned") sweepLimits().catch(() => {}); }, 5000).unref();
+  setInterval(() => { if (CFG.accountStrategy !== "pinned") sweepLimits().catch(() => {}); }, 30 * 60 * 1000).unref();
   // Waste watcher: uncached burn, tool-schema bloat, hour-over-week spikes. Reads the call log only,
   // so a failure costs a warning, not an inference. 15-min tick over a rolling hour; each signal has
   // its own cooldown inside scanWaste().

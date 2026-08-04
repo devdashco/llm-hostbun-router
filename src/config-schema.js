@@ -154,6 +154,11 @@ const LIMIT_HARD = ["block", "slow", "warn"];
 // by the API and then silently dropped the next time /data/config.json was read. The gate that
 // decides whether anyone needs a key is not a good place for two lists to disagree.
 const AUTH_MODES = ["off", "optional", "required"];
+// How the claudecode account is chosen. In ONE place for the same reason AUTH_MODES is: the value
+// was written out three times — the env read, the config loader, and POST /api/claudecode/strategy's
+// validator — so a mode the endpoint accepted could be silently dropped on the next config load,
+// and the operator would see the panel flip and the behaviour not change. See accountFor().
+const ACCOUNT_STRATEGIES = ["pinned", "soonest-weekly-reset", "any-available"];
 // Sanitize a usage-limit object from untrusted config. Returns a normalized limit or null.
 function sanitizeLimit(v) {
   if (!v || typeof v !== "object") return null;
@@ -216,7 +221,7 @@ module.exports = {
   PROVIDERS, PROVIDER_SET, LEGACY_PROVIDER, normProvider, providerOf,
   IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel,
   IMAGE_TEMPLATE_MODELS, IMAGE_TEMPLATE_SLUG, sanitizeImageTemplate,
-  WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES,
+  WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES, ACCOUNT_STRATEGIES,
   sanitizeRule, sanitizeLimit,
   CANON, LOCAL_ALIASES, WW_CANON, WW_ALIASES, WW_BASE, OBLIT, E4B,
   LOCAL_MAP_SEED, LOCAL_BASES_SEED,

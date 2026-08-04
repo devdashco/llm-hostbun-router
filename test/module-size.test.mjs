@@ -24,15 +24,15 @@ const BUDGET = 500;
 // Files already over budget when this test was written (2026-07-30). Each may only get smaller.
 // These are not exemptions — they are debts with a number attached.
 const CEILINGS = {
-  "server.js": 588,      // the HTTP layer + the path table + boot; the dispatch handler is the bulk
+  "server.js": 590,      // the HTTP layer + the path table + boot; the dispatch handler is the bulk
   "src/admin.js": 529,   // was 1179 before the four route modules were lifted out on 2026-07-26
-  "src/config.js": 526,  // env defaults + the /data/config.json merge; two literals of every key
-  "src/routing.js": 511, // the routing chain AND all of account selection — see the note below
+  "src/config.js": 534,  // env defaults + the /data/config.json merge; two literals of every key
+  "src/routing.js": 519, // the routing chain AND all of account selection — see the note below
 };
 
-// RAISED 2026-08-04, +5 / +4 / (new) / (new), for the `openrouter` provider. Recorded here rather
-// than absorbed, because this ratchet only works if every increase is a sentence someone had to
-// write.
+// RAISED 2026-08-04 twice: first for the `openrouter` provider, then again (+2 server.js,
+// +8 config.js, +8 routing.js) for the `any-available` account strategy. Recorded here rather than
+// absorbed, because this ratchet only works if every increase is a sentence someone had to write.
 //
 // What those lines actually bought: a fourth provider costs an import, a state field, a config patch
 // and a boot hook in each of server.js and admin.js, and there is no way to add one without touching
