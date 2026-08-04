@@ -90,7 +90,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (30 suites, ~817 checks, ~80s)
+## Tests — `npm test` (31 suites, ~840 checks, ~80s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -238,6 +238,20 @@ wrong about the gate is how a suite gets added and then quietly dropped.
   check read green for the wrong reason when first written (the fixture replaced the freeaiapikey
   seed, so the second half asserted a provider declining an id it was never given) — the fixture now
   lists both ids, which is the assertion-that-cannot-fail trap this repo keeps producing.
+
+- `test/quota.test.mjs` — the free-tier headroom harvest (`src/quota.js`), which reads the
+  OpenAI-convention `x-ratelimit-*` off every reply and keeps it in memory. Pins the distinction this
+  repo keeps having to relearn: **no reading is not 0% used** — an absent provider and a provider with
+  headroom must not render alike (same rule as claudecode's `limits: null`). Also that a provider
+  which sends no such headers records NOTHING rather than an empty reading (otherwise claudecode and
+  crazyrouter would report "0 of 0 used"); that a later reply OVERWRITES the earlier one, since
+  tracking toward the ceiling is the entire point and a write-once store would pass every other
+  assertion; that `tightest()` leads with the model nearest its cap, because groq's ceilings are per
+  model and uneven (14,400 req/day on one id, 1,000 on the rest) so an average would report healthy
+  while one lane was dry; and that the key cap bounds GROWTH but never freezes an EXISTING key — the
+  busiest model is the one that hits the ceiling and the one a naive cap would silence first. `durMs`
+  is pinned separately: groq returns a DURATION (`2m59.56s`), not a timestamp, and misparsing it
+  renders a reset time silently hours off.
 
 - `test/apps.test.mjs` — `POST /api/apps` (one-call app creation) and the premium-app watcher behind
   it. Two silent failure classes: a TIER that quietly includes opus (still `ok:true`, still a working

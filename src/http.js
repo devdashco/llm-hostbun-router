@@ -12,6 +12,7 @@ const { Readable } = require("node:stream");
 const TR = require("../translate");
 const { CFG } = require("./config");
 const { clip, recordCall, recordLimits, CONTENT_CAP, ACCT_DEAD } = require("./db");
+const { recordQuota } = require("./quota");
 const { accountFor, isGated, resolveRoute, note429, note2xx, autoDisableAccount, noteAcctCooldown, clearAcctCooldown } = require("./routing");
 const { retryOnAnotherAccount } = require("./accountfailover");
 
@@ -389,6 +390,9 @@ async function proxy(req, res, base, opts = {}) {
   // Free rate-limit harvest: snapshot this account's live 5h/7d headroom off the response headers
   // (no probe, zero tokens). Fires for any Anthropic-native reply; a no-op for other providers.
   recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel, opts.account);
+  // The same trick for the OpenAI-convention `x-ratelimit-*` the free lanes return. In memory, not
+  // Postgres — see the header of src/quota.js. No-op for an upstream that sends none.
+  recordQuota(provider, base_rec.sentModel || base_rec.reqModel, up.headers);
   // App back-pressure: a real 429 arms a per-project throttle (devs are exempt inside note429); any
   // success clears it. server.js reads throttleDelay() before dispatch to pace a project that is
   // hammering a dry account. The 429 itself still reaches the caller — this only slows what's next.

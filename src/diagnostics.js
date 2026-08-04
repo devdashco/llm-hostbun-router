@@ -10,6 +10,7 @@ const { CFG } = require("./config");
 const { dbRows, ACCT_DEAD } = require("./db");
 const { sendJson, readBody, readJson, mask, upstreamReason } = require("./http");
 const { resolveRoute, isGated, accountFor, freeaiapikeyModelEntries, groqModelEntries } = require("./routing");
+const { quotaSnapshot, tightest } = require("./quota");
 const { recordCall } = require("./db");
 const TR = require("../translate");
 const { upstreamCatalogs, localModelEntries } = require("./claudecode");
@@ -162,12 +163,20 @@ async function health(req, res) {
   // is polled. On a free tier where the scarce resource is requests-per-day, a health check that
   // spends them is a health check that causes the outage it reports.
   const gqModels = (CFG.groqModels || []).length;
+  // `quota` is the free-tier headroom harvested off real replies (src/quota.js) — per model, because
+  // groq's ceilings are per model and wildly uneven (14,400 req/day on one id, 1,000 on the rest).
+  // ABSENT means no call has been made since boot, which is NOT the same as "plenty left"; the
+  // panel has to render those differently, same rule as claudecode's `limits: null`.
+  const gqTightest = tightest("groq");
   const groq = {
     up: !!CFG.groqKey && gqModels > 0,
     status: null, probed: false, ms: 0,
     count: gqModels, keySet: !!CFG.groqKey,
+    quota: quotaSnapshot().groq || null,
+    tightest: gqTightest ? { model: gqTightest.model, usedPct: gqTightest.usedPct } : null,
     note: !CFG.groqKey ? "no groqKey — the provider claims no model ids"
       : gqModels === 0 ? "groqModels is empty — the provider claims no model ids"
+      : !gqTightest ? "no quota reading yet — nothing has been routed here since boot"
       : undefined,
   };
   const pool = CFG.claudecodeAccountPool || [];
@@ -189,7 +198,11 @@ async function health(req, res) {
   // The human-facing alert channel (src/alert.js). A rotated bot token drops every premium-app
   // warning silently — "nobody has created an opus app" and "nobody has been told" look identical
   // from here otherwise, which is the same trap dbWriteHealth and shipHealth exist for.
-  return sendJson(res, 200, { local, crazyrouter, claudecode, openrouter, freeaiapikey, groq, gates: gateSnapshot(), alerts: alertHealth() });
+  // `quotas` carries EVERY provider that speaks x-ratelimit-*, not just groq: the free lanes are
+  // meant to be stacked, and a per-provider key on each provider's own object would make "which lane
+  // has headroom right now" a question you answer by reading six places.
+  return sendJson(res, 200, { local, crazyrouter, claudecode, openrouter, freeaiapikey, groq,
+    quotas: quotaSnapshot(), gates: gateSnapshot(), alerts: alertHealth() });
 }
 
 async function catalogs(req, res) {
