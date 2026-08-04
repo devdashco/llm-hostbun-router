@@ -458,7 +458,7 @@ function loadConfig() {
     setCFG(base);
     if (e.code !== "ENOENT") console.error(`[cfg] load failed (${e.message}); using env defaults`);
   }
-  reindexKeys();   // loadConfig replaces CFG's contents, so a stale key index must not survive it
+  reindexKeys(); require("./alert").watchPremiumApps(CFG);   // a stale key index must not survive a reload; the watcher call is the boot BASELINE (src/alert.js) — what is already deployed is not news
 }
 
 function persistConfig() {
@@ -467,7 +467,7 @@ function persistConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(CFG, null, 2));
     // Every write is a potential key change (issue, revoke, delete a consumer). Rebuilding the index
     // here means no caller has to remember to, and a stale index can never authenticate a dead key.
-    reindexKeys();
+    reindexKeys(); require("./alert").watchPremiumApps(CFG);   // ...and a potential POLICY change: every registry write, panel save and /api/routes edit passes here, so this is the one place that sees an app become able to spend opus. Diff + alert, never a refusal — src/alert.js
     return true;
   } catch (e) {
     console.error(`[cfg] persist failed: ${e.message}`);

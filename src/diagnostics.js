@@ -14,6 +14,7 @@ const { recordCall } = require("./db");
 const TR = require("../translate");
 const { upstreamCatalogs, localModelEntries } = require("./claudecode");
 const { snapshot: gateSnapshot } = require("./gate");
+const { alertHealth } = require("./alert");
 
 async function probe(base, authToken) {
   const t0 = Date.now();
@@ -135,7 +136,10 @@ async function health(req, res) {
   // Admission control, so "the local model is slow" and "twelve callers are queued behind one GPU"
   // are distinguishable without reading the logs. Reported for every gated provider even at zero
   // traffic — absent and unlimited must not look alike.
-  return sendJson(res, 200, { local, crazyrouter, claudecode, gates: gateSnapshot() });
+  // The human-facing alert channel (src/alert.js). A rotated bot token drops every premium-app
+  // warning silently — "nobody has created an opus app" and "nobody has been told" look identical
+  // from here otherwise, which is the same trap dbWriteHealth and shipHealth exist for.
+  return sendJson(res, 200, { local, crazyrouter, claudecode, gates: gateSnapshot(), alerts: alertHealth() });
 }
 
 async function catalogs(req, res) {
