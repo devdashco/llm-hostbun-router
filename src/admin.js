@@ -94,7 +94,7 @@ function throttled(ip) {
 function adminState() {
   return {
     providers: PROVIDERS,
-    bases: CFG.bases,
+    bases: CFG.bases, localBases: CFG.localBases,   // localBases decides WHICH box serves an id — invisible here until 2026-08-04
     localMap: CFG.localMap,
     gatedModels: CFG.gatedModels,
     claudePrefix: CFG.claudePrefix,
@@ -213,7 +213,7 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
         for (const k of [key, ...legacy])
           if (typeof patch.bases[k] === "string") { next.bases[key] = patch.bases[k]; break; }
     }
-    if (patch.localMap) next.localMap = patch.localMap;
+    for (const k of ["localMap", "localBases"]) if (patch[k]) next[k] = patch[k];   // which id, and which box serves it
     if (patch.gatedModels) next.gatedModels = patch.gatedModels;
     if (typeof (patch.claudePrefix ?? patch.wrappyPrefix) === "string") next.claudePrefix = patch.claudePrefix ?? patch.wrappyPrefix;
     if (Array.isArray(patch.claudecodeModels)) next.claudecodeModels = patch.claudecodeModels;

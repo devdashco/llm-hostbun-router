@@ -184,7 +184,15 @@ const LOCAL_ALIASES = ["local", "gemma", "gemma-4-26b", "qwen", "qwen3.5-9b"];
 // distinction, and gate/pricing/analytics all key on `provider`.
 const WW_CANON = process.env.LOCAL_MODEL_WW || "qwen3.5-2b";
 const WW_ALIASES = ["qwen3.5-2b", "qwen-small"];
-const WW_BASE = (process.env.LOCAL_BASE_WW || "http://10.0.1.250:8001").replace(/\/$/, "");
+// ww is reached at its OWN hostname, exactly as the image model already is (`bases.images` →
+// imagegen-ww.hostbun.cc). Both are Coolify resources on the ww box; the hostname is the managed,
+// restartable, monitored way in. The previous default `http://10.0.1.250:8001` was none of those
+// and was not even ww: on hostbun that address is a SECONDARY IP of the docker bridge
+// (`ip route get 10.0.1.250` → local, dev lo) and the listener on :8001 is **sshd** — a hand-made
+// `ssh -R` reverse tunnel from ww, owned by nobody, restarted by nothing, gone on the next reboot.
+// It answers 200 until the day the session drops, and then the free lane's small model refuses
+// connections from the router's own box for a reason nothing in Coolify can show you.
+const WW_BASE = (process.env.LOCAL_BASE_WW || "https://qwen-ww.hostbun.cc").replace(/\/$/, "");
 const OBLIT = process.env.LOCAL_MODEL_2 || "qwen3.6-27b-obliterated";
 const E4B = process.env.LOCAL_MODEL_3 || "gemma-4-e4b-it-obliterated";
 // alias -> the model id its box actually answers to.
