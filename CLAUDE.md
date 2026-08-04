@@ -424,7 +424,7 @@ Six **routing** providers — the whole of `PROVIDERS`, i.e. everything a model 
 
 | provider | upstream | speaks | cost |
 |---|---|---|---|
-| `local` | llama.cpp on the pbox GPU (`bases.local`, currently `pbox.llm.hostbun.cc`). **Serves `Qwen3.5-9B-UD-Q4_K_XL.gguf`, build b10223, `n_ctx` 65536 / 6 slots, vision — swapped 2026-08-02, was gemma-4-26B-QAT.** All five ids `local`/`gemma`/`gemma-4-26b`/`qwen`/`qwen3.5-9b` resolve here; the **`gemma` pair are now the legacy aliases** — the direction reversed on the swap, which is exactly why you ask `/props` and never infer from the id | OpenAI | free |
+| `local` | llama.cpp on the pbox GPU (`bases.local`, currently `pbox.llm.hostbun.cc`). **Serves `Qwen3.5-9B-UD-Q4_K_XL.gguf`, build b10223, `n_ctx` 65536 / **4 slots** (`-np 4`, read off the container's own argv 2026-08-04 — this said 6, and `gate.js` DEFAULTS has always said 4; the CODE was right), vision — swapped 2026-08-02, was gemma-4-26B-QAT.** All five ids `local`/`gemma`/`gemma-4-26b`/`qwen`/`qwen3.5-9b` resolve here; the **`gemma` pair are now the legacy aliases** — the direction reversed on the swap, which is exactly why you ask `/props` and never infer from the id | OpenAI | free |
 | `claudecode` | the **claudecode-account-pool** (our Claude Max logins) → `api.anthropic.com` | Anthropic | flat (subscription) |
 | `crazyrouter` | `crazyrouter.com` cloud relay (gemini etc), key injected | OpenAI | **per token** |
 | `openrouter` | `openrouter.ai` (`bases.openrouter` = `https://openrouter.ai/api` — the `/api` is load-bearing, every caller appends `/v1/…`). Added 2026-08-04. **FREE-ONLY by default** and OFF entirely without `openrouterKey` | OpenAI | free (see below) |
@@ -644,11 +644,16 @@ answers in the OpenAI images envelope. **Three things here are load-bearing, not
 ### Admission control — the queue in front of the GPUs (`src/gate.js`, 2026-08-01)
 
 A burst is serialised **per provider**, and only where the upstream is one piece of hardware.
-Defaults: `images` **1** (one `diffusers` pipeline), `local` **6** (llama.cpp `n_parallel`, verified
-live off `/slots`; was 2 until the 2026-08-02 checkpoint swap freed the VRAM for three times the
-slots). **This number must track the server, and getting it wrong is silent both ways** — a gate of
-2 against a 6-slot llama.cpp idles two thirds of the GPU while callers queue, and a gate of 6
-against a 2-slot one rebuilds the header-timeout bug the gate exists to prevent. Neither errors. `claudecode` and `crazyrouter` are **0 — ungated on purpose**: they run their own
+Defaults: `images` **1** (one `diffusers` pipeline), `local` **4** — which matches the server:
+`-np 4 -c 65536`, read off the container's own `Config.Cmd` on 2026-08-04. **This paragraph
+previously claimed 6 "verified live off `/slots`" and that was wrong in a way worth recording**:
+`/slots` requires the server's `--api-key` and answers `401 {"error":{...}}` without it, and an
+error object counted as one element is also how the same check can report "1 slot". Neither number
+was ever real. Read `docker inspect --format '{{join .Config.Cmd " "}}'`, or pass the key — an
+unauthenticated `/slots` cannot tell you anything about parallelism.
+**The number must track the server, and getting it wrong is silent both ways** — a gate below
+`-np` idles part of the GPU while callers queue, and a gate above it rebuilds the header-timeout bug
+the gate exists to prevent. Neither errors. `claudecode` and `crazyrouter` are **0 — ungated on purpose**: they run their own
 concurrency and their 429 is a signal to surface, not absorb (invariant 2). Queueing them would add
 latency to calls that are legitimately parallel and turn "you are out of quota" into a silent wait.
 
