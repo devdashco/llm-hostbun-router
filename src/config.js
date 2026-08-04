@@ -64,6 +64,10 @@ function envDefaults() {
       // (the old hosted backend is gone) — default empty so a bare deploy points at nothing.
       local: (process.env.LOCAL_BASE || "").replace(/\/$/, ""),
       crazyrouter: (process.env.CRAZYROUTER_BASE || process.env.CRAZY_BASE || "https://crazyrouter.com").replace(/\/$/, ""),
+      // openrouter.ai. The `/api` suffix is load-bearing: their OpenAI surface is at /api/v1/*, and
+      // every caller of this base (proxy, the health probe, the catalog refresh) appends "/v1/…".
+      // Drop it and each one asks for /v1/chat/completions, which is their marketing site.
+      openrouter: (process.env.OPENROUTER_BASE || "https://openrouter.ai/api").replace(/\/$/, ""),
       // claudecode → the real Anthropic API, called with a pinned account's Max token. The old
       // old subprocess-wrapper base is GONE.
       claudecode: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
@@ -76,6 +80,20 @@ function envDefaults() {
     // let "pbox" survive the move to ww for months.
     imageOwner: process.env.IMAGE_OWNER || "home-ww",
     crazyrouterKey: process.env.CRAZYROUTER_KEY || "",
+    // openrouter.ai bearer (`sk-or-v1-…`). EMPTY DISABLES THE PROVIDER ENTIRELY — openrouterTarget()
+    // claims no id without it, so an unconfigured router routes exactly as it did before this
+    // provider existed. That is the point: a half-configured openrouter must not swallow ids that
+    // used to reach crazyrouter and answer 401 for them.
+    openrouterKey: process.env.OPENROUTER_KEY || "",
+    // Only claim ids the catalogue marks FREE (`:free`, or zero prompt AND completion price).
+    // On by default because openrouter serves ~330 models on one base URL and ~17 of them are free:
+    // with this off, any id in their catalogue routes there and bills the card. An id named
+    // explicitly in `openrouterModels` bypasses this — that is an operator decision, not a guess.
+    openrouterFreeOnly: process.env.OPENROUTER_FREE_ONLY !== "0",
+    // Ids that route to openrouter regardless of what the live catalogue says (and regardless of
+    // openrouterFreeOnly). Config, never code (invariant 6). Normally EMPTY: the catalogue refresh
+    // in src/openrouter.js is what makes a new free model routable without a config edit.
+    openrouterModels: (process.env.OPENROUTER_MODELS || "").split(",").map((x) => x.trim()).filter(Boolean),
     // A SEPARATE crazyrouter key for image templates, because access to the image models is granted
     // per token: the router's own key is valid and still answers "this token does not have access to
     // model gemini-2.5-flash-image". Empty = fall back to crazyrouterKey. Kept apart rather than
@@ -251,6 +269,7 @@ function mergeConfig(base, saved) {
     const an = pick("claudecode", "anthropic"); if (an) c.bases.claudecode = an;
     // `images` too, or the admin POST that sets it reverts on the next restart: saved and ignored.
     const im = pick("images"); if (im) c.bases.images = im;
+    const or = pick("openrouter"); if (or) c.bases.openrouter = or;
   }
   if (saved.localMap && typeof saved.localMap === "object" && !Array.isArray(saved.localMap)) {
     const m = {};
@@ -289,6 +308,13 @@ function mergeConfig(base, saved) {
   // Secrets / scalars, with legacy aliases.
   if (typeof saved.crazyrouterKey === "string") c.crazyrouterKey = saved.crazyrouterKey;
   else if (typeof saved.crazyKey === "string") c.crazyrouterKey = saved.crazyKey;
+  if (typeof saved.openrouterKey === "string") c.openrouterKey = saved.openrouterKey;
+  if (typeof saved.openrouterFreeOnly === "boolean") c.openrouterFreeOnly = saved.openrouterFreeOnly;
+  // An explicit empty list IS meaningful here (unlike imageTemplateModels): the catalogue refresh
+  // is what makes free ids routable, so emptying this only drops the manual additions.
+  if (Array.isArray(saved.openrouterModels))
+    c.openrouterModels = [...new Set(saved.openrouterModels
+      .filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().toLowerCase()))];
   // The account pool. `claudecodeAccountPool` is the name; `anthropicPool` is what the live
   // /data/config.json still calls it. Read either, keep both in sync so a rollback still boots.
   {

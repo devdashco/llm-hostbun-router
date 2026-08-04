@@ -16,7 +16,10 @@ import {
 // The Rules page's own controls: the per-project pin dropdown, the allowlist popover and its
 // toggle chips, and one usage-limit row. Split out of rules.tsx (934 lines) on 2026-07-26 —
 // four components and their constants, none of which the page body needs to be read alongside.
-export const PROVS = ["claudecode", "crazyrouter", "local"];
+// Kept as a SET-equal copy of the server's PROVIDERS (src/config-schema.js); test/panel-nav.test.mjs
+// fails the build when the two drift. The panel is a separate static export and cannot import the
+// server module, and a provider the panel never offers is a provider no operator can pin to.
+export const PROVS = ["claudecode", "crazyrouter", "local", "openrouter"];
 
 // The pin cell — ONE provider-tinted select (a 3px left accent carries the provider identity the old
 // standalone pill used to). `auto` and `block` get their own tint. This is the fix that started the
@@ -25,6 +28,7 @@ export const TINT: Record<string, string> = {
   claudecode: "border-l-[3px] border-l-p-claudecode",
   crazyrouter: "border-l-[3px] border-l-p-crazyrouter",
   local: "border-l-[3px] border-l-p-local",
+  openrouter: "border-l-[3px] border-l-p-openrouter",
   blocked: "border-l-[3px] border-l-danger text-danger",
   auto: "border-l-[3px] border-l-border text-muted-foreground",
 };

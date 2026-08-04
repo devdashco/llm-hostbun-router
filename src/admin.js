@@ -20,6 +20,7 @@ const C = require("./config");
 const { CFG, setCFG, persistConfig, mergeConfig, envDefaults, loadConfig, reindexKeys, CANON, OBLIT, E4B,
         PROVIDERS, normProvider, sanitizeRule, sanitizeLimit, IMAGE_MODEL_IDS, CONFIG_FILE } = C;
 const DB = require("./db");
+const { openrouterState, applyOpenrouterPatch } = require("./openrouter");
 const { shipHealth } = require("./telemetry");   // a dead ingest drops every alert; count is the sign
 const { dbUp, dbWriteHealth, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT, FACET_CACHE } = DB;
 const { unpricedModels } = require("./pricing");
@@ -139,6 +140,8 @@ function adminState() {
     // secrets — never returned in clear
     crazyrouterKeySet: !!CFG.crazyrouterKey, crazyrouterKeyMasked: mask(CFG.crazyrouterKey),
     imageTemplateKeySet: !!CFG.imageTemplateKey, imageTemplateKeyMasked: mask(CFG.imageTemplateKey),
+    openrouterKeySet: !!CFG.openrouterKey, openrouterKeyMasked: mask(CFG.openrouterKey),
+    ...openrouterState(),   // freeOnly + the manual id list; no key = the provider claims nothing
     // Each account carries its harvested headroom AND the age of that reading, so any consumer
     // (admin UI, statusline) can render "hot/cool" together with "as of when" — never a stale
     // number presented as fresh. `stale:true` = no reading in 6h: unknown, not cool.
@@ -236,7 +239,8 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
     if (patch.logging && typeof patch.logging === "object") Object.assign(next.logging, patch.logging);
     if (typeof (patch.crazyrouterKey ?? patch.crazyKey) === "string") next.crazyrouterKey = patch.crazyrouterKey ?? patch.crazyKey;
     if (typeof patch.imageTemplateKey === "string") next.imageTemplateKey = patch.imageTemplateKey;
-    for (const k of ["oblitToken", "adminPassword"])
+    applyOpenrouterPatch(next, patch);
+    for (const k of ["oblitToken", "adminPassword", "openrouterKey"])
       if (typeof patch[k] === "string") next[k] = patch[k];
     const merged = mergeConfig(envDefaults(), next);
     if (!merged.adminPassword || merged.adminPassword.length < 3)

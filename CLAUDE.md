@@ -19,6 +19,7 @@ refs may still linger in sibling repos.
   | `routing.js` | pins, allowlists, usage limits, account pinning |
   | `http.js` | `readBody`/`readJson`, `buildHeaders`, `proxy()` — 400 lines. It was 536 and over the 500 budget until JSON enforcement moved to `jsonenforce.js`; that split is what dropped `HOP_RES`'s import and is why `imports.test.mjs` now checks module-scope consts too |
   | `gate.js` | admission control — the per-provider queue in front of the single-GPU upstreams. ~120 lines, no deps, no state outside the process |
+  | `openrouter.js` | the `openrouter` catalogue (live refresh, boot + 6h), the **free-only guard** that decides which ids the provider will claim at all, and its `/api/state` + config-patch surface. A leaf — depends only on `config.js`. The control-plane bits live here rather than in `admin.js` because that file is at its size ceiling, and a provider's own state shape is a leaf concern |
   | `jsonenforce.js` | the `response_format` validate/retry loop, lifted out of `http.js`. **It strips `response_format` for `claudecode` ONLY** (no such field on the wire there) and steers with a prose instruction. It used to strip `json_object` on `local` too — llama.cpp honours both `json_object` and `json_schema` as a GBNF grammar, so that downgraded a hard constraint to a plea and gemma answered a bare JSON *string* where the caller wanted an object. Both parse, so nothing errored. Pinned by `wire.test.mjs`, asserted on the body the UPSTREAM received — the router's own 200 cannot tell the two apart |
   | `db.js` | Postgres call log + harvested account headroom |
   | `claudecode.js` | Anthropic model catalog, per-account live usage-limit refresh |
@@ -89,7 +90,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (27 suites, ~702 checks, ~75s)
+## Tests — `npm test` (28 suites, ~750 checks, ~80s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -193,6 +194,23 @@ wrong about the gate is how a suite gets added and then quietly dropped.
   is still a 401 — ordering the policy check before authentication would answer "wrong client" to
   someone whose real problem is a dead credential. It already earned its keep: the config sanitizer
   dropped `allowUa` on load, so the lock existed in Postgres and vanished from the mirror.
+
+- `test/openrouter.test.mjs` — the `openrouter` provider, whose every failure mode returns a
+  perfectly good completion. Claiming an id it should not have (a paid model on a card, or
+  `claude-opus-5` leaving the flat Max subscription for a metered relay) and claiming NOTHING when it
+  should have (free traffic falling through to crazyrouter, billed per token) are both 200s, so
+  every assertion is about WHICH upstream an id resolves to, never about a status code. Pins: the
+  provider is entirely OFF without a key (so deploying it changes no existing route); the free-only
+  guard, read BOTH ways openrouter marks free (`:free`, and zero prompt AND completion — prices
+  arrive as strings, and an absent pricing block must not read as free); that `/v1/models`
+  advertises exactly what would resolve; that the route carries `authToken`, never `injectKey` —
+  which is hard-wired to `crazyrouterKey` and would hand that credential to a third party; and that
+  a failed refresh KEEPS the previous catalogue, including the 200-with-an-empty-list that is
+  indistinguishable from an outage and would silently un-route every free model at once. Probed:
+  dropping the free-only guard turns 6 checks red, accepting an empty catalogue 2, removing the
+  no-key guard 2. The routing-ORDER check needed a second pass — the first version read green
+  against a deliberately reordered `baseRoute` because no catalogue id starts with `claude`, so it
+  now asserts with `openrouterModels` populated, which is the only way that ordering can bite.
 
 - `test/apps.test.mjs` — `POST /api/apps` (one-call app creation) and the premium-app watcher behind
   it. Two silent failure classes: a TIER that quietly includes opus (still `ok:true`, still a working
@@ -360,7 +378,7 @@ Two more are **not** in `npm test` because they need `panel/out` or the docs bui
 
 ## Providers
 
-Three **routing** providers — the whole of `PROVIDERS`, i.e. everything a model id can resolve to.
+Four **routing** providers — the whole of `PROVIDERS`, i.e. everything a model id can resolve to.
 (`lane` is the old word for the same thing; a few internals still spell it that way.)
 
 | provider | upstream | speaks | cost |
@@ -368,8 +386,42 @@ Three **routing** providers — the whole of `PROVIDERS`, i.e. everything a mode
 | `local` | llama.cpp on the pbox GPU (`bases.local`, currently `pbox.llm.hostbun.cc`). **Serves `Qwen3.5-9B-UD-Q4_K_XL.gguf`, build b10223, `n_ctx` 65536 / 6 slots, vision — swapped 2026-08-02, was gemma-4-26B-QAT.** All five ids `local`/`gemma`/`gemma-4-26b`/`qwen`/`qwen3.5-9b` resolve here; the **`gemma` pair are now the legacy aliases** — the direction reversed on the swap, which is exactly why you ask `/props` and never infer from the id | OpenAI | free |
 | `claudecode` | the **claudecode-account-pool** (our Claude Max logins) → `api.anthropic.com` | Anthropic | flat (subscription) |
 | `crazyrouter` | `crazyrouter.com` cloud relay (gemini etc), key injected | OpenAI | **per token** |
+| `openrouter` | `openrouter.ai` (`bases.openrouter` = `https://openrouter.ai/api` — the `/api` is load-bearing, every caller appends `/v1/…`). Added 2026-08-04. **FREE-ONLY by default** and OFF entirely without `openrouterKey` | OpenAI | free (see below) |
 
-**There is a fourth upstream, and it is deliberately not in `PROVIDERS`: `images`.**
+**`openrouter` is the one provider that decides for itself which ids it will take, and the guard is
+the whole design.** Their catalogue is ~330 models on ONE base URL and ~17 are free, so
+`src/openrouter.js` refreshes the live catalogue (boot + 6h, same pattern as `claudecodeModels`) and
+`openrouterTarget()` claims an id only if the catalogue lists it AND `openrouterFreeOnly` passes.
+Free is read two ways because they mark it two ways — the `:free` suffix, and `pricing.prompt` AND
+`pricing.completion` both `"0"` — and an ABSENT pricing block is *unknown*, never free.
+
+Five things here bite, and none of them errors:
+
+1. **No key = the provider claims nothing.** Not a 401 — null, so the id takes the route it took
+   before openrouter existed. A half-configured provider that swallowed ids and 401'd would be an
+   outage nobody could attribute. Same for a missing base.
+2. **It sits BELOW `claude-*` and ABOVE the crazyrouter fallthrough.** Below, because
+   `openrouterModels` is hand-written: put `claude-opus-5` in it with the branches reversed and the
+   whole Max subscription quietly bills through a metered relay at a 200. (Their resale id
+   `anthropic/claude-opus-5` is a different string and IS routable — that is fine and deliberate.)
+   Above, because `cloudPolicy: "open"` forwards anything, so a free id must be claimed before
+   crazyrouter bills per token for the same answer.
+3. **Do NOT route on "the id has a slash in it".** `wrappy/claude-sonnet-5`,
+   `crazyrouter/claude-sonnet-5` and `anthropic/claude-sonnet-5` are all real ids in this router's
+   own call log meaning something else entirely.
+4. **A failed catalogue refresh keeps the previous catalogue** — including a 200 carrying
+   `{"data":[]}`, which is indistinguishable from an outage here and would un-route every free model
+   at once. Same rule, same reason, as `registry.js`'s refresh.
+5. **The key rides `authToken`, never `injectKey`.** `injectKey` is hard-wired to
+   `CFG.crazyrouterKey` in `buildHeaders` — reusing it hands our crazyrouter credential to
+   openrouter.ai and 401s in a way that reads like a routing bug.
+
+**Their rate limits are per ACCOUNT, not per key** — "Making additional accounts or API keys will
+not affect your rate limits, as we govern capacity globally" (their docs). 20 req/min, and 1000
+req/day once ≥$10 lifetime credit has been bought, which our account already has. **Minting more
+keys buys nothing**; don't go looking for headroom there. `local` is the free capacity we own.
+
+**There is a fifth upstream, and it is deliberately not in `PROVIDERS`: `images`.**
 `CFG.bases.images` (`IMAGE_BASE`, code default `https://sdturbo.bofrid.dev`) with its own
 `CFG.imageToken`, serving `POST /v1/images/generations` plus `GET /v1/templates` and `GET /v1/loras`.
 **Prod points at `https://sdturbo-ww.blpk.cc` (verified 2026-07-27) — the service moved off pbox and

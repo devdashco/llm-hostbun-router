@@ -7,6 +7,7 @@ The model id picks the provider, unless your project has a rule.
 | `local`, `gemma`, `gemma-4-26b`, `qwen`, `qwen3.5-9b` | `local` |
 | anything starting `claude` | `claudecode` |
 | `imagegen`, `sana-sprint`, `sana`, `sdxl-lightning`, `sd-turbo` | image service, and **only** on `/v1/images/*` |
+| an id openrouter serves **free** (e.g. `openai/gpt-oss-20b:free`) | `openrouter` |
 | everything else | `crazyrouter` |
 
 Posting an image model to a text endpoint is refused, not forwarded. It used to fall through the whole
@@ -66,6 +67,24 @@ curl https://llm.hostbun.cc/v1/messages \
 
 The account is chosen server-side, from your project. No request header can change it, not
 `Authorization`, not `X-Account`, not anything. Your `Authorization` is discarded and replaced.
+
+## `openrouter` — the free tier, and only the free tier
+
+`openrouter.ai`, free-only by default. Their catalogue is ~330 models on one base URL and only ~17
+are free, so the router claims an id **only** when their live catalogue marks it free — the `:free`
+suffix, or a zero price on both prompt and completion. Anything else falls through to the provider
+it would have reached anyway, so a paid id never lands here by typo.
+
+Ask `GET /v1/models` for the ones that are actually routable today; the list is refreshed from
+openrouter every 6 hours, so a newly-free model becomes usable without a config change.
+
+Two things worth knowing before you build on it:
+
+- **It is rate-limited hard**, and the limit is on the account, not the key: 20 requests/minute and
+  1000/day, shared by everything that uses this router. Not somewhere to put a batch job — that is
+  what `local` is for.
+- **Free-tier prompts may be used for training by the upstream provider.** Do not send anything you
+  would not publish. `local` is the private lane.
 
 ## `crazyrouter` — cloud relay, per token
 

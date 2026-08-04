@@ -9,6 +9,7 @@
 //     cache (~12x cost) and makes "who spent this?" unanswerable after the fact.
 const { CFG, persistConfig, normProvider, isImageModel, WINDOW_MS } = require("./config");
 const { parseConsumer } = require("./identity");
+const { openrouterTarget } = require("./openrouter");
 const { dbUp, dbRow, dbRows, ACCT_CACHE, ACCT_DEAD, ORG_OF_ACCOUNT } = require("./db");
 
 const localTarget = (m) => (m == null ? null : CFG.localMap[String(m).toLowerCase()] || null);
@@ -31,6 +32,11 @@ function providerRoute(provider, model, reason) {
   // Authorization bearer, so nothing downstream changes. It also OVERWRITES the caller's own
   // `sk-llm-…` header, which we were otherwise forwarding verbatim to llama.cpp.
   if (l === "local") return { provider: "local", base: localBaseFor(model), rewriteModel: model, target: model, ...(CFG.localKey ? { authToken: CFG.localKey } : {}), reason };
+  // `authToken`, not `injectKey`: injectKey is hard-wired to CFG.crazyrouterKey in buildHeaders, so
+  // reusing it would hand our crazyrouter credential to openrouter.ai and 401 like a routing bug.
+  if (l === "openrouter")
+    return { provider: "openrouter", base: CFG.bases.openrouter, rewriteModel: model || undefined,
+             ...(CFG.openrouterKey ? { authToken: CFG.openrouterKey } : {}), reason };
   return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
 }
 
@@ -483,6 +489,12 @@ function baseRoute(m, key) {
   if (lt) return providerRoute("local", lt, "local alias");
   if (isClaudeModel(m)) return { provider: "claudecode", base: CFG.bases.claudecode, reason: "claude* model" };
   if (!m) return defaultRouteResolved("no model specified");
+  // BETWEEN claude* and the crazyrouter fallthrough, and both sides of that are load-bearing — see
+  // the header of src/openrouter.js for which one bites on live data and which one guards a typo.
+  // openrouterTarget() returns null unless the id is in their live catalogue AND passes the
+  // free-only guard, so an unconfigured or unknown id falls through exactly as it did before.
+  const or = openrouterTarget(m);
+  if (or) return providerRoute("openrouter", or, "openrouter catalog");
   const pol = CFG.cloudPolicy || "open";
   if (pol === "open") return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, reason: "crazyrouter (open)" };
   if (pol === "allowlist" && (CFG.cloudAllowlist || []).some((x) => x.toLowerCase() === key))

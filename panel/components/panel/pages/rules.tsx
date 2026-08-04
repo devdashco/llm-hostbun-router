@@ -39,7 +39,12 @@ export function Rules() {
       try {
         const m: any = await api("models");
         const ids = (v: any) => (Array.isArray(v) ? v.map((x: any) => x.id).filter(Boolean) : []);
-        setLive({ claudecode: ids(m.claudecode), crazyrouter: ids(m.crazyrouter), local: ids(m.local) });
+        setLive({
+          claudecode: ids(m.claudecode),
+          crazyrouter: ids(m.crazyrouter),
+          local: ids(m.local),
+          openrouter: ids(m.openrouter),
+        });
       } catch {
         /* upstream catalog unreachable — fall back to what state + PROJ_MODELS know */
       }
@@ -86,8 +91,13 @@ export function Rules() {
     claudecode: uniq([...(live.claudecode || []), ...(state.claudecodeModels || []), ...fallback("claudecode")]),
     crazyrouter: uniq([...(live.crazyrouter || []), ...(state.cloudAllowlist || []), ...fallback("crazyrouter")]),
     local: uniq([...(live.local || []), ...Object.keys(state.localMap || {}), ...fallback("local")]),
+    // /api/models already applies the free-only guard, so this offers what would actually resolve.
+    openrouter: uniq([...(live.openrouter || []), ...(state.openrouterModels || []), ...fallback("openrouter")]),
   };
-  const catalogOpts = PROVS.flatMap((p) => catalog[p].map((model) => ({ provider: p, model })));
+  // `catalog[p] || []`, not `catalog[p]`: PROVS is pinned to the server's PROVIDERS, so it gains a
+  // provider the moment one is added server-side — and the bare index crashed the whole page on the
+  // render right after that, before anyone could add the key here.
+  const catalogOpts = PROVS.flatMap((p) => (catalog[p] || []).map((model) => ({ provider: p, model })));
 
   async function save() {
     const patch = {

@@ -14,6 +14,7 @@ const { recordCall } = require("./db");
 const TR = require("../translate");
 const { upstreamCatalogs, localModelEntries } = require("./claudecode");
 const { snapshot: gateSnapshot } = require("./gate");
+const { openrouterCatalogMeta, openrouterModelEntries } = require("./openrouter");
 const { alertHealth } = require("./alert");
 
 async function probe(base, authToken) {
@@ -110,6 +111,21 @@ async function health(req, res) {
   const [local, crazyrouter] = await Promise.all([
     probe(CFG.bases.local), probe(CFG.bases.crazyrouter, CFG.crazyrouterKey),
   ]);
+  // openrouter is reported from the CATALOGUE refresh, not from a probe. Their /v1/models answers
+  // 200 to anyone, so a probe would report "up" for a router holding no key — i.e. for a provider
+  // that cannot serve a single call. What actually decides whether it can serve is: is a key set,
+  // and did we manage to read the catalogue (openrouterTarget claims nothing without both).
+  const orMeta = openrouterCatalogMeta();
+  const openrouter = {
+    up: !!CFG.openrouterKey && orMeta.models > 0,
+    status: null, probed: false, ms: 0,
+    count: orMeta.models, free: orMeta.free, freeOnly: !!CFG.openrouterFreeOnly,
+    keySet: !!CFG.openrouterKey, catalogAt: orMeta.at || 0,
+    note: !CFG.openrouterKey ? "no openrouterKey — the provider claims no model ids"
+      : orMeta.models === 0 ? `catalog never loaded${orMeta.error ? `: ${orMeta.error}` : ""}`
+      : orMeta.error ? `serving a stale catalog: ${orMeta.error}`
+      : undefined,
+  };
   // claudecode is deliberately NOT probed: the only unauthenticated request we could make to
   // api.anthropic.com reads as down, so a probe here would report a permanent outage. Its health is
   // therefore "do we hold a usable login" — but that has to actually mean usable. It used to be
@@ -139,12 +155,12 @@ async function health(req, res) {
   // The human-facing alert channel (src/alert.js). A rotated bot token drops every premium-app
   // warning silently — "nobody has created an opus app" and "nobody has been told" look identical
   // from here otherwise, which is the same trap dbWriteHealth and shipHealth exist for.
-  return sendJson(res, 200, { local, crazyrouter, claudecode, gates: gateSnapshot(), alerts: alertHealth() });
+  return sendJson(res, 200, { local, crazyrouter, claudecode, openrouter, gates: gateSnapshot(), alerts: alertHealth() });
 }
 
 async function catalogs(req, res) {
   const { claudecode, crazyrouter } = await upstreamCatalogs();
-  return sendJson(res, 200, { local: localModelEntries(), claudecode, crazyrouter });
+  return sendJson(res, 200, { local: localModelEntries(), claudecode, crazyrouter, openrouter: openrouterModelEntries() });
 }
 
 // Latest per-account rate-limit snapshot harvested off real traffic (zero-token; see recordLimits).

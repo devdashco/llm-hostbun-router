@@ -6,6 +6,7 @@ const TR = require("../translate");
 const { CFG, IMAGE_MODEL_ID, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
 const { ORG_OF_ACCOUNT, ACCT_DEAD, recordLimits } = require("./db");
 const { localTarget, autoDisableAccount, clearAcctCooldown } = require("./routing");
+const { openrouterModelEntries } = require("./openrouter");
 
 function localModelEntries() {
   const ids = new Set();
@@ -162,8 +163,13 @@ async function mergedModels(res) {
     root: await imageCheckpoint(),
     aliases: IMAGE_MODEL_IDS.filter((id) => id !== IMAGE_MODEL_ID),
   }];
+  // openrouter is advertised from the same function routing consults (openrouterModelEntries wraps
+  // the free-only guard), so the list a caller reads and the list that actually resolves are one
+  // thing. Publishing their whole 330-model catalogue while free-only is on would offer ~313 ids
+  // that quietly fall through to another provider.
+  const openrouter = openrouterModelEntries();
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-  res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter] }));
+  res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter, ...openrouter] }));
 }
 
 // Actively read ONE account's live usage window. A single cheap haiku ping (max_tokens:1) so the

@@ -1,19 +1,21 @@
 // llm.hostbun.cc — single-URL OpenAI router + control panel.
 //
-// PROVIDERS — where a request is actually served. Three, and that is the whole taxonomy:
+// PROVIDERS — where a request is actually served. Four, and that is the whole taxonomy:
 //   • local        -> llama.cpp on the pbox GPU (OpenAI-native; base + ids from config.json)
 //   • claudecode   -> the claudecode-account-pool (our Claude Max logins) -> api.anthropic.com
 //   • crazyrouter  -> crazyrouter.com cloud relay (CRAZYROUTER_KEY injected server-side)
+//   • openrouter   -> openrouter.ai, FREE-ONLY by default and off entirely without a key
 //
 //   model "local" / "qwen3.5-9b"                -> local (pbox GPU)
 //   model "claude*" (e.g. claude-sonnet-4-6)    -> claudecode, the pinned account's token injected
+//   an id openrouter serves FREE               -> openrouter (src/openrouter.js owns the catalogue)
 //   any other model                             -> crazyrouter, key injected
 //   model "imagegen"  +  POST /v1/images/*      -> image generation (SDXL+Lightning on ww's 3070)
 //   `template` naming one of ours + same path  -> image templates: a reference picture + a style
 //                                                 instruction, rendered by a crazyrouter image
 //                                                 model. PAID, so this one route needs a key.
 //   /v1/image-templates[/<slug>/reference]     -> that store, public reads
-//   GET /v1/models                              -> local + claudecode + crazyrouter (merged)
+//   GET /v1/models                              -> local + claudecode + crazyrouter + openrouter
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
 //   /local/*                                   -> back-compat: strips /local, proxies to the local provider (pbox)
@@ -24,7 +26,7 @@
 // panel take effect immediately AND survive restarts/reboots/redeploys. Nothing here needs a
 // redeploy to change routing.
 //
-// NAMING: canonical provider ids are `local`, `crazyrouter`, `claudecode`. The legacy ids `cloud`
+// NAMING: canonical ids are `local`, `crazyrouter`, `claudecode`, `openrouter`. Legacy ids `cloud`
 // (=crazyrouter), `claude`, `anthropic`, and the retired wrapper's id all normalize to
 // one of those on input, so older /data/config.json files and call-log rows keep working without a
 // reset. A few internals still spell the field `provider`; it means provider.
@@ -33,6 +35,7 @@
 //   src/config.js      live CFG (env + /data/config.json), sanitizers, key index
 //   src/identity.js    who is calling: consumer/job paths, API keys, authenticate()
 //   src/routing.js     where it goes: pins, allowlists, groups, usage limits, account pinning
+//   src/openrouter.js  the openrouter catalogue + the free-only guard that keeps it free
 //   src/http.js        the wire: readBody, buildHeaders, proxy(), JSON enforcement
 //   src/db.js          the call log (Postgres) and harvested account headroom
 //   src/claudecode.js  the Anthropic model catalog
@@ -51,6 +54,7 @@ const { resolveRoute, accountFor, usageVerdict, sleep, isGated, throttleDelay } 
 const { readBody, sendFile, proxy, headroomCompress, HEADROOM_URL } = require("./src/http");
 const { jsonEnforce, wantsJsonFormat } = require("./src/jsonenforce");
 const { mergedModels, refreshClaudecodeModels, refreshAccountLimits, CLAUDECODE_MODEL_REFRESH_MS } = require("./src/claudecode");
+const { startOpenrouterRefresh } = require("./src/openrouter");
 const { handleAdminApi } = require("./src/admin");
 // OTLP ingest — the direct-connect boxes' token usage, which no proxy() call ever sees.
 const OTEL = require("./src/otel");
@@ -559,6 +563,7 @@ server.listen(PORT, () => {
   // and a failure leaves the seed in place rather than an empty list.
   refreshClaudecodeModels("boot").catch((e) => console.error(`[models] boot refresh: ${e.message}`));
   setInterval(() => refreshClaudecodeModels("interval").catch(() => {}), CLAUDECODE_MODEL_REFRESH_MS).unref();
+  startOpenrouterRefresh();   // the openrouter catalogue, boot + 6h (see src/openrouter.js)
   // Auto selection orders on each account's weekly reset, but the passive harvest only learns from
   // accounts that serve traffic, so everyone else's reading would freeze. Sweep the pool (one
   // 1-token haiku ping each, serial) to keep reset7 honest, gated per tick so the panel can start it

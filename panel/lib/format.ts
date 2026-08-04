@@ -50,6 +50,7 @@ export const providerCls: Record<string, string> = {
   local: "local",
   crazyrouter: "crazyrouter",
   claudecode: "claudecode",
+  openrouter: "openrouter",
   cloud: "crazyrouter",
   claude: "claudecode",
   anthropic: "claudecode",

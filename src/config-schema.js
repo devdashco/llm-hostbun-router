@@ -10,17 +10,23 @@
 const path = require("node:path");
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Providers. Where a request is actually served. There are three, and that's the whole taxonomy.
+// Providers. Where a request is actually served. There are four, and that's the whole taxonomy.
 // ─────────────────────────────────────────────────────────────────────────────
 //   local        pbox llama.cpp. Speaks OpenAI natively.
 //   claudecode   the claudecode-account-pool (our Claude Max logins) → api.anthropic.com.
 //                Native /v1/messages is forwarded verbatim; OpenAI /v1/chat/completions is
 //                translated (translate.js). The account is PINNED per project — never rotated.
 //   crazyrouter  cloud relay (gemini etc). Opt-in by model id. Never an automatic fallback.
+//   openrouter   openrouter.ai. Opt-in by model id, and FREE-ONLY by default (openrouterFreeOnly).
+//                Its catalogue is ~330 models of which ~17 are free; the free ones are the reason
+//                it is here, and the paid ones sit one typo away on the same base URL. So the
+//                provider only claims an id its catalogue marks free — anything else falls through
+//                to the chain it would have taken anyway, rather than quietly billing a card.
+//                See src/openrouter.js.
 //
 // `provider` is the field name. `lane` was the old word for the same thing and is still accepted
 // on input so existing /data/config.json keeps working.
-const PROVIDERS = ["local", "crazyrouter", "claudecode"];
+const PROVIDERS = ["local", "crazyrouter", "claudecode", "openrouter"];
 // The image provider is deliberately absent from PROVIDERS: it is not a routing target. It is picked
 // by path (`/v1/images/*`), it speaks its own shape, and it bills GPU seconds rather than tokens.
 //

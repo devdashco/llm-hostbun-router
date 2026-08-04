@@ -17,6 +17,7 @@ const HDX_URL = process.env.HYPERDX_OTLP_URL || "https://otel.hyperdx.hostbun.cc
 
 function keyLabel(route) {
   if (route.provider === "crazyrouter") return "crazyrouterKey";
+  if (route.provider === "openrouter") return "openrouterKey";
   if (route.provider === "claudecode") return "claudecode-pool";
   if (route.provider === "local") return isGated(route.target) && CFG.oblitToken ? "oblitToken" : "none (open)";
   return "—";
