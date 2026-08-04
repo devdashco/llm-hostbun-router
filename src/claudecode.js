@@ -5,7 +5,7 @@
 const TR = require("../translate");
 const { CFG, IMAGE_MODEL_ID, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
 const { ORG_OF_ACCOUNT, ACCT_DEAD, recordLimits } = require("./db");
-const { localTarget, autoDisableAccount, clearAcctCooldown } = require("./routing");
+const { localTarget, autoDisableAccount, clearAcctCooldown, freeaiapikeyModelEntries } = require("./routing");
 const { openrouterModelEntries } = require("./openrouter");
 
 function localModelEntries() {
@@ -168,8 +168,14 @@ async function mergedModels(res) {
   // thing. Publishing their whole 330-model catalogue while free-only is on would offer ~313 ids
   // that quietly fall through to another provider.
   const openrouter = openrouterModelEntries();
+  // And freeaiapikey, from the same list its routing branch tests against. There are TWO catalogue
+  // endpoints — this public one and diagnostics.js's `/api/models` — and adding a provider to only
+  // one is not a visible failure: the panel showed all ten ids while `/v1/models` showed none, so a
+  // caller enumerating the public catalogue could not find a model that routes perfectly well.
+  // Shipped exactly that way in f4a0b45. Add a provider to BOTH, in the same commit.
+  const freeaiapikey = freeaiapikeyModelEntries();
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-  res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter, ...openrouter] }));
+  res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter, ...openrouter, ...freeaiapikey] }));
 }
 
 // Actively read ONE account's live usage window. A single cheap haiku ping (max_tokens:1) so the

@@ -15,6 +15,7 @@
 //     answers just as well and bills ~2x the input and ~2.5-3x the output.
 //
 // Both are invisible from the caller's side. So: assert the route, never the response.
+import { readFileSync } from "node:fs";
 import { CFG, setCFG, mergeConfig, envDefaults, PROVIDERS } from "../src/config.js";
 import { baseRoute, freeaiapikeyTarget, freeaiapikeyModelEntries } from "../src/routing.js";
 
@@ -114,6 +115,19 @@ check("/v1/models advertises the configured ids", ids.length === (CFG.freeaiapik
 check("every advertised id actually resolves here",
   ids.every((id) => baseRoute(id, id).provider === "freeaiapikey"),
   ids.filter((id) => baseRoute(id, id).provider !== "freeaiapikey").join(","));
+
+// ── BOTH catalogue endpoints, not one ───────────────────────────────────────
+// There are two: the public `GET /v1/models` (mergedModels in src/claudecode.js) and the panel's
+// `/api/models` (catalogs in src/diagnostics.js). Adding a provider to one and not the other is
+// invisible — nothing errors, the panel looks complete, and only a caller enumerating the public
+// catalogue notices that a model which routes perfectly well is not listed. That shipped in f4a0b45.
+// A source check rather than a boot: mergedModels awaits the live upstream catalogues, so exercising
+// it here would put a network call in a unit suite to assert a wiring fact.
+{
+  const src = (p) => readFileSync(new URL(`../src/${p}`, import.meta.url), "utf8");
+  for (const f of ["claudecode.js", "diagnostics.js"])
+    check(`${f} publishes freeaiapikey's ids`, src(f).includes("freeaiapikeyModelEntries()"));
+}
 
 // ── ordering against openrouter ─────────────────────────────────────────────
 // The catalogues OVERLAP. openrouter is free-only by default and these ids are paid there, so it
