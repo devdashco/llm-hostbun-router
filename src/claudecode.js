@@ -5,7 +5,7 @@
 const TR = require("../translate");
 const { CFG, IMAGE_MODEL_ID, IMAGE_MODEL_IDS, CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS } = require("./config");
 const { ORG_OF_ACCOUNT, ACCT_DEAD, recordLimits } = require("./db");
-const { localTarget, autoDisableAccount, clearAcctCooldown, freeaiapikeyModelEntries } = require("./routing");
+const { localTarget, autoDisableAccount, clearAcctCooldown, freeaiapikeyModelEntries, groqModelEntries } = require("./routing");
 const { openrouterModelEntries } = require("./openrouter");
 
 function localModelEntries() {
@@ -174,8 +174,12 @@ async function mergedModels(res) {
   // caller enumerating the public catalogue could not find a model that routes perfectly well.
   // Shipped exactly that way in f4a0b45. Add a provider to BOTH, in the same commit.
   const freeaiapikey = freeaiapikeyModelEntries();
+  // ...and groq, same rule. The warning above is not hypothetical: it was written after f4a0b45 and
+  // the `groq` provider still shipped past it on the first pass (2026-08-04), caught only by booting
+  // the router and reading the public catalogue. Both endpoints, same commit, every time.
+  const groq = groqModelEntries();
   res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-  res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter, ...openrouter, ...freeaiapikey] }));
+  res.end(JSON.stringify({ object: "list", data: [...local, ...images, ...claudecode, ...crazyrouter, ...openrouter, ...freeaiapikey, ...groq] }));
 }
 
 // Actively read ONE account's live usage window. A single cheap haiku ping (max_tokens:1) so the

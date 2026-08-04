@@ -73,6 +73,11 @@ function envDefaults() {
       // vendor migration. No `/api` suffix here (unlike openrouter) — their OpenAI surface is at
       // /v1/* directly, and native /v1/messages sits beside it on the same host.
       freeaiapikey: (process.env.FREEAIAPIKEY_BASE || "https://api.freeaiapikey.com").replace(/\/$/, ""),
+      // groq. The `/openai/v1` surface is theirs; the base stops at `/openai` because every caller
+      // of a base here appends "/v1/…". Their native surface at the bare host is NOT OpenAI-shaped,
+      // so dropping the suffix does not 404 — it reaches a different API that answers differently,
+      // which is the worse failure of the two.
+      groq: (process.env.GROQ_BASE || "https://api.groq.com/openai").replace(/\/$/, ""),
       // claudecode → the real Anthropic API, called with a pinned account's Max token. The old
       // old subprocess-wrapper base is GONE.
       claudecode: (process.env.ANTHROPIC_BASE || "https://api.anthropic.com").replace(/\/$/, ""),
@@ -116,6 +121,25 @@ function envDefaults() {
       "openai/gpt-5.6-sol,openai/gpt-5.5,openai/gpt-5.4,openai/gpt-4o," +
       "anthropic/claude-opus-5,anthropic/claude-opus-4.8,anthropic/claude-opus-4.7," +
       "anthropic/claude-opus-4.6,anthropic/claude-sonnet-5,anthropic/claude-sonnet-4.6"
+    ).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean),
+    // groq bearer (`gsk_…`). EMPTY DISABLES THE PROVIDER ENTIRELY, same rule and same reason as
+    // openrouterKey and freeaiapikeyKey: a half-configured provider must not swallow ids that used
+    // to reach crazyrouter and then answer 401 for them.
+    groqKey: process.env.GROQ_KEY || "",
+    // The ids this provider may claim. THE WRITTEN LIST IS THE GUARD — same shape as
+    // freeaiapikeyModels, opposite reason: there it protects against cost, here against a 404. Groq
+    // advertises 15 ids on one base and only some are chat models — whisper-large-v3* transcribe,
+    // canopylabs/orpheus-* speak, meta-llama/llama-prompt-guard-2-* are 512-token classifiers — and
+    // each would take a /v1/chat/completions call and fail, for an id that would otherwise have
+    // reached a provider that answers. So this is the four verified on the real path 2026-08-04 plus
+    // gpt-oss-20b (same family and context as the 120b). Check the rest before adding them.
+    //
+    // Ids are BARE, unlike freeaiapikey's `vendor/model`, so nothing in the STRING keeps the Max pool
+    // safe here — branch order does (isClaudeModel runs first). `openai/gpt-oss-*` is also a real
+    // openrouter id, which is why groq resolves BEFORE it: see the ordering note in src/routing.js.
+    groqModels: (process.env.GROQ_MODELS ||
+      "llama-3.1-8b-instant,llama-3.3-70b-versatile,qwen/qwen3.6-27b," +
+      "openai/gpt-oss-120b,openai/gpt-oss-20b"
     ).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean),
     // A SEPARATE crazyrouter key for image templates, because access to the image models is granted
     // per token: the router's own key is valid and still answers "this token does not have access to
@@ -302,6 +326,7 @@ function mergeConfig(base, saved) {
     const im = pick("images"); if (im) c.bases.images = im;
     const or = pick("openrouter"); if (or) c.bases.openrouter = or;
     const fa = pick("freeaiapikey"); if (fa) c.bases.freeaiapikey = fa;
+    const gq = pick("groq"); if (gq) c.bases.groq = gq;
   }
   if (saved.localMap && typeof saved.localMap === "object" && !Array.isArray(saved.localMap)) {
     const m = {};
@@ -352,6 +377,13 @@ function mergeConfig(base, saved) {
   // require deleting the key, and there is no catalogue refresh to re-fill it behind your back.
   if (Array.isArray(saved.freeaiapikeyModels))
     c.freeaiapikeyModels = [...new Set(saved.freeaiapikeyModels
+      .filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().toLowerCase()))];
+  if (typeof saved.groqKey === "string") c.groqKey = saved.groqKey;
+  // Same rule as freeaiapikeyModels: an explicit empty list IS the off switch, and no catalogue
+  // refresh exists to re-fill it. Here it also has a second job — trimming an id back OUT of the
+  // list is how a model Groq stops serving stops being advertised on /v1/models.
+  if (Array.isArray(saved.groqModels))
+    c.groqModels = [...new Set(saved.groqModels
       .filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim().toLowerCase()))];
   // The account pool. `claudecodeAccountPool` is the name; `anthropicPool` is what the live
   // /data/config.json still calls it. Read either, keep both in sync so a rollback still boots.

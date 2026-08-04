@@ -1,15 +1,20 @@
 // llm.hostbun.cc — single-URL OpenAI router + control panel.
 //
-// PROVIDERS — where a request is actually served. Five, and that is the whole taxonomy:
+// PROVIDERS — where a request is actually served. Six, and that is the whole taxonomy:
 //   • local        -> llama.cpp on the pbox GPU (OpenAI-native; base + ids from config.json)
 //   • claudecode   -> the claudecode-account-pool (our Claude Max logins) -> api.anthropic.com
 //   • crazyrouter  -> crazyrouter.com cloud relay (CRAZYROUTER_KEY injected server-side)
 //   • openrouter   -> openrouter.ai, FREE-ONLY by default and off entirely without a key
 //   • freeaiapikey -> api.freeaiapikey.com, a cheaper metered reseller of the same frontier ids;
 //                     opt-in by model id (freeaiapikeyModels) and off entirely without a key
+//   • groq         -> api.groq.com, FREE (LPU); opt-in by model id (groqModels), off without a key.
+//                     Free-tier ceilings are per-model requests/day and tokens/MINUTE, so it is a
+//                     lane for short high-volume work, not for agent loops.
 //
 //   model "local" / "qwen3.5-9b"                -> local (pbox GPU)
 //   model "claude*" (e.g. claude-sonnet-4-6)    -> claudecode, the pinned account's token injected
+//   an id in groqModels                         -> groq (free; resolved BEFORE the two paid lanes
+//                                                  below, which serve some of the same ids)
 //   an id openrouter serves FREE               -> openrouter (src/openrouter.js owns the catalogue)
 //   an id in freeaiapikeyModels                -> freeaiapikey (metered, but under crazyrouter)
 //   any other model                             -> crazyrouter, key injected
@@ -19,7 +24,7 @@
 //                                                 model. PAID, so this one route needs a key.
 //   /v1/image-templates[/<slug>/reference]     -> that store, public reads
 //   GET /v1/models                              -> local + claudecode + crazyrouter + openrouter
-//                                                  + freeaiapikey
+//                                                  + freeaiapikey + groq
 //   /docs, docs.<host>                         -> docs page
 //   /prices(.json)                             -> computed price feed (CORS *)
 //   /local/*                                   -> back-compat: strips /local, proxies to the local provider (pbox)
@@ -30,7 +35,7 @@
 // panel take effect immediately AND survive restarts/reboots/redeploys. Nothing here needs a
 // redeploy to change routing.
 //
-// NAMING: canonical ids are `local`, `crazyrouter`, `claudecode`, `openrouter`, `freeaiapikey`.
+// NAMING: canonical ids are `local`, `crazyrouter`, `claudecode`, `openrouter`, `freeaiapikey`, `groq`.
 // Legacy ids `cloud`
 // (=crazyrouter), `claude`, `anthropic`, and the retired wrapper's id all normalize to
 // one of those on input, so older /data/config.json files and call-log rows keep working without a

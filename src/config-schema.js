@@ -29,10 +29,18 @@ const path = require("node:path");
 //                an unlisted id falls through exactly as before. No live catalogue refresh, unlike
 //                openrouter — their roster is ten ids with no free tier to police, so there is no
 //                free/paid line for a refresh to keep on the right side of.
+//   groq         api.groq.com — LPU inference, and the second FREE lane after `local`. Opt-in by
+//                model id (`groqModels` IS the guard, same shape as freeaiapikey and for the same
+//                reason: a fixed roster of 15 ids, no free/paid line on one base for a refresh to
+//                police). Free-tier ceilings are per-model and read off `x-ratelimit-*` on every
+//                reply, not from docs: 14,400 req/day on llama-3.1-8b-instant, 1,000 req/day on
+//                the rest, 6-8k tokens/minute. That token-per-minute figure is the real ceiling —
+//                it is why this is a lane for short, high-volume work (classify, extract, rerank)
+//                and not for agent loops, which would spend the daily budget in one transcript.
 //
 // `provider` is the field name. `lane` was the old word for the same thing and is still accepted
 // on input so existing /data/config.json keeps working.
-const PROVIDERS = ["local", "crazyrouter", "claudecode", "openrouter", "freeaiapikey"];
+const PROVIDERS = ["local", "crazyrouter", "claudecode", "openrouter", "freeaiapikey", "groq"];
 // The image provider is deliberately absent from PROVIDERS: it is not a routing target. It is picked
 // by path (`/v1/images/*`), it speaks its own shape, and it bills GPU seconds rather than tokens.
 //

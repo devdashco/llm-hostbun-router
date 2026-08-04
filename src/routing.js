@@ -28,6 +28,18 @@ function freeaiapikeyTarget(model) {
 const freeaiapikeyModelEntries = () =>
   (!CFG.bases.freeaiapikey || !CFG.freeaiapikeyKey) ? []
     : (CFG.freeaiapikeyModels || []).map((id) => ({ id, object: "model", owned_by: "freeaiapikey" }));
+// Does groq claim this id? Same written-list guard as freeaiapikey, opposite reason: there it keeps
+// us off ids we did not choose to PAY for, here off ids groq serves on a non-chat surface that would
+// 404. Null is the safe answer either way — the call takes exactly the route it took before.
+function groqTarget(model) {
+  if (!CFG.bases.groq || !CFG.groqKey) return null;
+  const key = String(model == null ? "" : model).trim().toLowerCase();
+  if (!key) return null;
+  return (CFG.groqModels || []).includes(key) ? key : null;
+}
+const groqModelEntries = () =>
+  (!CFG.bases.groq || !CFG.groqKey) ? []
+    : (CFG.groqModels || []).map((id) => ({ id, object: "model", owned_by: "groq" }));
 // A `claude*` model id means the claudecode provider (our Max account pool → api.anthropic.com).
 const isClaudeModel = (m) => typeof m === "string" && m.toLowerCase().startsWith((CFG.claudePrefix || "claude").toLowerCase());
 const isGated = (target) => Array.isArray(CFG.gatedModels) && CFG.gatedModels.includes(target);
@@ -58,6 +70,10 @@ function providerRoute(provider, model, reason) {
   if (l === "freeaiapikey")
     return { provider: "freeaiapikey", base: CFG.bases.freeaiapikey, rewriteModel: model || undefined,
              ...(CFG.freeaiapikeyKey ? { authToken: CFG.freeaiapikeyKey } : {}), reason };
+  // Same rule, same reason: `authToken`, never `injectKey`.
+  if (l === "groq")
+    return { provider: "groq", base: CFG.bases.groq, rewriteModel: model || undefined,
+             ...(CFG.groqKey ? { authToken: CFG.groqKey } : {}), reason };
   return { provider: "crazyrouter", base: CFG.bases.crazyrouter, injectKey: true, rewriteModel: model || undefined, reason };
 }
 
@@ -522,6 +538,13 @@ function baseRoute(m, key) {
   // the header of src/openrouter.js for which one bites on live data and which one guards a typo.
   // openrouterTarget() returns null unless the id is in their live catalogue AND passes the
   // free-only guard, so an unconfigured or unknown id falls through exactly as it did before.
+  // FIRST of the opt-in providers, and that position is the whole point: groq is FREE and the two
+  // below it are not. `openai/gpt-oss-*` is a real id in all three catalogues. openrouter declines
+  // it today only because openrouterFreeOnly is on — flip that one flag with groq below it and this
+  // lane silently stops serving the ids it was added for, at a 200 the whole way. Free before paid,
+  // decided by position rather than by a flag nobody re-reads.
+  const gq = groqTarget(m);
+  if (gq) return providerRoute("groq", gq, "groq model list");
   const or = openrouterTarget(m);
   if (or) return providerRoute("openrouter", or, "openrouter catalog");
   // AFTER openrouter and BEFORE the crazyrouter fallthrough, and both neighbours matter:
@@ -545,7 +568,8 @@ function baseRoute(m, key) {
 module.exports = {
   resolveRoute, baseRoute, providerRoute, defaultRouteResolved, projectRule, projectRuleFor,
   enforceAllow, accountFor, autoAccount, autoDisableAccount, acctHealth, limitFor, resolveLimit, projectUsage, usageVerdict,
-  localTarget, freeaiapikeyTarget, freeaiapikeyModelEntries, isClaudeModel, isGated, sleep,
+  localTarget, freeaiapikeyTarget, freeaiapikeyModelEntries, groqTarget, groqModelEntries,
+  isClaudeModel, isGated, sleep,
   note429, note2xx, throttleDelay, throttleSnapshot,
   noteAcctCooldown, acctCooling, clearAcctCooldown,
 };

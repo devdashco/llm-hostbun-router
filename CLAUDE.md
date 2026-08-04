@@ -90,7 +90,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (29 suites, ~780 checks, ~80s)
+## Tests — `npm test` (30 suites, ~817 checks, ~80s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -223,6 +223,21 @@ wrong about the gate is how a suite gets added and then quietly dropped.
   hand-writes one into `freeaiapikeyModels`**, which is the one mistake here that costs real money.
   Probed: removing the list guard turns 4 checks red, never taking the branch 8, swapping
   `authToken` for `injectKey` 2.
+
+- `test/groq.test.mjs` — the `groq` provider, and the same assert-the-route-never-the-response rule
+  as the two suites above, because every failure here is either a good completion from the wrong
+  (paid) upstream or a 404 that reads like a routing bug. Pins the shared shape — off without a key
+  or base, the written list as the only guard, an empty list meaning "claim nothing", `authToken`
+  never `injectKey` — plus three things specific to this lane: that the `/openai` base suffix
+  survives the merge (the bare host is a different API, so losing it answers wrong rather than
+  404ing); that the **non-chat ids are absent by id**, so a later "add every advertised id" commit
+  goes red rather than silently routing transcription to a chat endpoint; and the ORDERING, that
+  groq wins an id `freeaiapikey` also lists while an id only *it* lists still reaches it — the check
+  that catches the free-lane-below-paid regression. The Max-pool guard here is branch order, not the
+  id shape, so `claude-*` is asserted both bare and hand-written into `groqModels`. The ordering
+  check read green for the wrong reason when first written (the fixture replaced the freeaiapikey
+  seed, so the second half asserted a provider declining an id it was never given) — the fixture now
+  lists both ids, which is the assertion-that-cannot-fail trap this repo keeps producing.
 
 - `test/apps.test.mjs` — `POST /api/apps` (one-call app creation) and the premium-app watcher behind
   it. Two silent failure classes: a TIER that quietly includes opus (still `ok:true`, still a working
@@ -390,7 +405,7 @@ Two more are **not** in `npm test` because they need `panel/out` or the docs bui
 
 ## Providers
 
-Five **routing** providers — the whole of `PROVIDERS`, i.e. everything a model id can resolve to.
+Six **routing** providers — the whole of `PROVIDERS`, i.e. everything a model id can resolve to.
 (`lane` is the old word for the same thing; a few internals still spell it that way.)
 
 | provider | upstream | speaks | cost |
@@ -400,6 +415,39 @@ Five **routing** providers — the whole of `PROVIDERS`, i.e. everything a model
 | `crazyrouter` | `crazyrouter.com` cloud relay (gemini etc), key injected | OpenAI | **per token** |
 | `openrouter` | `openrouter.ai` (`bases.openrouter` = `https://openrouter.ai/api` — the `/api` is load-bearing, every caller appends `/v1/…`). Added 2026-08-04. **FREE-ONLY by default** and OFF entirely without `openrouterKey` | OpenAI | free (see below) |
 | `freeaiapikey` | `api.freeaiapikey.com` (`bases.freeaiapikey`, **no `/api` suffix** — their OpenAI surface is `/v1/*` directly). Added 2026-08-04. Opt-in per id via `freeaiapikeyModels`, OFF entirely without `freeaiapikeyKey` | OpenAI **and** native Anthropic | **per token, ~half crazyrouter** |
+| `groq` | `api.groq.com/openai` (`bases.groq` — the `/openai` suffix is load-bearing; the bare host is a DIFFERENT, non-OpenAI API, so dropping it does not 404, it answers wrong). Added 2026-08-04. Opt-in per id via `groqModels`, OFF entirely without `groqKey`. **Resolved FIRST of the opt-in providers** — see below | OpenAI | free |
+
+**`groq` is the second free lane, and its ceiling is tokens-per-MINUTE, not tokens.** Read off
+`x-ratelimit-*` on live replies 2026-08-04, never from docs: `llama-3.1-8b-instant` 14,400 req/day
+and **6,000 tok/min**; `llama-3.3-70b-versatile`, `qwen/qwen3.6-27b`, `openai/gpt-oss-120b|20b`
+1,000 req/day and **8,000 tok/min**. So it is a lane for short high-volume work — classify, extract,
+rerank — and one agent transcript would spend a day's budget. Inference itself is absurdly fast
+(0.01–0.04 s server-side), which is exactly what makes the minute limit the thing that bites.
+
+Two decisions here are load-bearing:
+
+1. **It resolves BEFORE `openrouter` and `freeaiapikey`.** `openai/gpt-oss-120b` and `-20b` are real
+   ids in all three catalogues; groq serves them free and the other two bill. openrouter declines
+   them today only because `openrouterFreeOnly` is on — flip that one flag with groq resolved below
+   it and this lane silently stops serving the ids it was added for, at a 200 the whole way. Free
+   before paid, decided by POSITION rather than by a flag nobody re-reads.
+2. **`groqModels` excludes the non-chat ids on purpose.** Groq advertises 15 ids on one base and
+   only some are chat models: `whisper-large-v3*` transcribe, `canopylabs/orpheus-*` speak,
+   `meta-llama/llama-prompt-guard-2-*` are 512-token classifiers. Routing one of those to
+   `/v1/chat/completions` fails — for an id that would otherwise have reached a provider that
+   answers. The seed is the four verified on the real path plus `gpt-oss-20b`. Verify before adding.
+
+**`openai/gpt-oss-*` are REASONING models and will return `content: ''` on a small `max_tokens`.**
+Measured through the router 2026-08-04: `max_tokens: 24` → `''`; `max_tokens: 400` → the right
+answer, `finish_reason: stop`, and `reasoning_tokens: 40` spent before the first content token. Same
+shape as the local qwen trap, and **deliberately NOT given an `applyLocalThinkingDefault()`-style
+shim** — the model is not broken, the budget was too small, and a shim here would be speculative
+code on a path that works. If a caller does hit it, the fix is their `max_tokens`, not this router.
+
+Unlike `freeaiapikey`, groq's ids are **bare** (`llama-3.1-8b-instant`), so the `vendor/model` shape
+that keeps the Max pool off that provider does not apply here. What keeps it safe is branch order —
+`isClaudeModel()` resolves before every opt-in provider — and `test/groq.test.mjs` pins that even a
+hand-written `claude-opus-5` in `groqModels` still loses to `claudecode`.
 
 **`freeaiapikey` is a cheaper reseller of the same frontier ids, and the reason it is worth a
 provider is arithmetic.** Measured against crazyrouter's live pricing API on 2026-08-04 (USD/1M,

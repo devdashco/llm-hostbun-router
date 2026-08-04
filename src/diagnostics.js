@@ -9,7 +9,7 @@
 const { CFG } = require("./config");
 const { dbRows, ACCT_DEAD } = require("./db");
 const { sendJson, readBody, readJson, mask, upstreamReason } = require("./http");
-const { resolveRoute, isGated, accountFor, freeaiapikeyModelEntries } = require("./routing");
+const { resolveRoute, isGated, accountFor, freeaiapikeyModelEntries, groqModelEntries } = require("./routing");
 const { recordCall } = require("./db");
 const TR = require("../translate");
 const { upstreamCatalogs, localModelEntries } = require("./claudecode");
@@ -157,6 +157,19 @@ async function health(req, res) {
       : faModels === 0 ? "freeaiapikeyModels is empty — the provider claims no model ids"
       : undefined,
   };
+  // groq, reported like the two above and NOT probed — for a third reason worth writing down: their
+  // /v1/models needs the key, so a probe here would be a real authenticated call, and this endpoint
+  // is polled. On a free tier where the scarce resource is requests-per-day, a health check that
+  // spends them is a health check that causes the outage it reports.
+  const gqModels = (CFG.groqModels || []).length;
+  const groq = {
+    up: !!CFG.groqKey && gqModels > 0,
+    status: null, probed: false, ms: 0,
+    count: gqModels, keySet: !!CFG.groqKey,
+    note: !CFG.groqKey ? "no groqKey — the provider claims no model ids"
+      : gqModels === 0 ? "groqModels is empty — the provider claims no model ids"
+      : undefined,
+  };
   const pool = CFG.claudecodeAccountPool || [];
   const alive = pool.filter((a) => !a.disabled && !ACCT_DEAD.has(a.name));
   const claudecode = {
@@ -176,13 +189,14 @@ async function health(req, res) {
   // The human-facing alert channel (src/alert.js). A rotated bot token drops every premium-app
   // warning silently — "nobody has created an opus app" and "nobody has been told" look identical
   // from here otherwise, which is the same trap dbWriteHealth and shipHealth exist for.
-  return sendJson(res, 200, { local, crazyrouter, claudecode, openrouter, freeaiapikey, gates: gateSnapshot(), alerts: alertHealth() });
+  return sendJson(res, 200, { local, crazyrouter, claudecode, openrouter, freeaiapikey, groq, gates: gateSnapshot(), alerts: alertHealth() });
 }
 
 async function catalogs(req, res) {
   const { claudecode, crazyrouter } = await upstreamCatalogs();
   return sendJson(res, 200, { local: localModelEntries(), claudecode, crazyrouter,
-    openrouter: openrouterModelEntries(), freeaiapikey: freeaiapikeyModelEntries() });
+    openrouter: openrouterModelEntries(), freeaiapikey: freeaiapikeyModelEntries(),
+    groq: groqModelEntries() });
 }
 
 // Latest per-account rate-limit snapshot harvested off real traffic (zero-token; see recordLimits).
