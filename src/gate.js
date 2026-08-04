@@ -20,11 +20,20 @@
 //     THIS NUMBER MUST TRACK THE SERVER, and it stopped: this said 6 against a 4-slot server from
 //     the day `-np` was cut, and the drift does NOT queue — it OVERSHOOTS. llama.cpp answers the
 //     5th and 6th concurrent request `503 no available server` in ~73 ms, so the gate hands the
-//     upstream exactly the burst it cannot take. Measured over the 24 h to 2026-08-04 on the local
-//     provider: 11,116 x 200 against 4,416 x 503 — 28% of every free-lane call refused, across
-//     bluebut AND agentic-marketplace, and 904 of bluebut's then fell through to crazyrouter, which
-//     bills. Too LOW idles the GPU silently; too HIGH fails a third of the traffic and spends money.
-//     Re-read total_slots after any `-np`, context or checkpoint change on the box.
+//     upstream exactly the burst it cannot take. Re-read total_slots after any `-np`, context or
+//     checkpoint change on the box. Too LOW idles the GPU silently; too HIGH refuses traffic AND
+//     spills it onto crazyrouter, which bills.
+//
+//     ⚠ The 24 h to 2026-08-04 measured 11,116 x 200 against 4,416 x 503 on this provider (28% of
+//     every free-lane call, across bluebut AND agentic-marketplace, 904 of them falling through to
+//     the paid lane) — and this gate drift was only PART of it. The larger half was pbox's
+//     llama.cpp being killed by its own memory cgroup: LLAMA_MEM 8g against a real ~8.7 GB working
+//     set, 7 kernel OOM kills and 27 restarts in 18 h, every restart 503ing until the model
+//     reloads. The kill is invisible from here AND from docker (`ExitCode=0`, `OOMKilled=false` —
+//     the kernel kills the process, not the container); `dmesg -T | grep llama-server` is the only
+//     honest source. Raised to 16g the same day: a 60-request 12-concurrent probe went from
+//     50x503 + 6x502 + 4x200 to 60/60 200. So do not read a 503 storm as proof this number is
+//     wrong — check the box first.
 //     It queues past that itself and never crashes, so this is not about crashing. It is about the
 //     clock: llama.cpp's queue wait runs INSIDE our UPSTREAM_HEADER_TIMEOUT_MS, which starts at
 //     fetch() and only stops when headers arrive. Send 100 and the ones at the back burn their
