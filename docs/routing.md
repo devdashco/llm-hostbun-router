@@ -96,6 +96,13 @@ actually be **sent**.
 
 Ask an admin, or `POST /api/routes {project, provider?, model?, allowProviders?, allowModels?}`.
 
+**An app with no rule at all is unrestricted**, which includes the premium claudecode ids
+(opus\*, fable\*) on the shared Max subscription. That is why a new app is normally created with
+`POST /api/apps` and a `tier` — see [Identity](identity.md).
+Whenever an app *becomes* able to reach a premium model — registered without a rule, widened to
+opus, or created as `tier: frontier` — the operator is notified. Nothing is refused; the point is
+that it is a decision somebody sees, not a default nobody does.
+
 ## Where did my request go?
 
 `POST /api/resolve {model, project}` answers exactly that: the provider, the model that would be

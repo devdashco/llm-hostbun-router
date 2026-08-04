@@ -38,7 +38,32 @@ curl -c /tmp/c -X POST https://llm.hostbun.cc/api/login \
 API() { curl -s -b /tmp/c -H 'content-type: application/json' "$@"; }
 ```
 
-**A project** (deployed code — no owner, because an app is not a person):
+**A project** (deployed code — no owner, because an app is not a person). Use `/api/apps`: it issues
+the key **and** writes the routing rule in one call, which is the half that gets forgotten —
+
+```bash
+API -X POST https://llm.hostbun.cc/api/apps -d '{"name":"myapp","tier":"standard"}'
+# -> {"consumer":"myapp","keyId":"…","key":"sk-llm-…","tier":"standard",
+#     "rule":{"allowModels":[…]}, "premium":false, "warning":"only time the key is shown"}
+```
+
+A consumer with **no routing rule is unrestricted**, and unrestricted includes the premium
+(opus/fable) models on the shared Claude Max subscription — ~5–10x haiku per token, and the fastest
+way to drain the 5h/7d windows everyone shares. So the `tier` is not decoration:
+
+| `tier` | what the app may resolve to |
+|---|---|
+| `standard` (default) | every advertised id **except** the premium claudecode ones |
+| `frontier` | the above **plus** opus/fable — the operator gets a warning |
+| `local` | the free on-prem GPU only |
+| `any` | no allowlist at all — also warns |
+
+The list behind a tier is resolved from the **live catalogs** at creation time, so a model shipped
+this morning is included without anyone editing a list. `models:[…]` overrides the tier when you
+genuinely want a literal set; `pin`, `account` and `allowUa` are optional and do the same thing as
+`/api/routes`, `/api/pins` and `/api/consumers/policy`.
+
+The lower-level call still exists and creates a consumer with **no rule**:
 
 ```bash
 API -X POST https://llm.hostbun.cc/api/consumers/keys -d '{"name":"myapp","kind":"app"}'
@@ -165,7 +190,8 @@ a dash would make the key unparseable.
 the secret:
 
 ```bash
-POST /api/consumers/keys   {"name":"my-app","kind":"app"}
+POST /api/apps             {"name":"my-app","tier":"standard"}   # key + routing rule
+POST /api/consumers/keys   {"name":"my-app","kind":"app"}        # key only, no rule
 → {"consumer":"my-app","keyId":"1a2b3c4d","key":"sk-llm-1a2b3c4d-…",
    "warning":"this is the only time the key is shown — store it in keyvault now"}
 ```
