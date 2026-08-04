@@ -13,13 +13,18 @@
 //     committed in devdashco/sd-turbo-service and undeployed — nobody here has ssh to that box — so
 //     limit 1 is the half we control. Serialising at this end fixes the same bug.
 //
-//   • `local` — llama.cpp, n_parallel 6 (verified live: /slots returns 6 slots at n_ctx 65536).
+//   • `local` — llama.cpp, n_parallel 4 (`GET /props` → total_slots, which is the authority; the
+//     server runs `-np 4 -c 65536` since the mmproj vision weights joined it on the same card).
 //     It was 2 until 2026-08-02, when the checkpoint changed from gemma-4-26B-QAT to Qwen3.5-9B and
 //     the weights went 13.6 GB -> 5.6 GB, paying for three times the slots inside the same card.
-//     THIS NUMBER MUST TRACK THE SERVER. Measured that day: gemma flatlined at 262 tok/s aggregate
-//     because 2 slots was its ceiling; Qwen reaches 395 at 6. Leave this at 2 against a 6-slot
-//     server and two thirds of the GPU idles while callers queue — the swap makes things WORSE,
-//     not better, and nothing errors to tell you.
+//     THIS NUMBER MUST TRACK THE SERVER, and it stopped: this said 6 against a 4-slot server from
+//     the day `-np` was cut, and the drift does NOT queue — it OVERSHOOTS. llama.cpp answers the
+//     5th and 6th concurrent request `503 no available server` in ~73 ms, so the gate hands the
+//     upstream exactly the burst it cannot take. Measured over the 24 h to 2026-08-04 on the local
+//     provider: 11,116 x 200 against 4,416 x 503 — 28% of every free-lane call refused, across
+//     bluebut AND agentic-marketplace, and 904 of bluebut's then fell through to crazyrouter, which
+//     bills. Too LOW idles the GPU silently; too HIGH fails a third of the traffic and spends money.
+//     Re-read total_slots after any `-np`, context or checkpoint change on the box.
 //     It queues past that itself and never crashes, so this is not about crashing. It is about the
 //     clock: llama.cpp's queue wait runs INSIDE our UPSTREAM_HEADER_TIMEOUT_MS, which starts at
 //     fetch() and only stops when headers arrive. Send 100 and the ones at the back burn their
@@ -29,7 +34,7 @@
 //
 // Limits are env, not CFG: they describe the hardware on the other end, which does not change from
 // the panel. `GATE_<PROVIDER>` overrides any of them; 0 (or junk) means ungated.
-const DEFAULTS = { local: 6, images: 1 };
+const DEFAULTS = { local: 4, images: 1 };
 const QUEUE_MAX = Math.max(1, Number(process.env.GATE_QUEUE_MAX) || 100);
 const WAIT_MS = Math.max(1000, Number(process.env.GATE_WAIT_MS) || 300_000);
 
