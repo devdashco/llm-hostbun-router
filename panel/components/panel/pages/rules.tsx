@@ -25,10 +25,24 @@ export function Rules() {
   const { state, reload } = useApp() as any;
   const [d, setD] = useState<any>(() => seed(state));
   const [known, setKnown] = useState<string[]>([]);
+  // What each provider ACTUALLY serves right now, from /api/models (claudecode reconciled against
+  // Anthropic every 6h, crazyrouter fetched live). Without it this page offered `cloudAllowlist` as
+  // the crazyrouter menu — which is empty whenever the policy is "open", i.e. in prod — so the ids
+  // the router really routes (glm-5.2, gemini-3.1-flash-lite) could not be picked at all and got
+  // hand-typed into rules instead. A hand-typed allowlist is how a rule ends up naming a model no
+  // upstream serves. Empty until it lands; PROJ_MODELS is the offline fallback.
+  const [live, setLive] = useState<Record<string, string[]>>({});
   const [nl, setNl] = useState("");
   useEffect(() => setD(seed(state)), [state]);
   useEffect(() => {
     (async () => {
+      try {
+        const m: any = await api("models");
+        const ids = (v: any) => (Array.isArray(v) ? v.map((x: any) => x.id).filter(Boolean) : []);
+        setLive({ claudecode: ids(m.claudecode), crazyrouter: ids(m.crazyrouter), local: ids(m.local) });
+      } catch {
+        /* upstream catalog unreachable — fall back to what state + PROJ_MODELS know */
+      }
       try {
         const s: any = await api("stats?window=all");
         setKnown((s.byProject || []).map((r: any) => r.project).filter(Boolean));
@@ -67,10 +81,11 @@ export function Rules() {
   ].sort();
   const seenSet = new Set(known.map((p) => String(p).split(":")[0]));
   const uniq = (a: string[]) => [...new Set(a.filter(Boolean))].sort();
+  const fallback = (prov: string) => PROJ_MODELS.filter((p) => p.provider === prov).map((p) => p.model);
   const catalog: Record<string, string[]> = {
-    claudecode: uniq([...(state.claudecodeModels || []), ...PROJ_MODELS.filter((p) => p.provider === "claudecode").map((p) => p.model)]),
-    crazyrouter: uniq([...(state.cloudAllowlist || []), ...PROJ_MODELS.filter((p) => p.provider === "crazyrouter").map((p) => p.model)]),
-    local: uniq([...Object.keys(state.localMap || {}), ...PROJ_MODELS.filter((p) => p.provider === "local").map((p) => p.model)]),
+    claudecode: uniq([...(live.claudecode || []), ...(state.claudecodeModels || []), ...fallback("claudecode")]),
+    crazyrouter: uniq([...(live.crazyrouter || []), ...(state.cloudAllowlist || []), ...fallback("crazyrouter")]),
+    local: uniq([...(live.local || []), ...Object.keys(state.localMap || {}), ...fallback("local")]),
   };
   const catalogOpts = PROVS.flatMap((p) => catalog[p].map((model) => ({ provider: p, model })));
 
