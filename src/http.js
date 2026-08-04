@@ -11,8 +11,9 @@ const fs = require("node:fs");
 const { Readable } = require("node:stream");
 const TR = require("../translate");
 const { CFG } = require("./config");
-const { clip, recordCall, recordLimits, CONTENT_CAP } = require("./db");
+const { clip, recordCall, recordLimits, CONTENT_CAP, ACCT_DEAD } = require("./db");
 const { accountFor, isGated, resolveRoute, note429, note2xx, autoDisableAccount, noteAcctCooldown, clearAcctCooldown } = require("./routing");
+const { retryOnAnotherAccount } = require("./accountfailover");
 
 // Hop-by-hop headers: meaningful to ONE connection, never forwarded. Dropped by the split; without
 // them buildHeaders() throws ReferenceError and every proxied request 502s.
@@ -299,10 +300,15 @@ async function proxy(req, res, base, opts = {}) {
   catch (e) { threw = true; fetchErr = e; }
   finally { clearTimeout(upTimer); }
 
-  // NOTE: there is no failover. Not to another account, not to another provider. A 429 means the
-  // project's pinned account is out of quota and the caller is told so; a 5xx means the upstream
-  // failed and the caller is told so. Silently re-answering with a different model on someone
-  // else's bill is what the old wrapper→crazyrouter path did, and it hid both cost and truth.
+  // Same model, another login of the same pool, on a 429. See src/accountfailover.js
+  // for why a selection rule cannot do this job. Mutates opts.account on success so the
+  // call is attributed to whoever actually served it.
+  if (provider === "claudecode" && !threw && up && up.status === 429 && opts.account) {
+    ({ up, threw, fetchErr } = await retryOnAnotherAccount(
+      { up, req, opts, base_rec, curTarget, curInit, stream, threw, fetchErr,
+        timeoutMs: UPSTREAM_HEADER_TIMEOUT_MS }));
+  }
+
   if (provider === "claudecode" && !threw && up && up.status === 429 && opts.account) {
     recordLimits(up.headers, base_rec.project, base_rec.sentModel || base_rec.reqModel, opts.account);
     // A 429 carries no ratelimit headers, so the harvested reading can't mark this account spent —

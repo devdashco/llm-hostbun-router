@@ -1,8 +1,10 @@
 // WHERE a request goes, and whether it is allowed to go there.
 //
 // Two invariants live here and must not be "improved" away:
-//   • No fallback. A 429 or a 5xx reaches the caller. Answering with a different model on a
-//     different provider hides both the cost and the truth.
+//   • No MODEL or PROVIDER fallback. A 5xx reaches the caller; so does a 429, once the pool is
+//     out. Answering with a different model on a different provider hides cost and truth.
+//     Carve-out (2026-08-04): a 429 may be retried on another login of the SAME pool with the
+//     SAME model — see src/accountfailover.js for why no selection rule can replace it.
 //   • One project, one account. accountFor() never rotates: rotation blows the per-org prompt
 //     cache (~12x cost) and makes "who spent this?" unanswerable after the fact.
 const { CFG, persistConfig, normProvider, isImageModel, WINDOW_MS } = require("./config");
@@ -340,19 +342,46 @@ function firstUsableAccount(now) {
 }
 
 let _autoName = null;   // last pick, for change-logging only
+
+// Below this much of the window left, an account is effectively out even though
+// `acctSpentNow()` still calls it usable — that only excludes a window at the cap, so
+// 96% counted as fully available, and ordering by soonest reset then PREFERRED it (the
+// account closest to forfeiting is usually the one closest to spent). Measured
+// 2026-08-04: bofrid was handed `claude4` (u7=0.96) and `emphyx` (0.72) call after call
+// while `claude2mejlto` sat at 0. A margin, not `>= 1`, because the reading is a
+// whole-account aggregate off Haiku and the higher tiers run dry well before 1.0.
+const HEADROOM_FLOOR = 0.15;
+
 function autoAccount() {
   const now = Date.now();
-  let best = null, bestReset = Infinity;
+  const cand = [];
   for (const a of CFG.claudecodeAccountPool || []) {
     if (!acctUsable(a, now)) continue;                            // dead login or a spent window
     const r = acctReading(a);
     if (!r || !r.reset7) continue;                                // no weekly reading → not orderable here (Tier B handles it)
     const reset7ms = r.reset7 * 1000;                             // anthropic resets are epoch SECONDS
     if (reset7ms <= now) continue;                                // window already rolled; reading is stale
-    if (reset7ms < bestReset || (reset7ms === bestReset && best && a.name < best.name)) { best = a; bestReset = reset7ms; }
+    cand.push({ a, reset7ms, left: 1 - Math.max(Number(r.u5) || 0, Number(r.u7) || 0) });
   }
-  if (best && best.name !== _autoName) {
-    console.log(`[route] auto account -> ${best.name} (weekly reset ${new Date(bestReset).toISOString()})`);
+  if (!cand.length) return null;
+
+  // Burning the about-to-forfeit weekly window first is still the strategy — but only
+  // among accounts that have something left to burn. When none do, take the least-spent
+  // rather than the soonest-to-reset, which is the pick that was returning 429s.
+  const roomy = cand.filter((c) => c.left >= HEADROOM_FLOOR);
+  const pool = roomy.length ? roomy : cand;
+  pool.sort((x, y) =>
+    roomy.length
+      ? x.reset7ms - y.reset7ms || (x.a.name < y.a.name ? -1 : x.a.name > y.a.name ? 1 : 0)
+      : y.left - x.left || (x.a.name < y.a.name ? -1 : x.a.name > y.a.name ? 1 : 0),
+  );
+
+  const best = pool[0].a;
+  if (best.name !== _autoName) {
+    console.log(
+      `[route] auto account -> ${best.name} (${Math.round(pool[0].left * 100)}% left, weekly reset ` +
+        `${new Date(pool[0].reset7ms).toISOString()}${roomy.length ? "" : ", NOTHING above the headroom floor"})`,
+    );
     _autoName = best.name;
   }
   return best;
