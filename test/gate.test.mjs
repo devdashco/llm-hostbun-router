@@ -182,12 +182,15 @@ console.log("gate");
   check("the harness got an admin cookie", !!cookie, "login failed — the checks below would be vacuous");
   const h = await fetch(`http://127.0.0.1:${PORT}/api/health`, { headers: { cookie } })
     .then((r) => r.json()).catch(() => null);
-  check("/api/health carries a gate snapshot", !!(h && h.gates && h.gates.local), JSON.stringify(h && h.gates));
+  // The local gate is keyed per GPU BOX (`local@<host>`, see keyFor) — pbox and ww each get their
+  // own queue — so the snapshot no longer has a plain `local` row to read. Find it by prefix.
+  const localGate = h && h.gates && Object.entries(h.gates).find(([k]) => k === "local" || k.startsWith("local@"));
+  check("/api/health carries a gate snapshot", !!localGate, JSON.stringify(h && h.gates));
   check("the images gate is reported at limit 1 before any image traffic",
     !!(h && h.gates && h.gates.images && h.gates.images.limit === 1),
     `images gate: ${JSON.stringify(h && h.gates && h.gates.images)}`);
   check("the gate drains — nothing is left holding a slot",
-    !!(h && h.gates && h.gates.local.active === 0 && h.gates.local.queued === 0), JSON.stringify(h && h.gates && h.gates.local));
+    !!(localGate && localGate[1].active === 0 && localGate[1].queued === 0), JSON.stringify(localGate));
 }
 
 // ── 6. the shipped defaults, read straight off the module. These are hardware facts (one diffusers

@@ -88,7 +88,7 @@ refs may still linger in sibling repos.
   `test/docs.test.mjs` fails the build if a password, `sk-ant-oat…`, `sk-llm-…` or a `DATABASE_URL`
   ever lands in it.
 
-## Tests — `npm test` (25 suites, ~660 checks, ~75s)
+## Tests — `npm test` (26 suites, ~674 checks, ~75s)
 
 No network beyond loopback, no database, zero runtime deps. Run before every push. The count and
 the suite list are checked against `package.json` by `docs-claims.test.mjs`, because this section
@@ -151,6 +151,19 @@ wrong about the gate is how a suite gets added and then quietly dropped.
   api.anthropic.com would be a self-inflicted outage no 500 ever reveals — probed: 2 red), and
   leaking a slot when a queued caller hangs up, which is invisible until the gate is permanently
   full and every caller 503s against an idle GPU.
+
+- `test/gate-perbox.test.mjs` — the gate serialises the RIGHT SET. `local` is not one piece of
+  hardware: pbox's 4090 and ww's 3070 each serve their own models from their own card, so one
+  shared `local` queue made a batch against one box wait for the other. Measured 2026-08-04 —
+  agentic-marketplace held `local` at 4/4 with 8 queued against pbox while ww's `qwen3.5-2b`, which
+  answers in 0.06 s asked directly, took 9-11 s through the router, queueing for a GPU it never
+  touches. Every one of those was a 200, which is why the concurrency-counting suite above cannot
+  see this class of bug at all. Pins `keyFor` (one key per base, only for `local`, stable, and
+  falling back when the base is absent or unparseable) and the trap inside `limitFor`: it looks up
+  `DEFAULTS[key]`, so keying by base without splitting the provider half back off yields `undefined`
+  -> limit 0 -> **ungated**, i.e. admission control deleting itself silently. Also pins that the key
+  set is bounded by the CONFIGURED bases rather than by traffic, so `gates` cannot grow into an
+  unbounded cache.
 
 - `test/local-default.test.mjs` — what the FREE lane resolves to on a cold boot, i.e. with no
   `/data/config.json`. Production reads `localMap` off the volume, so the env seed is invisible until

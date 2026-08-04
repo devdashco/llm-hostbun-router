@@ -227,7 +227,7 @@ const server = http.createServer(async (req, res) => {
     // cost: it is about `byProject`/`byModel` telling the truth about who runs what.
     let m = null;
     if (bodyBuf.length) { try { m = JSON.parse(bodyBuf.toString()).model ?? null; } catch { /* not json */ } }
-    return GATE.run("local", req, res, () => proxy(req, res, CFG.bases.local, { bodyBuf, provider: "local", model: m, project: extractProject(req, bodyBuf) }));
+    return GATE.run(GATE.keyFor("local", CFG.bases.local), req, res, () => proxy(req, res, CFG.bases.local, { bodyBuf, provider: "local", model: m, project: extractProject(req, bodyBuf) }));
   }
   if (req.method === "GET" && (path === "/v1/models" || path === "/api/v1/models"))
     return mergedModels(res);
@@ -542,8 +542,8 @@ const server = http.createServer(async (req, res) => {
     return proxy(req, res, route.base, { ...route, bodyBuf, model, provider, project, translate });
   };
 
-  // Admission control (src/gate.js): single-GPU providers are serialised; claudecode/crazyrouter fall straight through, because they run their own concurrency and their 429 is a signal to surface rather than absorb.
-  return GATE.run(provider, req, res, dispatch);
+  // Admission control (src/gate.js): single-GPU providers are serialised; claudecode/crazyrouter fall straight through, because they run their own concurrency and their 429 is a signal to surface rather than absorb. Keyed by BASE for local, so a burst against one GPU box does not queue the other box's traffic.
+  return GATE.run(GATE.keyFor(provider, route.base), req, res, dispatch);
 });
 
 server.listen(PORT, () => {

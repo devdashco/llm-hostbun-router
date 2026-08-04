@@ -48,9 +48,32 @@ const DEFAULTS = { local: 4, images: 1 };
 const QUEUE_MAX = Math.max(1, Number(process.env.GATE_QUEUE_MAX) || 100);
 const WAIT_MS = Math.max(1000, Number(process.env.GATE_WAIT_MS) || 300_000);
 
+// ONE GATE PER PIECE OF HARDWARE, and `local` is not one piece of hardware. pbox's 4090 and ww's
+// 3070 each serve their own models from their own card (routing.js localBaseFor), so a single
+// `local` queue made a batch against one box wait for the other. Measured 2026-08-04:
+// agentic-marketplace's mirror.py --workers 40 held local 4/4 with 8 queued for minutes, and ww's
+// qwen3.5-2b — 0.06 s asked directly, 0.28 s over its tunnel — answered in 9-11 s through here,
+// queueing for a GPU it does not use. Keying by base fixes it.
+// The key set is bounded by the CONFIGURED bases, never by model or caller input, so `gates` cannot
+// grow: two boxes today, two entries. Do not key this by model.
+const keyFor = (provider, base) => {
+  if (provider !== "local" || !base) return provider;
+  try { return `local@${new URL(base).host}`; } catch { return provider; }
+};
+
+// A key is `<provider>` or `<provider>@<host>`. DEFAULTS and the plain `GATE_<PROVIDER>` override
+// resolve off the PROVIDER half — miss that and `DEFAULTS["local@host"]` is undefined, which the
+// last line reads as 0, which means UNGATED. That is the fast way to delete admission control by
+// accident, so the split is pinned by test/gate-perbox.test.mjs.
+// `GATE_LOCAL` still moves every local box at once; `GATE_LOCAL_<HOST>` moves one (ww serves
+// total_slots=1, pbox 4).
+const envKey = (s) => `GATE_${s.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
 const limitFor = (p) => {
-  const env = process.env[`GATE_${String(p || "").toUpperCase()}`];
-  const n = env == null || env === "" ? DEFAULTS[p] : Number(env);
+  const key = String(p || "");
+  const provider = key.split("@")[0];
+  const perBox = process.env[envKey(key)];
+  const env = perBox == null || perBox === "" ? process.env[envKey(provider)] : perBox;
+  const n = env == null || env === "" ? DEFAULTS[provider] : Number(env);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 };
 
@@ -64,8 +87,10 @@ function gateFor(provider) {
   return g;
 }
 // Seed the known gates so a snapshot reports them before any traffic — "images: not in this object"
-// and "images: unlimited" must not look alike on a health page.
-for (const p of Object.keys(DEFAULTS)) gateFor(p);
+// and "images: unlimited" must not look alike on a health page. `local` is skipped because it is
+// seeded per BASE on first use: seeding the bare name would park a permanently-idle `local` row on
+// the health page beside the real `local@host` ones.
+for (const p of Object.keys(DEFAULTS)) if (p !== "local") gateFor(p);
 
 // Hand free slots to whoever is waiting. Callers that hung up or timed out while queued are already
 // settled and are skipped — their slot was never taken, so there is nothing to give back.
@@ -150,4 +175,4 @@ async function run(provider, req, res, work) {
 const snapshot = () => Object.fromEntries([...gates].map(([p, g]) =>
   [p, { limit: g.limit, active: g.active, queued: g.q.length, peakQueued: g.peakQueued, refused: g.refused }]));
 
-module.exports = { run, snapshot, limitFor, QUEUE_MAX, WAIT_MS };
+module.exports = { run, snapshot, limitFor, keyFor, QUEUE_MAX, WAIT_MS };
