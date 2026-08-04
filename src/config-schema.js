@@ -203,33 +203,39 @@ function sanitizeLimit(v) {
 // config.js — which was at 521 lines against a 500 budget once the ww half was added.
 const CANON = process.env.LOCAL_MODEL || "qwen3.5-9b";
 const LOCAL_ALIASES = ["local", "gemma", "gemma-4-26b", "qwen", "qwen3.5-9b"];
-// One provider, TWO boxes since 2026-08-03. ww's RTX 3070 already serves the image model; what is
-// left of that card (~2.6 GB at its measured 5545 MiB peak) fits a 2B, so these ids resolve to ww.
+// The small lane: one provider, one box, but a SECOND llama.cpp of its own. It lived on ww's RTX
+// 3070 from 2026-08-03 to 2026-08-04, in the ~2.6 GB the image model left free there. It moved to
+// pbox's 4090 because those 1864 MiB were precisely what stopped SANA staying resident on an
+// 8192 MiB card — freeing them let imagegen drop OFFLOAD and its whole cold path with it.
+// It stays a separate process rather than folding into the 9B: the point of a small lane is a
+// queue the big model cannot block, which is the contention the per-box gate fixed on 2026-08-04.
 // The split is a BASE, not a provider: which machine holds a checkpoint is not a billing or policy
 // distinction, and gate/pricing/analytics all key on `provider`.
-const WW_CANON = process.env.LOCAL_MODEL_WW || "qwen3.5-2b";
-const WW_ALIASES = ["qwen3.5-2b", "qwen-small"];
-// ww is reached at its OWN hostname, exactly as the image model already is (`bases.images` →
-// imagegen-ww.hostbun.cc). Both are Coolify resources on the ww box; the hostname is the managed,
-// restartable, monitored way in. The previous default `http://10.0.1.250:8001` was none of those
-// and was not even ww: on hostbun that address is a SECONDARY IP of the docker bridge
-// (`ip route get 10.0.1.250` → local, dev lo) and the listener on :8001 is **sshd** — a hand-made
-// `ssh -R` reverse tunnel from ww, owned by nobody, restarted by nothing, gone on the next reboot.
-// It answers 200 until the day the session drops, and then the free lane's small model refuses
-// connections from the router's own box for a reason nothing in Coolify can show you.
-const WW_BASE = (process.env.LOCAL_BASE_WW || "https://qwen-ww.hostbun.cc").replace(/\/$/, "");
+const SMALL_CANON = process.env.LOCAL_MODEL_SMALL || "qwen3.5-2b";
+const SMALL_ALIASES = ["qwen3.5-2b", "qwen-small"];
+// Reached at its OWN hostname, exactly as the image model is (`bases.images` →
+// imagegen-ww.hostbun.cc) — a Coolify resource, so the hostname is the managed, restartable,
+// monitored way in. Do NOT collapse this onto LOCAL_BASE just because both are pbox now: they are
+// two containers on two ports, and pbox.llm.hostbun.cc holds the 9B alone.
+// The pre-2026-08-04 default `http://10.0.1.250:8001` was none of those and was not even ww: on
+// hostbun that address is a SECONDARY IP of the docker bridge (`ip route get 10.0.1.250` → local,
+// dev lo) and the listener on :8001 is **sshd** — a hand-made `ssh -R` reverse tunnel from ww,
+// owned by nobody, restarted by nothing, gone on the next reboot. It answers 200 until the day the
+// session drops, and then the free lane's small model refuses connections from the router's own box
+// for a reason nothing in Coolify can show you.
+const SMALL_BASE = (process.env.LOCAL_BASE_SMALL || "https://qwen-small.llm.hostbun.cc").replace(/\/$/, "");
 const OBLIT = process.env.LOCAL_MODEL_2 || "qwen3.6-27b-obliterated";
 const E4B = process.env.LOCAL_MODEL_3 || "gemma-4-e4b-it-obliterated";
 // alias -> the model id its box actually answers to.
 const LOCAL_MAP_SEED = {
   ...Object.fromEntries(LOCAL_ALIASES.map((id) => [id, CANON])),
-  ...Object.fromEntries(WW_ALIASES.map((id) => [id, WW_CANON])),
+  ...Object.fromEntries(SMALL_ALIASES.map((id) => [id, SMALL_CANON])),
 };
-// model id -> the base that serves it, for the ids that are NOT on pbox. Keyed on both the alias
-// and the canonical id, because providerRoute is reached with whichever of the two was named. An id
-// absent here is pbox, so losing this map degrades to "ww's ids 404 on pbox's llama.cpp" — an
-// honest failure, never a silent hop onto a per-token provider.
-const LOCAL_BASES_SEED = Object.fromEntries([...WW_ALIASES, WW_CANON].map((id) => [id, WW_BASE]));
+// model id -> the base that serves it, for the ids that are NOT on bases.local. Keyed on both the
+// alias and the canonical id, because providerRoute is reached with whichever of the two was named.
+// An id absent here goes to bases.local, so losing this map degrades to "the small ids 404 on the
+// 9B's llama.cpp" — an honest failure, never a silent hop onto a per-token provider.
+const LOCAL_BASES_SEED = Object.fromEntries([...SMALL_ALIASES, SMALL_CANON].map((id) => [id, SMALL_BASE]));
 
 module.exports = {
   PROVIDERS, PROVIDER_SET, LEGACY_PROVIDER, normProvider, providerOf,
@@ -237,6 +243,6 @@ module.exports = {
   IMAGE_TEMPLATE_MODELS, IMAGE_TEMPLATE_SLUG, sanitizeImageTemplate,
   WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES, ACCOUNT_STRATEGIES,
   sanitizeRule, sanitizeLimit,
-  CANON, LOCAL_ALIASES, WW_CANON, WW_ALIASES, WW_BASE, OBLIT, E4B,
+  CANON, LOCAL_ALIASES, SMALL_CANON, SMALL_ALIASES, SMALL_BASE, OBLIT, E4B,
   LOCAL_MAP_SEED, LOCAL_BASES_SEED,
 };
