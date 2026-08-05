@@ -647,6 +647,22 @@ def _date_compact(iso: str | None) -> str:
         return ""
 
 
+def _ends_chip(row: dict) -> str:
+    """The SUB-ENDS cell: '⌛12d', '⌛today', '⌛ENDED', or empty.
+
+    Empty means no end date is recorded, i.e. the subscription auto-renews —
+    NOT "unknown, assume fine" and not "0 days". The router sends
+    endsAt/endsInDays as null together for exactly that case, and a placeholder
+    here would put every healthy account in the column this one exists to
+    make scannable."""
+    d = row.get("ends_in")
+    if d is None:
+        return ""
+    if d < 0:
+        return "⌛ENDED"
+    return "⌛today" if d == 0 else f"⌛{d}d"
+
+
 def _countdown(iso: str | None) -> str:
     if not iso:
         return "—"
@@ -948,6 +964,11 @@ def fetch() -> dict:
             "r7": _countdown(iso7),
             "c7": _clock(iso7),
             "d7": _date_compact(iso7),   # reset DATE for the row ('Mon 13 Jul')
+            # SUBSCRIPTION end — the day this login stops answering at all (cancelled or
+            # refunded). Not a usage window: no reset brings it back. Both None = auto-renewing,
+            # which must render as blank, never as "ends today".
+            "ends_at": a.get("endsAt") or None,
+            "ends_in": a.get("endsInDays") if isinstance(a.get("endsInDays"), int) else None,
             "wk_left": _remain_frac(iso7),       # 0..1 of the 7d window LEFT
             "_reset7": lm.get("reset7"),         # raw epoch — sort key (soonest reset on top)
             "machines": machines_by.get(name, []),   # boxes currently on this account
@@ -1694,8 +1715,8 @@ def run(stdscr):
                        "WEEKLY is the binding limit  ·  ★ pinned acct  ● gateway active")[:w], C_DIM)
             # column x-positions must mirror the row draw below: mark(2) + name(12)
             # + ·org(6) + state(9) + weekly bar(11) + " · reset"(9) + " date"(11)
-            # + " " + 5h bar(11) + " · reset"(9)
-            put(5, 0, f"  {'ACCOUNT':<12}{'ORG':<6}{'STATE':<9}{'WEEKLY':<11}{' · RESETS':<9}{' (DATE)':<11} {'5-HOUR':<11}{' · RESETS':<9}  BOX",
+            # + " " + 5h bar(11) + " · reset"(9) + " sub-ends"(9)
+            put(5, 0, f"  {'ACCOUNT':<12}{'ORG':<6}{'STATE':<9}{'WEEKLY':<11}{' · RESETS':<9}{' (DATE)':<11} {'5-HOUR':<11}{' · RESETS':<9}{' SUB ENDS':<9}  BOX",
                 C_ACCENT | curses.A_UNDERLINE)
             if data["err"]:
                 put(h - 5, 2, f"! {data['err']}"[:w - 3], C_HOT)
@@ -1745,6 +1766,13 @@ def run(stdscr):
                 x = draw_used_bar(y, x, u5, rev)
                 r5 = (r.get("r5") or "").replace(" ", "") or "—"
                 x = put(y, x, f" · {r5:<6}", C_DIM | rev)
+                # SUB ENDS: only drawn when a date is set. An account with none is auto-renewing,
+                # and a blank cell is the honest render of that — a "0d"/"—" there would read as
+                # "expiring", which is the one thing this column exists to warn about. Unlike the
+                # two bars beside it, no reset undoes this: the login is gone on that date.
+                ed = r.get("ends_in")
+                eattr = (C_DIM if ed is None else C_HOT if ed <= 3 else C_WARN if ed <= 14 else C_DIM)
+                x = put(y, x, f" {_ends_chip(r):<8}", eattr | rev)
                 # BOX: machines verified on this account
                 machs = r.get("machines") or []          # boxes verified on this account
                 if machs and x < w - 2:
@@ -1767,9 +1795,19 @@ def run(stdscr):
                 # weekly (7d) is the binding limit → lead with it, plain words.
                 def _left(u):
                     return f"{100 - u:.0f}" if isinstance(u, (int, float)) else "?"
+                # sub-ends is a different KIND of fact from the two windows: they reset, this one
+                # does not, so it is spelled out rather than left as the row's chip.
+                ed, eat = cur.get("ends_in"), cur.get("ends_at")
+                if ed is None:
+                    ends = "auto-renews (no end date set — cccc: account_meta)"
+                elif ed < 0:
+                    ends = f"ENDED {eat} ({-ed}d ago)"
+                else:
+                    ends = f"ENDS {eat} (in {ed}d)"
                 det = (f"  {cur['name']}:  WEEKLY {_left(cur['u7'])}% left · resets {cur.get('c7') or '?'} "
                        f"(in {cur['r7'] or '—'})    ·    5h {_left(cur['u5'])}% left · resets "
-                       f"{cur.get('c5') or '?'} (in {cur['r5'] or '—'})    ·    org {org_short}")
+                       f"{cur.get('c5') or '?'} (in {cur['r5'] or '—'})    ·    sub {ends}"
+                       f"    ·    org {org_short}")
                 put(h - 3, 0, det[:w], C_CYAN)
             elif sel >= n_acct:
                 put(h - 3, 2, _wrap(_POOL_ITEMS[sel - n_acct][2], w - 4)[0][:w - 3], C_CYAN)

@@ -8,10 +8,23 @@
 // nowhere else, so each mutation persists and each one is logged with the ip that asked. The pins
 // route merges a single entry on purpose: POST /api/config assigns projectAccounts wholesale, so a
 // save built from a stale render would delete every other project's pin.
-const { CFG, persistConfig } = require("./config");
+const { CFG, persistConfig, validEndsAt } = require("./config");
 const { dbRows, ACCT_DEAD, ORG_OF_ACCOUNT } = require("./db");
 const { sendJson, readJson } = require("./http");
 const { accountFor } = require("./routing");
+
+// `endsAt` is a plain YYYY-MM-DD: the day this subscription's ACCESS stops — a cancelled or
+// refunded Max sub, or a trial. It is hand-set because nothing on api.anthropic.com carries it
+// (the setup-token says nothing about billing), and it is deliberately BLANK for an auto-renewing
+// account: a renewal date rendered as "ends in 3d" is a lie that reads as an outage about to
+// happen. Days are counted to the END of that day in UTC, so the account still reads `0` (today,
+// not gone) on its last day; a negative number is an expired sub still sitting in the pool.
+const DAY_MS = 86400000;
+const ENDS_AT_ERR = 'endsAt must be YYYY-MM-DD (or "" to clear)';
+function endsInDays(endsAt, now = Date.now()) {
+  if (!validEndsAt(String(endsAt || ""))) return null;
+  return Math.floor((Date.parse(`${endsAt}T23:59:59Z`) - now) / DAY_MS);
+}
 
 async function listAccounts(req, res) {
   const pool = CFG.claudecodeAccountPool || [];
@@ -58,6 +71,9 @@ async function listAccounts(req, res) {
       // saw a 403 permission_error (OAuth disabled) this process. Both mean "don't route to it".
       disabled: !!a.disabled,
       dead: ACCT_DEAD.has(a.name),
+      // null = no end date known, which here means "auto-renewing" — never render it as 0 days.
+      endsAt: a.endsAt || null,
+      endsInDays: endsInDays(a.endsAt),
       projects: Object.keys(pins).filter((p) => pins[p] === a.name).sort(),
       limits: l ? { ts: Number(l.ts) || 0, u5: l.u5, u7: l.u7, reset5: l.reset5, reset7: l.reset7,
         status: l.status, s5: l.s5, s7: l.s7, lastProject: l.project, lastModel: l.model } : null,
@@ -116,6 +132,8 @@ async function setAccountToken(req, res, ip) {
   // email/disabled: "" or false clears, a value sets, undefined leaves it as-is.
   const email = p.email !== undefined ? String(p.email || "").trim() : undefined;
   const disabled = p.disabled !== undefined ? !!p.disabled : undefined;
+  const endsAt = p.endsAt !== undefined ? String(p.endsAt || "").trim() : undefined;
+  if (endsAt && !validEndsAt(endsAt)) return sendJson(res, 400, { error: ENDS_AT_ERR });
   if (!name || !token) return sendJson(res, 400, { error: "account and token required" });
   if (!/^sk-ant-oat/.test(token)) return sendJson(res, 400, { error: "expected a Max setup-token (sk-ant-oat…)" });
   const pool = [...(CFG.claudecodeAccountPool || [])];
@@ -129,11 +147,13 @@ async function setAccountToken(req, res, ip) {
     const entry = { name, org: "", token };
     if (email) entry.email = email;
     if (disabled) entry.disabled = true;
+    if (endsAt) entry.endsAt = endsAt;
     pool.push(entry);
   } else {
     const cur = { ...pool[i], token };
     if (email !== undefined) { if (email) cur.email = email; else delete cur.email; }
     if (disabled !== undefined) { if (disabled) cur.disabled = true; else delete cur.disabled; }
+    if (endsAt !== undefined) { if (endsAt) cur.endsAt = endsAt; else delete cur.endsAt; }
     pool[i] = cur;
   }
   CFG.claudecodeAccountPool = pool;
@@ -166,6 +186,37 @@ async function setAccountDisabled(req, res, ip) {
   const stranded = Object.keys(pins).filter((pj) => String(pins[pj]).toLowerCase() === cur.name.toLowerCase()).sort();
   console.warn(`[admin] account ${disabled ? "DISABLED" : "re-enabled"} name=${cur.name} stranded=${stranded.join(",") || "-"} ip=${ip} persisted=${persisted}`);
   return sendJson(res, 200, { ok: true, persisted, account: cur.name, disabled: !!cur.disabled, stranded });
+}
+
+// Set the human-maintained labels on ONE account without touching its credential
+// (POST /api/accounts/meta {account, email?, endsAt?}). `accounts/token` can already write these,
+// but only alongside a token — so recording "this sub was cancelled, it dies on the 28th" would
+// have meant re-pasting the sk-ant-oat, and the pool file is the only copy of it. Both fields are
+// leave-as-is when absent and cleared by "".
+async function setAccountMeta(req, res, ip) {
+  const p = await readJson(req, res);
+  if (!p) return;
+  const name = String(p.account || p.name || "").trim();
+  if (!name) return sendJson(res, 400, { error: "account required" });
+  const email = p.email !== undefined ? String(p.email || "").trim() : undefined;
+  const endsAt = p.endsAt !== undefined ? String(p.endsAt || "").trim() : undefined;
+  if (endsAt && !validEndsAt(endsAt)) return sendJson(res, 400, { error: ENDS_AT_ERR });
+  if (email === undefined && endsAt === undefined) return sendJson(res, 400, { error: "nothing to set — send email and/or endsAt" });
+  const pool = [...(CFG.claudecodeAccountPool || [])];
+  const i = pool.findIndex((a) => String(a.name).toLowerCase() === name.toLowerCase());
+  if (i < 0) return sendJson(res, 400, { error: `unknown account '${name}'`, accounts: pool.map((a) => a.name) });
+  const cur = { ...pool[i] };
+  if (email !== undefined) { if (email) cur.email = email; else delete cur.email; }
+  if (endsAt !== undefined) { if (endsAt) cur.endsAt = endsAt; else delete cur.endsAt; }
+  pool[i] = cur;
+  CFG.claudecodeAccountPool = pool;
+  CFG.anthropicPool = pool;   // legacy mirror kept in sync so a rollback still boots
+  const persisted = persistConfig();
+  console.log(`[admin] account meta name=${cur.name} email=${email ?? "(kept)"} endsAt=${endsAt ?? "(kept)"} ip=${ip} persisted=${persisted}`);
+  return sendJson(res, 200, {
+    ok: true, persisted, account: cur.name, email: cur.email || null,
+    endsAt: cur.endsAt || null, endsInDays: endsInDays(cur.endsAt),
+  });
 }
 
 // Remove ONE account from the pool, credential and all. Filters by name server-side so every other
@@ -217,4 +268,4 @@ async function revealToken(req, res) {
   return sendJson(res, 200, { name: acct.name, org: acct.org || "", token: acct.token || "" });
 }
 
-module.exports = { listAccounts, setPin, setAccountToken, setAccountDisabled, removeAccount, revealToken };
+module.exports = { listAccounts, setPin, setAccountToken, setAccountMeta, setAccountDisabled, removeAccount, revealToken, endsInDays };

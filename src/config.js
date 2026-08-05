@@ -50,7 +50,7 @@ const {
   IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel,
   IMAGE_TEMPLATE_MODELS, IMAGE_TEMPLATE_SLUG, sanitizeImageTemplate,
   WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES, ACCOUNT_STRATEGIES,
-  sanitizeRule, sanitizeLimit,
+  sanitizeRule, sanitizeLimit, sanitizeAccount, validEndsAt,
   CANON, OBLIT, E4B, LOCAL_MAP_SEED, LOCAL_BASES_SEED,
 } = SCHEMA;
 
@@ -393,15 +393,7 @@ function mergeConfig(base, saved) {
     if (raw) {
       c.claudecodeAccountPool = raw
         .filter((a) => a && typeof a.token === "string" && a.token.trim())
-        .map((a) => {
-          // email is a human label (which Anthropic login this is); disabled marks a dead/retired
-          // subscription so routing skips it (see accountFor). Both are optional and only kept when
-          // set, so a plain {name,org,token} entry stays byte-clean on disk.
-          const e = { name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), token: a.token.trim() };
-          if (a.email && String(a.email).trim()) e.email = String(a.email).trim();
-          if (a.disabled) e.disabled = true;
-          return e;
-        });
+        .map(sanitizeAccount);   // config-schema.js — which optional labels survive a reload
     }
   }
   // UNION, not replace. The live /data/config.json predates four of these ids, and a plain
@@ -589,7 +581,7 @@ const keyIndex = () => KEY_INDEX;
 
 module.exports = {
   CFG, setCFG, loadConfig, persistConfig, mergeConfig, envDefaults,
-  PROVIDERS, PROVIDER_SET, normProvider, providerOf, sanitizeRule, sanitizeLimit,
+  PROVIDERS, PROVIDER_SET, normProvider, providerOf, sanitizeRule, sanitizeLimit, sanitizeAccount, validEndsAt,
   IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES, ACCOUNT_STRATEGIES, WINDOW_MS,
   CLAUDECODE_MODEL_SEED, CLAUDECODE_MODEL_ALIASES, CLAUDECODE_MODEL_REFRESH_MS,
   CONFIG_FILE, UI_ROUTES, reindexKeys, keyIndex, CANON, OBLIT, E4B,

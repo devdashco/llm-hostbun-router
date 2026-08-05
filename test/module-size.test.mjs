@@ -25,8 +25,8 @@ const BUDGET = 500;
 // These are not exemptions — they are debts with a number attached.
 const CEILINGS = {
   "server.js": 600,      // the HTTP layer + the path table + boot; the dispatch handler is the bulk
-  "src/admin.js": 535,   // was 1179 before the four route modules were lifted out on 2026-07-26
-  "src/config.js": 596,  // env defaults + the /data/config.json merge; two literals of every key
+  "src/admin.js": 539,   // was 1179 before the four route modules were lifted out on 2026-07-26
+  "src/config.js": 588,  // env defaults + the /data/config.json merge; two literals of every key
   "src/routing.js": 575, // the routing chain AND all of account selection — see the note below
 };
 
@@ -65,6 +65,13 @@ const CEILINGS = {
 // this repo's control-plane extractions were verified byte-for-byte before landing (see CLAUDE.md),
 // and doing a 215-line move in the same commit as two behaviour changes is how a split goes wrong.
 // Do it on its own, and lower the ceiling to the new number in that commit.
+//
+// 2026-08-05, `endsAt` (the day a Max subscription's access stops): admin.js +4 — the
+// `accounts/meta` dispatch line, the two fields on the state row, and the sentence saying why a
+// labels-only write exists at all. config.js came DOWN 596 → 588 in the same commit, because the
+// account-entry sanitizer moved into config-schema.js, which is the file that owns validators and
+// has 250 lines of room. That is the trade the note above asks for: pay a ceiling only where the
+// dispatcher genuinely has to grow, and take the leaf logic out of the file that is nearly full.
 
 const files = ["server.js", "translate.js",
   ...readdirSync(join(ROOT, "src")).filter((f) => f.endsWith(".js")).map((f) => `src/${f}`)];

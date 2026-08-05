@@ -369,6 +369,39 @@ console.log("accounts — create / email / disable:");
   api("config", { projectAccounts: {} });
 }
 
+// `endsAt` — the day a subscription's ACCESS stops (cancelled/refunded Max), as opposed to the 5h/7d
+// windows beside it, which reset. Nothing on api.anthropic.com carries it, so it is hand-set, and
+// every failure mode here is silent:
+//   · the sanitizer dropping it (the `allowUa` trap) — the panel saves, the restart forgets, and the
+//     column reads "auto-renewing" for a sub that dies on Friday. acctA carries one in parity-seed
+//     .json, so it reaches CFG through the FILE, which is the only path the sanitizer is on.
+//   · rendering "no end date" as 0 days. Same rule as `limits: null`: unknown is not "today".
+//   · a typo'd date. `2026-02-31` matches the YYYY-MM-DD regex and Date.parse ACCEPTS it, rolling to
+//     3 March — so a regex-only guard stores a date that is silently three days wrong.
+//   · /api/state losing the field: that response, not /api/accounts, is what the cccc TUI reads.
+console.log("accounts — subscription end date:");
+{
+  const withEnd = api("accounts").accounts.find((x) => x.name === "acctA");
+  check("an end date survives the config sanitizer", withEnd.endsAt, "2026-08-28");
+  check("...and is reported as a day count", typeof withEnd.endsInDays, "number");
+  const noEnd = api("accounts").accounts.find((x) => x.name === "acctB");
+  check("an account with no end date reports null, not a date", noEnd.endsAt, null);
+  check("...and null days — 'auto-renewing', never 'ends today'", noEnd.endsInDays, null);
+  check("the TUI's source (/api/state) carries it too",
+    api("state").claudecodeAccountPool.find((x) => x.name === "acctA").endsAt, "2026-08-28");
+  // The point of the meta route: recording a cancellation must not require re-pasting the
+  // sk-ant-oat, because the pool file is the only copy of that token anywhere.
+  check("meta sets a date without a token", api("accounts/meta", { account: "acctB", endsAt: "2026-09-01" }).endsAt, "2026-09-01");
+  check("...and it lands in the pool view", api("accounts").accounts.find((x) => x.name === "acctB").endsAt, "2026-09-01");
+  check("an impossible calendar date is refused, not rolled forward",
+    !!api("accounts/meta", { account: "acctB", endsAt: "2026-02-31" }).error, true);
+  check("...leaving the previous date intact", api("accounts").accounts.find((x) => x.name === "acctB").endsAt, "2026-09-01");
+  check('"" clears it back to auto-renewing', api("accounts/meta", { account: "acctB", endsAt: "" }).endsAt, null);
+  check("meta refuses an unknown account", !!api("accounts/meta", { account: "nosuch", endsAt: "2026-09-01" }).error, true);
+  check("meta with nothing to set is a 400, not a silent no-op",
+    !!api("accounts/meta", { account: "acctB" }).error, true);
+}
+
 console.log("config — every base the panel offers is a base this handler accepts:");
 // The panel renders an editable base URL per provider and posts all three in one `bases` object.
 // The handler read `local` and `crazyrouter` and dropped `claudecode`, answering {ok:true,

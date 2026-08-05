@@ -14,7 +14,7 @@ refs may still linger in sibling repos.
   | file | owns |
   |---|---|
   | `config.js` | live `CFG`, env defaults + `/data/config.json` merge, key index |
-  | `config-schema.js` | the vocabularies and their validators — providers, image ids, limit windows/actions, auth modes. Depends on nothing but `path`; `config.js` **re-exports every name**, so callers and the import guard still resolve them there |
+  | `config-schema.js` | the vocabularies and their validators — providers, image ids, limit windows/actions, auth modes, and `sanitizeAccount()` (which optional labels on a pool entry survive a reload). Depends on nothing but `path`; `config.js` **re-exports every name**, so callers and the import guard still resolve them there |
   | `identity.js` | consumer/job paths, API keys, `authenticate()` |
   | `routing.js` | pins, allowlists, usage limits, account pinning |
   | `http.js` | `readBody`/`readJson`, `buildHeaders`, `proxy()` — 400 lines. It was 536 and over the 500 budget until JSON enforcement moved to `jsonenforce.js`; that split is what dropped `HOP_RES`'s import and is why `imports.test.mjs` now checks module-scope consts too |
@@ -1210,6 +1210,21 @@ every time someone reads it.
   touching the token. `GET /api/accounts` surfaces `email`, `disabled`, and runtime `dead` (ACCT_DEAD).
   Seen live 2026-07-24: william went OAuth-disabled → auto-disabled; `pbox`/`pbox-claude` re-pinned to
   the fresh **`claude2mejlto`** (`claude2@mejl.to`).
+- **`endsAt` (2026-08-05) is the day a subscription's ACCESS stops, and it is hand-maintained.** A
+  cancelled or refunded Max plan, or a trial: unlike the 5h/7d windows beside it, no reset brings it
+  back. Nothing on `api.anthropic.com` carries a billing date — the setup-token says nothing about
+  the plan — so it is set by an operator: `POST /api/accounts/meta {account, email?, endsAt?}`
+  (cccc: `account_meta`), which writes the labels ALONE so recording a cancellation never needs the
+  `sk-ant-oat` re-pasted from a copy nobody has. Plain `YYYY-MM-DD`; `""` clears it. **Blank means
+  auto-renewing, and must render as nothing** — `endsAt` and `endsInDays` come back `null` together,
+  and a placeholder there puts every healthy account in the column that exists to make a dying one
+  findable (same rule as `limits: null`). The validator needs BOTH a regex and a round-trip:
+  `2026-02-31` matches the shape and `Date.parse` rolls it forward to 3 March, so a regex-only guard
+  stores a date three days wrong and nothing downstream can tell. Surfaced on `/api/accounts`, on
+  `/api/state` (the cccc TUI reads THAT one, not `/api/accounts`), in the TUI's `SUB ENDS` column and
+  on the panel's Accounts tab. The sanitizer that keeps it is `sanitizeAccount()` in
+  **`config-schema.js`**, not `config.js` — dropping a field there is the `allowUa` trap: it looks
+  right in the panel and is gone on the next restart.
 - **`list_usd` is NULLABLE as of 2026-07-26, and null means "unknown", not zero.** It appears on
   `GET /api/stats` — on every `byX` row and on each `premiumUsage` entry — and is the notional
   Anthropic list cost of claudecode traffic. `listCostUsd()` returns **null** for a model with no

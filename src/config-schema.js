@@ -92,6 +92,31 @@ const sanitizeAllow = (v, norm) => {
 };
 const allowProvidersOf = (v) => sanitizeAllow(v && v.allowProviders, (x) => normProvider(x));
 const allowModelsOf = (v) => sanitizeAllow(v && v.allowModels, (x) => x.toLowerCase());
+// A Claude Max pool entry, as it survives a reload of /data/config.json.
+//
+// Whatever this drops is GONE on the next restart while still looking right in the panel until
+// then — the `allowUa` trap, which shipped once already. Three optional labels, kept only when set
+// so a plain {name,org,token} entry stays byte-clean on disk: `email` (which login this is),
+// `disabled` (a dead/retired sub routing must skip — see accountFor), and `endsAt`, the day the
+// SUBSCRIPTION's access stops. `endsAt` is hand-set because no Anthropic API carries a billing
+// date, and it is blank for an auto-renewing account: a renewal date rendered as "ends in 3d" is a
+// warning about an outage that is not coming.
+//
+// `validEndsAt` needs BOTH halves. The regex alone accepts `2026-02-31`, which Date.parse happily
+// rolls forward to 3 March — so a typo would be stored as a date three days wrong rather than
+// refused, and nothing downstream can tell.
+// The isFinite check is not redundant with the round-trip: `2026-13-01` parses to NaN, and
+// `.toISOString()` on an Invalid Date THROWS a RangeError rather than returning a mismatch.
+const validEndsAt = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v)
+  && Number.isFinite(Date.parse(`${v}T00:00:00Z`))
+  && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
+function sanitizeAccount(a) {
+  const e = { name: String(a.name || "acct").trim(), org: String(a.org || "").trim(), token: a.token.trim() };
+  if (a.email && String(a.email).trim()) e.email = String(a.email).trim();
+  if (a.disabled) e.disabled = true;
+  if (validEndsAt(String(a.endsAt || "").trim())) e.endsAt = String(a.endsAt).trim();
+  return e;
+}
 // Normalize one project/group rule. Returns null when it says nothing at all.
 function sanitizeRule(v) {
   if (!v || typeof v !== "object") return null;
@@ -242,7 +267,7 @@ module.exports = {
   IMAGE_MODEL_ID, IMAGE_MODEL_IDS, isImageModel,
   IMAGE_TEMPLATE_MODELS, IMAGE_TEMPLATE_SLUG, sanitizeImageTemplate,
   WINDOW_MS, LIMIT_WINDOWS, LIMIT_HARD, AUTH_MODES, ACCOUNT_STRATEGIES,
-  sanitizeRule, sanitizeLimit,
+  sanitizeRule, sanitizeLimit, sanitizeAccount, validEndsAt,
   CANON, LOCAL_ALIASES, SMALL_CANON, SMALL_ALIASES, SMALL_BASE, OBLIT, E4B,
   LOCAL_MAP_SEED, LOCAL_BASES_SEED,
 };

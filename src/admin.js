@@ -153,8 +153,9 @@ function adminState() {
       // `a.org` is "" at creation and never written again — the id is LEARNED into ORG_OF_ACCOUNT,
       // so a lookup under a.org read util 0 / stale:true beside a real reading (see accounts.js).
       const org = ORG_OF_ACCOUNT.get(a.name) || a.org || null, h = acctHealth(org);
-      return { name: a.name, org, email: a.email || "", tokenMasked: mask(a.token),
-               util: h.util, hot: h.hot, ts: h.ts, stale: h.stale };
+      // endsAt/endsInDays null TOGETHER = auto-renewing, never "ends today" (see accounts.js).
+      return { name: a.name, org, email: a.email || "", tokenMasked: mask(a.token), endsAt: a.endsAt || null,
+               endsInDays: AC.endsInDays(a.endsAt), util: h.util, hot: h.hot, ts: h.ts, stale: h.stale };
     }),
     // No sticky account exists any more: selection is pinned per project (accountFor).
     defaultAccount: CFG.defaultAccount || null,
@@ -352,9 +353,12 @@ async function handleAdminApi(req, res, path, prefix = "/api/") {
 
   // Replace ONE account's token. `POST config` assigns claudecodeAccountPool wholesale, so rotating
   // a single expired token through it means resending every other account's secret — and the panel
-  // never has them, because adminState masks them. This merges, and never echoes the token back.
-  // The pool in /data/config.json is the only copy of these credentials anywhere; there is no backup.
+  // never has them, because adminState masks them. These merge, and never echo the token back; the
+  // pool in /data/config.json is the only copy of these credentials anywhere, and there is no backup.
+  // `meta` is the same merge for the human labels ALONE (email, endsAt), so recording a cancellation
+  // date does not need an sk-ant-oat re-pasted from a copy nobody has.
   if (sub === "accounts/token" && req.method === "POST") return AC.setAccountToken(req, res, ip);
+  if (sub === "accounts/meta" && req.method === "POST") return AC.setAccountMeta(req, res, ip);
   if (sub === "accounts/disable" && req.method === "POST") return AC.setAccountDisabled(req, res, ip);
   if (sub === "accounts/remove" && req.method === "POST") return AC.removeAccount(req, res, ip);
   // ── image templates ── (src/imagetemplates.js). The store behind `template` on

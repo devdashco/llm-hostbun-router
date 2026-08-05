@@ -22,8 +22,9 @@ Invariants the router enforces (do not design around them):
 
 Tool groups:
   * account tools (accounts_list, live_limits, window_status, account_add,
-    account_delete, account_switch, usage_today, fleet_presence, models_list)
-    — the Claude Max pool + its 5h/7d usage windows.
+    account_meta, account_delete, account_switch, usage_today, fleet_presence,
+    models_list) — the Claude Max pool, its 5h/7d usage windows, and the
+    hand-set date each subscription's access ends.
   * proxy_* tools — routing config, pins/routes, health, model catalog,
     stats and the Postgres call log.
 
@@ -171,7 +172,14 @@ async def accounts_list() -> dict:
     about a tenth and barely moves it. `usage.tokensRaw` / `tokensRaw24h` carry
     the raw totals for throughput questions. Reading the raw number as spend
     overstates a well-cached account by roughly 6x and points at the wrong
-    subscription. Also returns
+    subscription.
+
+    `endsAt` (YYYY-MM-DD) / `endsInDays` are the day the SUBSCRIPTION stops —
+    a cancelled or refunded Max sub. Both `null` means auto-renewing, i.e.
+    nothing to warn about; it never means "ends today". Hand-maintained via
+    `account_meta` because no Anthropic API carries a billing date.
+
+    Also returns
     `orphanPins` (projects pinned to an account no longer in the pool) and
     `defaultAccount`. Tokens are server-side only and never included.
     """
@@ -255,6 +263,33 @@ async def account_add(name: str, token: str, email: str = "") -> dict:
     if email:
         body["email"] = email
     return await _proxy_call("POST", "accounts/token", body)
+
+
+@mcp.tool()
+async def account_meta(name: str, email: str | None = None,
+                      ends_at: str | None = None) -> dict:
+    """Set an account's human labels WITHOUT touching its token
+    (POST /api/accounts/meta).
+
+    `ends_at` is a plain `YYYY-MM-DD`: the day this subscription's ACCESS
+    actually stops — a cancelled or refunded Max sub, or a trial. Leave it
+    BLANK for an auto-renewing account: nothing on api.anthropic.com carries a
+    billing date, so this is hand-maintained, and a renewal date shown as
+    "ends in 3d" reads as an outage about to happen. Pass `""` to clear either
+    field; omit a field to leave it as-is.
+
+    Use this rather than `account_add` when only the label changed —
+    account_add needs the `sk-ant-oat` token alongside it, and the pool file is
+    the only copy of that token anywhere.
+    """
+    body: dict[str, Any] = {"account": name}
+    if email is not None:
+        body["email"] = email
+    if ends_at is not None:
+        body["endsAt"] = ends_at
+    if len(body) == 1:
+        return {"ok": False, "error": "nothing to set — pass email and/or ends_at"}
+    return await _proxy_call("POST", "accounts/meta", body)
 
 
 @mcp.tool()

@@ -377,6 +377,20 @@ export function Accounts() {
                           </div>
                         ) : null}
                         {a.email ? <div className="text-micro text-muted-foreground">{a.email}</div> : null}
+                        {/* When the SUBSCRIPTION itself stops — a cancelled or refunded Max plan.
+                            Nothing on api.anthropic.com carries a billing date, so this is hand-set
+                            (POST /api/accounts/meta) and an account with none is auto-renewing:
+                            absent must render as NOTHING here, never as "0 days", or every healthy
+                            account joins the row this exists to make findable. Unlike the 5h/7d
+                            bars beside it, no reset undoes this — the login is gone on that day. */}
+                        {a.endsAt ? (
+                          <div
+                            className={(a.endsInDays ?? 0) < 0 ? "text-micro text-danger" : (a.endsInDays ?? 99) <= 14 ? "text-micro text-warn" : "text-micro text-muted-foreground"}
+                            title="the day this subscription's access stops — no reset brings it back"
+                          >
+                            {(a.endsInDays ?? 0) < 0 ? `⌛ ended ${a.endsAt}` : `⌛ ends ${a.endsAt} (${a.endsInDays}d)`}
+                          </div>
+                        ) : null}
                         {a.org ? (
                           <div className="text-micro text-muted-foreground" title={a.org}>
                             {a.org.slice(0, 12)}…

@@ -48,5 +48,18 @@
       "kind": "app"
     }
   },
-  "cloudPolicy": "open"
+  "cloudPolicy": "open",
+  "claudecodeAccountPool": [
+    {
+      "name": "acctA",
+      "org": "",
+      "token": "sk-ant-oat-fake-a",
+      "endsAt": "2026-08-28"
+    },
+    {
+      "name": "acctB",
+      "org": "",
+      "token": "sk-ant-oat-fake-b"
+    }
+  ]
 }
