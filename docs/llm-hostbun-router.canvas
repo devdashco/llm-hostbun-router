@@ -1,0 +1,11 @@
+{
+	"nodes":[
+		{"id":"e34affedd21a75ac","type":"text","text":"## llm-hostbun-router\nArchitecture — drop file nodes into the groups and connect them.","x":0,"y":-180,"width":620,"height":120},
+		{"id":"9601d251d86a6915","type":"group","label":"Entry & UI","color":"5","x":0,"y":0,"width":620,"height":520},
+		{"id":"9436030951265131","type":"group","label":"Core Processing","color":"6","x":700,"y":0,"width":620,"height":520},
+		{"id":"d7ed47b9ae9c04b5","type":"group","label":"Data & Storage","color":"4","x":0,"y":560,"width":620,"height":520},
+		{"id":"a8233d68ef4232d7","type":"group","label":"External & Network","color":"2","x":700,"y":560,"width":620,"height":520},
+		{"id":"8291d24169433f2c","type":"file","file":"README.md","x":740,"y":60,"width":400,"height":200}
+	],
+	"edges":[]
+}
